@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 import cdsapi
@@ -15,7 +17,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import xarray as xr
 from joblib import Parallel, delayed
-from tenacity import retry, stop_after_attempt, wait_exponential
 from tqdm import tqdm
 
 B = 17.625
@@ -36,7 +37,7 @@ MONTHS_IN_YEAR = 12
 class Config:
     """All user-configurable parameters for the ERA5 download pipeline."""
 
-    start_date: str = "2025-05-01"
+    start_date: str = "2000-05-01"
     end_date: str = "2025-10-01"
     months: list[int] = field(default_factory=lambda: list(range(5, 10)))
     area: list[float] = field(default_factory=lambda: [49.25, -124.5, 24.25, -66.5])
@@ -54,16 +55,38 @@ class Config:
 
 
 CONFIG = Config()
-_WORKER_CLIENT: cdsapi.Client | None = None
 
 
+@lru_cache(maxsize=1)
 def _get_client() -> cdsapi.Client:
     """Create one CDS API client lazily per worker process."""
-    global _WORKER_CLIENT
-    if _WORKER_CLIENT is None:
-        _WORKER_CLIENT = cdsapi.Client()
-        logger.info("Initialized CDS client in worker process.")
-    return _WORKER_CLIENT
+    logger.info("Initialized CDS client in worker process.")
+    return cdsapi.Client()
+
+
+def _download_month(year: str, month: str, target_file: Path) -> Exception | None:
+    """Attempt one ERA5 monthly download and return the raised error, if any."""
+    try:
+        logger.info("Downloading data for %s-%s to %s...", year, month, target_file)
+        client = _get_client()
+        client.retrieve(
+            "reanalysis-era5-single-levels",
+            {
+                "product_type": "reanalysis",
+                "format": "grib",
+                "variable": CONFIG.variables,
+                "year": year,
+                "month": month,
+                "day": [str(i).zfill(2) for i in range(1, 32)],
+                "time": [f"{h:02d}:00" for h in range(24)],
+                "area": CONFIG.area,
+            },
+            str(target_file),
+        )
+    except Exception as exc:
+        logger.exception("Download attempt failed for %s-%s.", year, month)
+        return exc
+    return None
 
 
 def generate_date_list(start_iso: str, end_iso: str, months: list[int]) -> list[str]:
@@ -88,34 +111,39 @@ def generate_date_list(start_iso: str, end_iso: str, months: list[int]) -> list[
     return sorted(year_months)
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=2, min=4, max=60),
-    reraise=True,
-)
 def download_era5_data(year: str, month: str, target_file: Path) -> None:
     """Download one month of ERA5 data if it doesn't already exist."""
     if target_file.exists():
         logger.info("Skipping download, file already exists: %s", target_file)
         return
 
-    logger.info("Downloading data for %s-%s to %s...", year, month, target_file)
-    client = _get_client()
-    client.retrieve(
-        "reanalysis-era5-single-levels",
-        {
-            "product_type": "reanalysis",
-            "format": "grib",
-            "variable": CONFIG.variables,
-            "year": year,
-            "month": month,
-            "day": [str(i).zfill(2) for i in range(1, 32)],
-            "time": [f"{h:02d}:00" for h in range(24)],
-            "area": CONFIG.area,
-        },
-        str(target_file),
-    )
-    logger.info("Successfully downloaded data for %s-%s.", year, month)
+    max_attempts = 3
+    wait_seconds = 4
+    for attempt in range(1, max_attempts + 1):
+        error = _download_month(year, month, target_file)
+        if error is None:
+            logger.info("Successfully downloaded data for %s-%s.", year, month)
+            return
+        if attempt == max_attempts:
+            logger.error(
+                "Download failed for %s-%s after %d attempts.",
+                year,
+                month,
+                max_attempts,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            raise error
+        logger.warning(
+            "Download failed for %s-%s on attempt %d/%d. Retrying in %d seconds.",
+            year,
+            month,
+            attempt,
+            max_attempts,
+            wait_seconds,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        time.sleep(wait_seconds)
+        wait_seconds = min(wait_seconds * 2, 60)
 
 
 def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:

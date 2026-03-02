@@ -15,7 +15,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 
 CONFIG = {
-    "start_date": "2025-05-01",
+    "start_date": "2000-05-01",
     "end_date": "2025-10-01",
     "months": list(range(5, 10)),
     "area": [49.25, -124.5, 24.25, -66.5],
