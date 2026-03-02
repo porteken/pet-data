@@ -1,0 +1,108 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE, output=FALSE}
+library(arrow)
+library(tidyverse)
+```
+
+```{r}
+round_any = function(x, accuracy, f=round){f(x/ accuracy) * accuracy}
+df<-read_parquet('combined_data.parquet') %>% dplyr::select(location_id,time,v,t,rh,mrt) %>% dplyr::filter(rh>=1 & v>0)
+```
+
+```{r}
+head(df)
+```
+
+
+```{r}
+df %>% mutate(year=year(time)) %>%
+      group_by(year) %>%
+      summarize(count = n())
+```
+
+```{r}
+df2 <- df %>% mutate(across(c('v','t','rh','mrt'),\(x) round(x*2)/2))
+```
+
+```{r}
+df3 <- df2 %>% select(v,t,rh,mrt) %>% distinct()
+```
+
+```{r}
+dfs<-split(df3,rep(1:ceiling(nrow(df3)/1000),each=1000)[1:nrow(df3)])
+```
+
+```{r}
+library(doSNOW)
+n.cores <- parallel::detectCores() - 1
+my.cluster <- makeCluster(n.cores)
+registerDoSNOW(cl = my.cluster)
+```
+
+```{r}
+pb <- txtProgressBar(max = length(dfs), style = 3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress = progress)
+```
+
+```{r eval=FALSE}
+#is_vec<-c(10,100,1000,10000,100000)
+is_vec<-seq(100,1000,by=100) 
+for(i in is_vec){
+  start.time <- Sys.time()
+  dfv<-df3 %>% slice(1:i) %>% mutate(PETcorrected(t,mrt,v,rh))
+  print(i)
+  print(as.numeric(Sys.time() - start.time)/i)
+}
+```
+
+```{r}
+start.time <- Sys.time()
+
+# We can specify packages to load on each worker using the .packages argument
+# This is often cleaner than using library() inside the loop.
+dfs2 <- foreach(d = dfs, 
+                .combine = bind_rows, 
+                .options.snow = opts,
+                .packages = c("dplyr", "humidity")) %dopar% {
+                  
+  # Source your custom function file. This still needs to be done inside.
+  source("pet_corrected.R")
+ 
+  # The rest of your logic remains the same
+  d %>%
+    rowwise() %>%
+    mutate(pet = PETcorrected(t, mrt, v, rh, icl = 0.5)) %>%
+    ungroup() %>%
+    mutate(across(c('pet'), \(x) round(x * 2) / 2))
+}
+
+
+df_final <- dfs2
+
+Sys.time() - start.time
+
+# Stop the cluster when done
+stopCluster(my.cluster)
+```
+
+```{r}
+write_parquet(df2 %>% inner_join(df_final,by=c('v','t','rh','mrt')),'pet.parquet')
+```
+
+```{r}
+df2<-read_parquet('pet.parquet') 
+df_final2<-df2 %>% mutate(date=as.Date(time))  %>% 
+  group_by(location_id,date) %>% summarise(pet = max(pet)) 
+```
+```{r}
+head(df_final2)
+```
+
+```{r}
+write_parquet(df_final2,'pet_final.parquet')
+```

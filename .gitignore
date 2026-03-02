@@ -1,0 +1,6 @@
+*.csv
+*.parquet
+.ruff_cache/
+raw_*/
+utci_*/
+weather_*/
