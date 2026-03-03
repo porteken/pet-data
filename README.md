@@ -16,3 +16,4 @@ This project pulls ERA5 weather data and UTCI-derived mean radiant temperature (
 ## Final Output
 
 `pet.csv` contains daily max PET by location and is the file intended for database insert.
+ 

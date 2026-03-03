@@ -2,22 +2,36 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
+import math
 import shutil
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date
-from functools import lru_cache
 from pathlib import Path
+from typing import Any, Callable, Protocol, cast
 
-import cdsapi
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-import xarray as xr
-from joblib import Parallel, delayed
-from tqdm import tqdm
+
+class CDSClient(Protocol):
+    """Typed subset of the CDS API client used by this module."""
+
+    retrieve: Callable[[str, object, str], object]
+
+
+create_cds_client = cast(
+    "Callable[[], CDSClient]",
+    importlib.import_module("cdsapi").Client,
+)
+pa = cast("Any", importlib.import_module("pyarrow"))
+pq = cast("Any", importlib.import_module("pyarrow.parquet"))
+xr = cast("Any", importlib.import_module("xarray"))
+joblib = cast("Any", importlib.import_module("joblib"))
+Parallel = joblib.Parallel
+delayed = joblib.delayed
+tqdm = importlib.import_module("tqdm").tqdm
 
 B = 17.625
 C = 243.04
@@ -37,7 +51,7 @@ MONTHS_IN_YEAR = 12
 class Config:
     """All user-configurable parameters for the ERA5 download pipeline."""
 
-    start_date: str = "2000-05-01"
+    start_date: str = "2025-05-01"
     end_date: str = "2025-10-01"
     months: list[int] = field(default_factory=lambda: list(range(5, 10)))
     area: list[float] = field(default_factory=lambda: [49.25, -124.5, 24.25, -66.5])
@@ -57,11 +71,25 @@ class Config:
 CONFIG = Config()
 
 
-@lru_cache(maxsize=1)
-def _get_client() -> cdsapi.Client:
-    """Create one CDS API client lazily per worker process."""
-    logger.info("Initialized CDS client in worker process.")
-    return cdsapi.Client()
+class _ClientState(threading.local):
+    client: CDSClient | None
+
+    def __init__(self) -> None:
+        # threading.local state is per-thread, so initialize defaults here.
+        self.client = None
+
+
+_THREAD_LOCAL = _ClientState()
+
+
+def _get_client() -> CDSClient:
+    """Create one CDS API client lazily per worker thread."""
+    client = _THREAD_LOCAL.client
+    if client is None:
+        client = create_cds_client()
+        _THREAD_LOCAL.client = client
+        logger.info("Initialized CDS client in worker thread.")
+    return client
 
 
 def _download_month(year: str, month: str, target_file: Path) -> Exception | None:
@@ -152,7 +180,7 @@ def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:
 
     try:
         with xr.open_dataset(grib_path, engine="cfgrib") as ds_raw:
-            df = ds_raw[["u10", "v10", "t2m", "d2m"]].to_dataframe().reset_index()
+            df: Any = ds_raw[["u10", "v10", "t2m", "d2m"]].to_dataframe().reset_index()
     except Exception:
         logger.exception("Failed to read GRIB file %s.", grib_path)
         raise
@@ -161,14 +189,14 @@ def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:
         columns={"latitude": "lat", "longitude": "lng", "time": "timestamp"},
     )
 
-    df["wind_speed"] = np.sqrt(df["u10"] ** 2 + df["v10"] ** 2)
+    df["wind_speed"] = (df["u10"] ** 2 + df["v10"] ** 2) ** 0.5
 
     df["temperature_c"] = df["t2m"] - 273.15
     df["dewpoint_c"] = df["d2m"] - 273.15
 
     gamma_t = B * df["temperature_c"] / (C + df["temperature_c"])
     gamma_td = B * df["dewpoint_c"] / (C + df["dewpoint_c"])
-    df["relative_humidity"] = 100 * np.exp(gamma_td - gamma_t)
+    df["relative_humidity"] = (gamma_td - gamma_t).apply(math.exp) * 100
 
     df["year"] = df["timestamp"].dt.year
     df["month"] = df["timestamp"].dt.month
@@ -178,7 +206,7 @@ def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:
         errors="ignore",
     )
 
-    table = pa.Table.from_pandas(df)
+    table: Any = pa.Table.from_pandas(df)
     with tempfile.TemporaryDirectory() as tmp_dir:
         pq.write_to_dataset(
             table,
@@ -232,9 +260,10 @@ def main() -> None:
 
     logger.info("Starting parallel processing for %d months...", len(dates_to_process))
 
-    results = list(
+    results: list[str | None] = list(
         Parallel(
             n_jobs=CONFIG.n_jobs,
+            backend="threading",
         )(
             delayed(process_date)(
                 date_str,

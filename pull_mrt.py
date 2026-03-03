@@ -2,20 +2,49 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 from datetime import date
 from pathlib import Path
+from typing import Any, Callable, Protocol, TypedDict, cast
 from zipfile import ZipFile, is_zipfile
 
-import cdsapi
-import pyarrow as pa
-import pyarrow.parquet as pq
-import xarray as xr
-from joblib import Parallel, delayed
-from tqdm import tqdm
 
-CONFIG = {
-    "start_date": "2000-05-01",
+class CDSClient(Protocol):
+    """Typed subset of the CDS API client used by this module."""
+
+    retrieve: Callable[[str, object, str], object]
+
+
+create_cds_client = cast(
+    "Callable[[], CDSClient]",
+    importlib.import_module("cdsapi").Client,
+)
+pa = cast("Any", importlib.import_module("pyarrow"))
+pq = cast("Any", importlib.import_module("pyarrow.parquet"))
+xr = cast("Any", importlib.import_module("xarray"))
+joblib = cast("Any", importlib.import_module("joblib"))
+Parallel = joblib.Parallel
+delayed = joblib.delayed
+tqdm = importlib.import_module("tqdm").tqdm
+
+
+class Config(TypedDict):
+    """Config contract for the UTCI download pipeline."""
+
+    start_date: str
+    end_date: str
+    months: list[int]
+    area: list[float]
+    variable: str
+    dataset: str
+    zip_download_dir: Path
+    parquet_output_dir: Path
+    n_jobs: int
+
+
+CONFIG: Config = {
+    "start_date": "2025-05-01",
     "end_date": "2025-10-01",
     "months": list(range(5, 10)),
     "area": [49.25, -124.5, 24.25, -66.5],
@@ -43,7 +72,7 @@ def generate_date_list(start_iso: str, end_iso: str, months: list[int]) -> list[
     start_date = date.fromisoformat(start_iso)
     end_date = date.fromisoformat(end_iso)
 
-    date_set = set()
+    date_set: set[str] = set()
     current_date = start_date
     while current_date < end_date:
         if current_date.month in months:
@@ -64,7 +93,7 @@ def generate_date_list(start_iso: str, end_iso: str, months: list[int]) -> list[
 
 
 def download_utci_data(
-    client: cdsapi.Client,
+    client: CDSClient,
     year: str,
     month: str,
     target_file: Path,
@@ -102,7 +131,7 @@ def convert_netcdf_to_parquet(netcdf_path: Path, parquet_root: Path) -> None:
 
     try:
         with xr.open_dataset(netcdf_path, engine="netcdf4") as ds:
-            df = ds.to_dataframe().reset_index()
+            df: Any = ds.to_dataframe().reset_index()
     except Exception:
         logger.exception("Failed to read NetCDF file %s.", netcdf_path)
         raise
@@ -122,7 +151,7 @@ def convert_netcdf_to_parquet(netcdf_path: Path, parquet_root: Path) -> None:
 
     df = df.drop(columns=["height"], errors="ignore")
 
-    table = pa.Table.from_pandas(df)
+    table: Any = pa.Table.from_pandas(df)
     pq.write_to_dataset(
         table,
         root_path=parquet_root,
@@ -140,7 +169,7 @@ def process_date(date_str: str, zip_dir: Path, parquet_dir: Path) -> None:
 
     try:
 
-        client = cdsapi.Client()
+        client = create_cds_client()
 
         download_utci_data(client, year, month, zip_filename)
 
