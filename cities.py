@@ -1,5 +1,7 @@
 """Get cities used in application."""
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 
@@ -30,26 +32,22 @@ def process_cities(df: pd.DataFrame) -> pd.DataFrame:
     """Keep highest population city per .25' and return top 500 cities."""
     df = df.copy()
 
-    # Preserve precise rounded lat/lng
     df[["real_lat", "real_lng"]] = df[["lat", "lng"]].round(2)
 
-    # Snap to 0.25° grid
     df[["lat", "lng"]] = np.round(df[["lat", "lng"]] * 4) / 4
 
-    # Keep largest population per grid cell
     df = df.loc[df.groupby(["lat", "lng"])["population"].idxmax()]
 
-    # Keep top N most populated
     df = df.nlargest(500, "population").sort_values("population", ascending=False)
 
-    # Reset index and create location_id
     return df.reset_index(drop=True).reset_index(names="location_id")
-
 
 
 def main() -> None:
     """Orchestration function."""
-    df = load_data("https://raw.githubusercontent.com/plotly/datasets/master/us-cities-top-1k.csv")
+    df = load_data(
+        "https://raw.githubusercontent.com/plotly/datasets/master/us-cities-top-1k.csv",
+    )
     df = filter_bounding_box(df)
     df = process_cities(df)
     df.to_csv("cities.csv", index=False)

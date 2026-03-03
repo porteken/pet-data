@@ -14,6 +14,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
+from shared_config import SHARED_END_DATE, SHARED_START_DATE, shared_area, shared_months
+
 
 class CDSClient(Protocol):
     """Typed subset of the CDS API client used by this module."""
@@ -51,10 +53,10 @@ MONTHS_IN_YEAR = 12
 class Config:
     """All user-configurable parameters for the ERA5 download pipeline."""
 
-    start_date: str = "2025-05-01"
-    end_date: str = "2025-10-01"
-    months: list[int] = field(default_factory=lambda: list(range(5, 10)))
-    area: list[float] = field(default_factory=lambda: [49.25, -124.5, 24.25, -66.5])
+    start_date: str = SHARED_START_DATE
+    end_date: str = SHARED_END_DATE
+    months: list[int] = field(default_factory=shared_months)
+    area: list[float] = field(default_factory=shared_area)
     variables: list[str] = field(
         default_factory=lambda: [
             "10m_u_component_of_wind",
@@ -75,7 +77,7 @@ class _ClientState(threading.local):
     client: CDSClient | None
 
     def __init__(self) -> None:
-        # threading.local state is per-thread, so initialize defaults here.
+
         self.client = None
 
 
@@ -174,12 +176,21 @@ def download_era5_data(year: str, month: str, target_file: Path) -> None:
         wait_seconds = min(wait_seconds * 2, 60)
 
 
-def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:
+def convert_grib_to_parquet(
+    grib_path: Path,
+    parquet_root: Path,
+    year: str,
+    month: str,
+) -> None:
     """Convert from GRIB to Parquet."""
     logger.info("Converting %s to Parquet format...", grib_path)
 
     try:
-        with xr.open_dataset(grib_path, engine="cfgrib") as ds_raw:
+        with xr.open_dataset(
+            grib_path,
+            engine="cfgrib",
+            decode_timedelta=True,
+        ) as ds_raw:
             df: Any = ds_raw[["u10", "v10", "t2m", "d2m"]].to_dataframe().reset_index()
     except Exception:
         logger.exception("Failed to read GRIB file %s.", grib_path)
@@ -196,6 +207,7 @@ def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:
 
     gamma_t = B * df["temperature_c"] / (C + df["temperature_c"])
     gamma_td = B * df["dewpoint_c"] / (C + df["dewpoint_c"])
+
     df["relative_humidity"] = (gamma_td - gamma_t).apply(math.exp) * 100
 
     df["year"] = df["timestamp"].dt.year
@@ -207,14 +219,30 @@ def convert_grib_to_parquet(grib_path: Path, parquet_root: Path) -> None:
     )
 
     table: Any = pa.Table.from_pandas(df)
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    month_int = int(month)
+    tmp_root = Path(tempfile.mkdtemp())
+    target_partition = parquet_root / f"year={year}" / f"month={month_int}"
+    try:
         pq.write_to_dataset(
             table,
-            root_path=tmp_dir,
+            root_path=tmp_root,
             partition_cols=["year", "month"],
             existing_data_behavior="overwrite_or_ignore",
         )
-        shutil.copytree(tmp_dir, parquet_root, dirs_exist_ok=True)
+
+        source_partition = tmp_root / f"year={year}" / f"month={month_int}"
+        if not source_partition.exists():
+            raise FileNotFoundError(
+                "Expected partition not created: " + str(source_partition),
+            )
+
+        if target_partition.exists():
+            shutil.rmtree(target_partition)
+
+        target_partition.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_partition, target_partition)
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
     logger.info("Successfully wrote data from %s to %s", grib_path, parquet_root)
 
@@ -226,7 +254,7 @@ def process_date(date_str: str, grib_dir: Path, parquet_dir: Path) -> str | None
 
     try:
         download_era5_data(year, month, grib_filename)
-        convert_grib_to_parquet(grib_filename, parquet_dir)
+        convert_grib_to_parquet(grib_filename, parquet_dir, year, month)
     except Exception:
         logger.exception("Processing failed for %s", date_str)
         return date_str

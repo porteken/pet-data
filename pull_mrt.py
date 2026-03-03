@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import importlib
 import logging
+import shutil
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, TypedDict, cast
 from zipfile import ZipFile, is_zipfile
+
+from shared_config import SHARED_END_DATE, SHARED_START_DATE, shared_area, shared_months
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 class CDSClient(Protocol):
-    """Typed subset of the CDS API client used by this module."""
+    """Protocol for the subset of the CDS API client used by this script."""
 
-    retrieve: Callable[[str, object, str], object]
+    def retrieve(self, name: str, params: Mapping[str, object], target: str) -> object:
+        """Retrieve a dataset and write it to the provided target path."""
 
 
 create_cds_client = cast(
@@ -41,20 +48,21 @@ class Config(TypedDict):
     zip_download_dir: Path
     parquet_output_dir: Path
     n_jobs: int
+    parallel_backend: str
 
 
 CONFIG: Config = {
-    "start_date": "2025-05-01",
-    "end_date": "2025-10-01",
-    "months": list(range(5, 10)),
-    "area": [49.25, -124.5, 24.25, -66.5],
+    "start_date": SHARED_START_DATE,
+    "end_date": SHARED_END_DATE,
+    "months": shared_months(),
+    "area": shared_area(),
     "variable": "mean_radiant_temperature",
     "dataset": "derived-utci-historical",
     "zip_download_dir": Path("raw_utci_zip"),
     "parquet_output_dir": Path("utci_data_parquet"),
     "n_jobs": 4,
+    "parallel_backend": "loky",
 }
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,7 +70,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
 
 MAX_MONTH = 12
 
@@ -104,25 +111,21 @@ def download_utci_data(
         return
 
     logger.info("Downloading data for %s-%s to %s...", year, month, target_file)
-    try:
-        client.retrieve(
-            CONFIG["dataset"],
-            {
-                "variable": [CONFIG["variable"]],
-                "version": "1_1",
-                "product_type": "consolidated_dataset",
-                "year": year,
-                "month": month,
-                "day": [str(i).zfill(2) for i in range(1, 32)],
-                "area": CONFIG["area"],
-            },
-            str(target_file),
-        )
-        logger.info("Successfully downloaded data for %s-%s.", year, month)
-    except Exception:
-        logger.exception("Failed to download data for %s-%s.", year, month)
 
-        raise
+    client.retrieve(
+        CONFIG["dataset"],
+        {
+            "variable": [CONFIG["variable"]],
+            "version": "1_1",
+            "product_type": "consolidated_dataset",
+            "year": year,
+            "month": month,
+            "day": [str(i).zfill(2) for i in range(1, 32)],
+            "area": CONFIG["area"],
+        },
+        str(target_file),
+    )
+    logger.info("Successfully downloaded data for %s-%s.", year, month)
 
 
 def convert_netcdf_to_parquet(netcdf_path: Path, parquet_root: Path) -> None:
@@ -130,7 +133,12 @@ def convert_netcdf_to_parquet(netcdf_path: Path, parquet_root: Path) -> None:
     logger.info("Converting %s to Parquet format...", netcdf_path)
 
     try:
-        with xr.open_dataset(netcdf_path, engine="netcdf4") as ds:
+
+        with xr.open_dataset(
+            netcdf_path,
+            engine="netcdf4",
+            decode_timedelta=True,
+        ) as ds:
             df: Any = ds.to_dataframe().reset_index()
     except Exception:
         logger.exception("Failed to read NetCDF file %s.", netcdf_path)
@@ -144,7 +152,8 @@ def convert_netcdf_to_parquet(netcdf_path: Path, parquet_root: Path) -> None:
         },
     )
 
-    df["mean_radiant_temperature_c"] -= 273.15
+    if "mean_radiant_temperature_c" in df.columns:
+        df["mean_radiant_temperature_c"] -= 273.15
 
     df["year"] = df["timestamp"].dt.year
     df["month"] = df["timestamp"].dt.month
@@ -194,9 +203,10 @@ def process_date(date_str: str, zip_dir: Path, parquet_dir: Path) -> None:
     finally:
 
         if extract_dir.exists():
-            for temp_file in extract_dir.iterdir():
-                temp_file.unlink()
-            extract_dir.rmdir()
+            try:
+                shutil.rmtree(extract_dir)
+            except OSError:
+                logger.warning("Failed to remove temp dir %s", extract_dir)
 
         if zip_filename.exists():
             try:
@@ -218,13 +228,12 @@ def main() -> None:
     )
 
     if not dates_to_process:
-        logger.warning(
-            "No dates to process based on the current configuration. Exiting.",
-        )
+        logger.warning("No dates to process. Exiting.")
         return
 
-    logger.info("Starting parallel processing for %d months...", len(dates_to_process))
-    Parallel(n_jobs=CONFIG["n_jobs"])(
+    logger.info("Starting processing for %d months...", len(dates_to_process))
+
+    Parallel(n_jobs=CONFIG["n_jobs"], backend=CONFIG["parallel_backend"])(
         delayed(process_date)(
             date_str,
             CONFIG["zip_download_dir"],
@@ -238,10 +247,7 @@ def main() -> None:
             CONFIG["zip_download_dir"].rmdir()
             logger.info("Removed empty ZIP download directory.")
     except OSError:
-        logger.exception(
-            "Could not remove ZIP directory %s",
-            CONFIG["zip_download_dir"],
-        )
+        pass
 
     logger.info("Script finished successfully.")
 

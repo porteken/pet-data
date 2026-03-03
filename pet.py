@@ -3,50 +3,73 @@
 from __future__ import annotations
 
 import logging
-import subprocess
+import runpy
 import sys
+import time
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger(__name__)
 
-PIPELINE_STEPS: list[tuple[str, ...]] = [
-    ("cites.py", "cities.py"),
-    ("pull_weather.py",),
-    ("pull_mrt.py",),
-    ("combine.py",),
-    ("calculate_pet.py",),
+PIPELINE_STEPS: list[str] = [
+    "cities.py",
+    "pull_weather.py",
+    "pull_mrt.py",
+    "combine.py",
+    "calculate_pet.py",
 ]
 
 
-def resolve_script(root: Path, candidates: tuple[str, ...]) -> Path:
-    """Return the first script that exists from `candidates`."""
-    for script_name in candidates:
-        script_path = root / script_name
-        if script_path.exists():
-            return script_path
+def run_script(script_name: str, step_num: int, total_steps: int) -> None:
+    """Execute a Python script using the current interpreter."""
+    root = Path(__file__).resolve().parent
+    script_path = root / script_name
 
-    options = " or ".join(candidates)
-    msg = f"Missing pipeline script: expected {options} in {root}"
-    raise FileNotFoundError(msg)
+    if not script_path.exists():
+        logger.error("Script not found: %s", script_path)
+        raise FileNotFoundError(script_name)
 
+    logger.info("=" * 50)
+    logger.info("STEP %d/%d: %s", step_num, total_steps, script_name)
+    logger.info("=" * 50)
 
-def run_script(script_path: Path) -> None:
-    """Execute one script with the same Python interpreter."""
-    subprocess.run([sys.executable, str(script_path)], check=True)  # noqa: S603
+    start_time = time.time()
+
+    original_argv = sys.argv[:]
+    try:
+        sys.argv = [str(script_path)]
+        runpy.run_path(str(script_path), run_name="__main__")
+    except SystemExit as exc:
+        if exc.code in (None, 0):
+            return
+        logger.exception("Pipeline failed during step: %s", script_name)
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        logger.exception("Pipeline failed during step: %s", script_name)
+        raise SystemExit(1) from exc
+    finally:
+        sys.argv = original_argv
+
+    elapsed = time.time() - start_time
+    logger.info("Step %s finished in %.2f seconds.\n", script_name, elapsed)
 
 
 def main() -> None:
     """Run pipeline scripts in order and fail fast on errors."""
-    root = Path(__file__).resolve().parent
-    total = len(PIPELINE_STEPS)
+    total_start = time.time()
+    total_steps = len(PIPELINE_STEPS)
 
-    for index, candidates in enumerate(PIPELINE_STEPS, start=1):
-        script_path = resolve_script(root, candidates)
-        logger.info("[%d/%d] Running %s...", index, total, script_path.name)
-        run_script(script_path)
+    for index, script_name in enumerate(PIPELINE_STEPS, start=1):
+        run_script(script_name, index, total_steps)
 
-    logger.info("Pipeline complete.")
+    total_elapsed = time.time() - total_start
+    logger.info("=" * 50)
+    logger.info("Pipeline complete. Total time: %.2f seconds.", total_elapsed)
+    logger.info("=" * 50)
 
 
 if __name__ == "__main__":

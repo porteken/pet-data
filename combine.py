@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -56,6 +57,8 @@ DATA_CONFIG: dict[Literal["weather", "mrt"], DataConfig] = {
 }
 COMBINED_OUTPUT_FILE = Path("combined_data.parquet")
 MERGE_KEYS = ["location_id", "time"]
+SOURCE_MERGE_KEYS = ["location_id", "timestamp"]
+PARTITION_RE = re.compile(r"^(year|month)=\d+$")
 
 
 def load_and_filter_data(
@@ -64,7 +67,10 @@ def load_and_filter_data(
     columns: list[str],
 ) -> pd.DataFrame:
     """Load a Parquet file, merge with a DataFrame, and filter columns."""
-    data_df = pd.read_parquet(file_path)
+    parquet_columns = sorted(
+        {"lat", "lng", *[col for col in columns if col != "location_id"]},
+    )
+    data_df = pd.read_parquet(file_path, columns=parquet_columns)
     merged_df = data_df.merge(
         merge_df,
         how="inner",
@@ -72,6 +78,17 @@ def load_and_filter_data(
         validate="many_to_one",
     )
     return merged_df[columns]
+
+
+def _partition_group_for_file(file_path: Path, root_dir: Path) -> str:
+    """Return a stable group key (e.g., year/month) for each parquet file."""
+    try:
+        rel_parts = file_path.relative_to(root_dir).parts[:-1]
+    except ValueError:
+        rel_parts = file_path.parts[:-1]
+
+    partition_parts = [part for part in rel_parts if PARTITION_RE.match(part)]
+    return "/".join(partition_parts) if partition_parts else "unpartitioned"
 
 
 def combine_data(data_type: str) -> pd.DataFrame:
@@ -95,7 +112,8 @@ def combine_data(data_type: str) -> pd.DataFrame:
         cities_csv,
     )
 
-    data_files = sorted(config["parquet_dir"].glob("*"))
+    data_files = sorted(config["parquet_dir"].rglob("*.parquet"))
+
     if not data_files:
         raise FileNotFoundError(
             "No Parquet files found in " + str(config["parquet_dir"]),
@@ -106,13 +124,39 @@ def combine_data(data_type: str) -> pd.DataFrame:
         len(data_files),
     )
 
-    data_list = [
-        load_and_filter_data(file_path, cities_df, config["columns"])
-        for file_path in tqdm(data_files, desc="Loading " + config["desc"])
-    ]
+    grouped_files: dict[str, list[Path]] = {}
+    for file_path in data_files:
+        group_key = _partition_group_for_file(file_path, config["parquet_dir"])
+        grouped_files.setdefault(group_key, []).append(file_path)
 
-    combined_df = pd.concat(data_list, ignore_index=True)
-    logger.info("[%s] Combined %d total rows.", data_type, len(combined_df))
+    grouped_data: list[pd.DataFrame] = []
+    for group_key in tqdm(
+        sorted(grouped_files),
+        desc="Loading " + config["desc"],
+    ):
+        group_frames = [
+            load_and_filter_data(file_path, cities_df, config["columns"])
+            for file_path in grouped_files[group_key]
+        ]
+        group_df = pd.concat(group_frames, ignore_index=True)
+        before_dedup = len(group_df)
+        group_df = group_df.drop_duplicates(subset=SOURCE_MERGE_KEYS, keep="last")
+        dropped = before_dedup - len(group_df)
+        if dropped > 0:
+            logger.warning(
+                "[%s] Removed %d duplicate rows in partition %s.",
+                data_type,
+                dropped,
+                group_key,
+            )
+        grouped_data.append(group_df)
+
+    combined_df = pd.concat(grouped_data, ignore_index=True)
+    logger.info(
+        "[%s] Combined %d total rows after dedupe.",
+        data_type,
+        len(combined_df),
+    )
 
     combined_df = combined_df.rename(columns=config["renames"])
 

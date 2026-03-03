@@ -10,20 +10,20 @@ from typing import Any, Protocol, TypeAlias, cast
 
 DataFrame: TypeAlias = Any
 LOGGER = logging.getLogger(__name__)
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 10000
 PET_ROUNDING_FACTOR = 2.0
 
 
 class _PetCorrectedCallable(Protocol):
     def __call__(
         self,
-        tair: float,
-        t_mrt: float,
-        v_air: float,
-        rh: float,
+        tair: object,
+        t_mrt: object,
+        v_air: object,
+        rh: object,
         *,
         icl: float,
-    ) -> float: ...
+    ) -> object: ...
 
 
 pd: Any = cast("Any", import_module("pandas"))
@@ -48,16 +48,7 @@ def compute_pet_chunk(df_chunk: DataFrame) -> DataFrame:
     v_vals = df_chunk["v"].to_numpy()
     rh_vals = df_chunk["rh"].to_numpy()
 
-    pet_results = [
-        pet_corrected(float(t), float(mrt), float(v_air), float(rh), icl=0.5)
-        for t, mrt, v_air, rh in zip(
-            t_vals,
-            mrt_vals,
-            v_vals,
-            rh_vals,
-            strict=False,
-        )
-    ]
+    pet_results = pet_corrected(t_vals, mrt_vals, v_vals, rh_vals, icl=0.5)
 
     df_result = df_chunk.copy()
     df_result["pet"] = pet_results
@@ -75,7 +66,6 @@ def main() -> None:
     cols_to_keep = ["location_id", "time", "v", "t", "rh", "mrt"]
     df = df[cols_to_keep]
 
-    # Keep rows with valid humidity and positive wind speed.
     df = df[(df["rh"] >= 1) & (df["v"] > 0)].copy()
 
     cols_to_round = ["v", "t", "rh", "mrt"]
@@ -101,9 +91,10 @@ def main() -> None:
     n_cores = max(1, multiprocessing.cpu_count() - 1)
 
     with multiprocessing.Pool(processes=n_cores) as pool:
+
         results: list[DataFrame] = list(
             tqdm_progress(
-                pool.imap(compute_pet_chunk, chunks),
+                pool.imap_unordered(compute_pet_chunk, chunks),
                 total=len(chunks),
             ),
         )
