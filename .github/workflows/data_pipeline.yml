@@ -8,8 +8,6 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   sonarqube:
@@ -20,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@v7.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
@@ -41,7 +39,7 @@ jobs:
       - name: Run boxes.py
         run: python boxes.py
       - name: Upload locations data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: locations-data
           path: |
@@ -50,8 +48,39 @@ jobs:
 
   deploy-infrastructure:
     runs-on: ubuntu-latest
+    env:
+      STACK_NAME: pet-data-infrastructure
+      BUCKET_NAME: pet-parquet-files
     steps:
       - uses: actions/checkout@v6
+      - name: Preflight CloudFormation state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
+
+          if [ -z "$STACK_STATUS" ] || [ "$STACK_STATUS" = "None" ]; then
+            exit 0
+          fi
+
+          case "$STACK_STATUS" in
+            *_IN_PROGRESS|*_FAILED)
+              echo "::error::CloudFormation stack $STACK_NAME is currently $STACK_STATUS. Recover or delete the stack before deploying again."
+              exit 1
+              ;;
+          esac
+
+          if aws cloudformation describe-stack-resource --stack-name "$STACK_NAME" --logical-resource-id PetParquetFilesBucket >/dev/null 2>&1; then
+            if ! aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
+              echo "::error::CloudFormation stack $STACK_NAME tracks S3 bucket $BUCKET_NAME, but the bucket does not exist. Recreate the bucket and continue the rollback, or delete the stack and deploy from scratch."
+              exit 1
+            fi
+          fi
+
       - name: Deploy S3 Bucket CloudFormation Stack
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -60,8 +89,8 @@ jobs:
         run: |
           aws cloudformation deploy \
             --template-file template.yml \
-            --stack-name pet-data-infrastructure \
-            --parameter-overrides BucketName=pet-parquet-files \
+            --stack-name "$STACK_NAME" \
+            --parameter-overrides BucketName="$BUCKET_NAME" \
             --no-fail-on-empty-changes
 
   process-weather:
@@ -86,7 +115,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Download Locations Data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: locations-data
           path: .
@@ -125,7 +154,7 @@ jobs:
       - name: Install All Dependencies
         run: pip install -r requirements.txt
       - name: Download Locations Data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: locations-data
           path: .
@@ -164,7 +193,7 @@ jobs:
       - name: Install All Dependencies
         run: pip install -r requirements.txt
       - name: Download Locations Data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: locations-data
           path: .
@@ -184,7 +213,7 @@ jobs:
           python combine.py --year ${{ matrix.year }} --month ${{ matrix.month }}
           python calculate_pet.py --year ${{ matrix.year }} --month ${{ matrix.month }}
       - name: Upload Computed PET Shard
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pet-shard-${{ matrix.year }}-${{ matrix.month }}
           path: pet_${{ matrix.year }}_${{ matrix.month }}.csv
@@ -203,14 +232,14 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Download All PET Shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: pet-shard-*
           merge-multiple: true
       - name: Generate Tables
         run: python generate_tables.py
       - name: Upload Final Analytics CSVs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: final-csvs
           path: |
@@ -233,12 +262,12 @@ jobs:
       - name: Install Database Dependencies
         run: pip install -r requirements.txt
       - name: Download final-csvs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: final-csvs
           path: .
       - name: Download locations-data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: locations-data
           path: .
