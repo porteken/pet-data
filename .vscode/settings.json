@@ -1,4 +1,8 @@
 {
+    "files.associations": {
+        "**/.github/workflows/*.yml": "yaml",
+        "**/.github/workflows/*.yaml": "yaml"
+    },
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "[r]": {
         "editor.formatOnSave": true

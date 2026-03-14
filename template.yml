@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Infrastructure for PET Data Pipeline (S3 Bucket)
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: pet-parquet-files
+    Description: Name of the S3 bucket (Must be globally unique)
+
+Resources:
+  PetParquetFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      # Best practice: Block all public access since this is raw backend data
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Best practice: Encrypt data at rest
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+Outputs:
+  BucketName:
+    Value: !Ref PetParquetFilesBucket
+    Description: The name of the S3 Bucket

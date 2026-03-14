@@ -1,19 +1,16 @@
 # PET Data Pipeline
 
-This project pulls ERA5 weather data and UTCI mean radiant temperature (MRT) from CDS, matches them to US city grid points, computes PET (Physiological Equivalent Temperature), and exports `pet.csv`.
+This project pulls ERA5 weather data and UTCI mean radiant temperature (MRT) from CDS, matches them to US city grid points, computes PET (Physiological Equivalent Temperature), generates summary analytics, and loads the results into Supabase.
 
 ## Pipeline
 
-1. `cities.py` creates `cities.csv` (top city points on the 0.25 degree grid).
-2. `pull_weather.py` downloads ERA5 GRIB files to `raw_weather_grib/` and writes partitioned weather parquet to `weather_data_parquet/`.
-3. `pull_mrt.py` downloads UTCI ZIP files to `raw_utci_zip/`, converts NetCDF to parquet in `utci_data_parquet/`, then cleans temp files.
-4. `combine.py` builds city-matched hourly outputs:
-   - `weather.parquet`
-   - `mrt.parquet`
-   - `combined_data.parquet`
-5. `calculate_pet.py` uses `pet_corrected.py` to compute PET and writes daily max PET to `pet.csv`.
-6. `pet.py` runs all pipeline steps above in sequence.
+1. `cities.py` creates `cities.csv` for the US city grid points.
+2. `pull_cds.py` downloads ERA5 weather and MRT data and writes sharded parquets to `weather_data_parquet/` and `utci_data_parquet/`.
+3. `combine.py` builds a year/month city-matched sharded parquet: `combined_data_<year>_<month>.parquet`.
+4. `calculate_pet.py` uses `pet_corrected.py` to compute daily max PET for shards: `pet_<year>_<month>.csv`.
+5. `generate_tables.py` combines PET results into `pet.csv`, `percentiles.csv`, `forecast.csv`, and `change_per_decade.csv`.
+6. `load.py` loads those CSVs into Supabase and recreates SQL views from `create_views.sql`.
 
-## Final Output
+## Automation
 
-`pet.csv` contains daily max PET by `location_id` and `date` and is the file intended for database insert.
+`.github/workflows/data_pipeline.yml` runs the full pipeline in GitHub Actions, including S3-backed parquet storage via `template.yml`.
