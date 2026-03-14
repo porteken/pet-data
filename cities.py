@@ -46,14 +46,12 @@ def process_cities(df: pd.DataFrame) -> pd.DataFrame:
     df[["real_lat", "real_lng"]] = df[["lat", "lng"]].round(2)
     df[["lat", "lng"]] = np.round(df[["lat", "lng"]] * 4) / 4
 
-    # Deduplicate closely packed cities by keeping the most populated one
     idx = df.groupby(["lat", "lng"])["population"].idxmax()
     df = df.loc[idx]
 
     df = df.nlargest(500, "population").sort_values("population", ascending=False)
     df = df.reset_index(drop=True).reset_index(names="location_id")
 
-    # Ensure columns match Supabase locations table exactly
     return df[
         [
             "location_id",

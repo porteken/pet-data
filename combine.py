@@ -1,4 +1,4 @@
-"""Combine weather and MRT data for a specific year/month shard."""
+"""Combine weather and MRT parquet shards discovered from partitioned datasets."""
 
 from __future__ import annotations
 
@@ -6,14 +6,19 @@ import argparse
 import logging
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, TypedDict, cast
+from typing import Any, TypeAlias, cast
+
+from shards import (
+    ShardKey,
+    discover_common_shards,
+    discover_parquet_shards,
+    read_parquet_files,
+    select_shards,
+)
 
 DataFrame: TypeAlias = Any
-DataType: TypeAlias = Literal["weather", "mrt"]
 
 pd: Any = cast("Any", import_module("pandas"))
-tqdm_module: Any = cast("Any", import_module("tqdm"))
-tqdm_progress = tqdm_module.tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,188 +27,135 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-
-class DataConfig(TypedDict):
-    """Shape of config entries for each source dataset."""
-
-    parquet_dir: Path
-    columns: list[str]
-    renames: dict[str, str]
-    desc: str
-
-
-DATA_CONFIG: dict[DataType, DataConfig] = {
-    "weather": {
-        "parquet_dir": Path("weather_data_parquet"),
-        "columns": [
-            "location_id",
-            "timestamp",
-            "temperature_c",
-            "wind_speed",
-            "relative_humidity",
-        ],
-        "renames": {
-            "wind_speed": "v",
-            "temperature_c": "t",
-            "relative_humidity": "rh",
-            "timestamp": "time",
-        },
-        "desc": "weather partitions",
-    },
-    "mrt": {
-        "parquet_dir": Path("utci_data_parquet"),
-        "columns": [
-            "location_id",
-            "timestamp",
-            "mean_radiant_temperature_c",
-        ],
-        "renames": {
-            "mean_radiant_temperature_c": "mrt",
-            "timestamp": "time",
-        },
-        "desc": "MRT partitions",
-    },
-}
-
-MERGE_KEYS = ["location_id", "time"]
-SOURCE_MERGE_KEYS = ["location_id", "timestamp"]
+WEATHER_COLUMNS = [
+    "timestamp",
+    "lat",
+    "lng",
+    "temperature_c",
+    "wind_speed",
+    "relative_humidity",
+]
+MRT_COLUMNS = [
+    "timestamp",
+    "lat",
+    "lng",
+    "mean_radiant_temperature_c",
+]
 
 
-def _empty_source_frame(config: DataConfig) -> DataFrame:
-    """Return an empty DataFrame matching the renamed source schema."""
-    output_columns = [
-        "location_id",
-        *[
-            config["renames"].get(column_name, column_name)
-            for column_name in config["columns"]
-            if column_name != "location_id"
-        ],
-    ]
-    return pd.DataFrame(columns=output_columns)
-
-
-def load_and_filter_data(
-    file_path: Path,
-    merge_df: DataFrame,
-    columns: list[str],
-) -> DataFrame:
-    """Load a parquet file, merge city IDs, and select requested columns."""
-    parquet_columns = sorted(
-        {"lat", "lng", *[col for col in columns if col != "location_id"]},
+def combine_shard(
+    shard_key: ShardKey,
+    weather_root: str,
+    weather_files: list[str],
+    mrt_root: str,
+    mrt_files: list[str],
+    cities_df: DataFrame,
+    out_dir: str,
+) -> Path | None:
+    """Read one weather shard and one MRT shard, then write the merged parquet."""
+    weather_df = read_parquet_files(
+        weather_root,
+        weather_files,
+        columns=WEATHER_COLUMNS,
     )
-    data_df = pd.read_parquet(file_path, columns=parquet_columns)
-    merged_df = data_df.merge(
-        merge_df,
+    mrt_df = read_parquet_files(mrt_root, mrt_files, columns=MRT_COLUMNS)
+
+    if weather_df.empty or mrt_df.empty:
+        LOGGER.warning("Skipping empty shard %s.", shard_key.label)
+        return None
+
+    combined_df = weather_df.merge(
+        mrt_df,
+        how="inner",
+        on=["timestamp", "lat", "lng"],
+        validate="one_to_one",
+    )
+    combined_df = combined_df.merge(
+        cities_df,
         how="inner",
         on=["lat", "lng"],
         validate="many_to_one",
     )
-    return merged_df.loc[:, columns]
 
-
-def _partition_dir(parquet_dir: Path, year: str, month: str) -> Path:
-    """Return the PyArrow partition directory for a year/month shard."""
-    return parquet_dir / f"year={year}" / f"month={int(month)}"
-
-
-def combine_data(data_type: DataType, year: str, month: str) -> DataFrame:
-    """Load and combine one source dataset for a specific year/month shard."""
-    config = DATA_CONFIG[data_type]
-
-    cities_path = Path("cities.csv")
-    if not cities_path.exists():
-        msg = f"Cities file not found: {cities_path}"
-        raise FileNotFoundError(msg)
-
-    cities_df = pd.read_csv(cities_path, usecols=["location_id", "lat", "lng"])
-
-    target_dir = _partition_dir(config["parquet_dir"], year, month)
-    if not target_dir.exists():
-        LOGGER.warning(
-            "[%s] No data found for %s-%s in %s. Returning empty frame.",
-            data_type,
-            year,
-            month,
-            target_dir,
-        )
-        return _empty_source_frame(config)
-
-    data_files = sorted(target_dir.rglob("*.parquet"))
-    if not data_files:
-        LOGGER.warning(
-            "[%s] No parquet files found for %s-%s in %s. Returning empty frame.",
-            data_type,
-            year,
-            month,
-            target_dir,
-        )
-        return _empty_source_frame(config)
-
-    frames = [
-        load_and_filter_data(file_path, cities_df, config["columns"])
-        for file_path in tqdm_progress(data_files, desc=f"Loading {config['desc']}")
-    ]
-
-    combined_df = pd.concat(frames, ignore_index=True)
-    before_dedup = len(combined_df)
-    combined_df = combined_df.drop_duplicates(
-        subset=SOURCE_MERGE_KEYS,
-        keep="last",
+    combined_df = combined_df.rename(
+        columns={
+            "timestamp": "time",
+            "temperature_c": "t",
+            "wind_speed": "v",
+            "relative_humidity": "rh",
+            "mean_radiant_temperature_c": "mrt",
+        },
     )
-    dropped = before_dedup - len(combined_df)
-    if dropped > 0:
+    combined_df = combined_df[
+        ["location_id", "lat", "lng", "time", "t", "v", "rh", "mrt"]
+    ].sort_values(["location_id", "time"])
+
+    if combined_df.empty:
         LOGGER.warning(
-            "[%s] Removed %d duplicate rows for %s-%s.",
-            data_type,
-            dropped,
-            year,
-            month,
+            "Combined shard %s produced no matching city rows.",
+            shard_key.label,
         )
+        return None
 
-    combined_df = combined_df.rename(columns=config["renames"])
-    LOGGER.info(
-        "[%s] Prepared %d rows for %s-%s.",
-        data_type,
-        len(combined_df),
-        year,
-        month,
-    )
-    return combined_df
-
-
-def merge_weather_and_mrt(weather_df: DataFrame, mrt_df: DataFrame) -> DataFrame:
-    """Merge weather and MRT city datasets into one DataFrame."""
-    combined_df = weather_df.merge(
-        mrt_df,
-        how="inner",
-        on=MERGE_KEYS,
-        validate="one_to_one",
-    )
-    LOGGER.info("Merged weather and MRT into %d rows.", len(combined_df))
-    return combined_df.sort_values(MERGE_KEYS).reset_index(drop=True)
+    output_dir = Path(out_dir) / shard_key.partition_path
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "combined.parquet"
+    combined_df.to_parquet(output_path, index=False)
+    LOGGER.info("Wrote %s rows to %s.", len(combined_df), output_path)
+    return output_path
 
 
 def _parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for the combine step."""
     parser = argparse.ArgumentParser(
-        description="Combine weather and MRT parquet shards for a year/month.",
+        description=(
+            "Combine matching weather and MRT parquet shards into combined "
+            "parquet shards."
+        ),
     )
-    parser.add_argument("--year", required=True, type=str)
-    parser.add_argument("--month", required=True, type=str)
+    parser.add_argument("--weather-root", default="weather_data_parquet")
+    parser.add_argument("--mrt-root", default="utci_data_parquet")
+    parser.add_argument("--out-dir", default="combined_data_parquet")
+    parser.add_argument("--year", type=int)
+    parser.add_argument("--month", type=int)
+    parser.add_argument("--tile-id", dest="tile_ids", action="append", type=int)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     return parser.parse_args()
 
 
 def main() -> None:
-    """Build the combined parquet shard for the requested year and month."""
+    """Combine the selected weather and MRT parquet shards."""
     args = _parse_args()
+    cities_df = pd.read_csv(
+        Path("cities.csv"),
+        usecols=["location_id", "lat", "lng"],
+    )
+    weather_shards = discover_parquet_shards(args.weather_root)
+    mrt_shards = discover_parquet_shards(args.mrt_root)
+    common_shards = discover_common_shards(args.weather_root, args.mrt_root)
+    selected_shards = select_shards(
+        common_shards,
+        year=args.year,
+        month=args.month,
+        tile_ids=args.tile_ids,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
+    )
 
-    weather_df = combine_data("weather", args.year, args.month)
-    mrt_df = combine_data("mrt", args.year, args.month)
+    if not selected_shards:
+        LOGGER.warning("No matching shards found for the requested filters.")
+        return
 
-    combined_df = merge_weather_and_mrt(weather_df, mrt_df)
-    output_path = Path(f"combined_data_{args.year}_{args.month}.parquet")
-    combined_df.to_parquet(output_path, index=False)
-    LOGGER.info("Wrote merged output to %s.", output_path)
+    for shard_key in selected_shards:
+        combine_shard(
+            shard_key=shard_key,
+            weather_root=args.weather_root,
+            weather_files=weather_shards[shard_key],
+            mrt_root=args.mrt_root,
+            mrt_files=mrt_shards[shard_key],
+            cities_df=cities_df,
+            out_dir=args.out_dir,
+        )
 
 
 if __name__ == "__main__":

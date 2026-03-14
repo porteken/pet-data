@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, TypedDict, cast
 
 import numpy as np
 import pandas as pd
 
+pet_csv = "pet.csv"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -86,9 +88,7 @@ def generate_change_per_decade(df: pd.DataFrame) -> None:
     yearly_avg["decade_start"] = (yearly_avg["year"] // 10) * 10
 
     decade_avg = (
-        yearly_avg.groupby(["location_id", "decade_start"])["pet"]
-        .mean()
-        .reset_index()
+        yearly_avg.groupby(["location_id", "decade_start"])["pet"].mean().reset_index()
     )
 
     decade_avg = decade_avg.sort_values(["location_id", "decade_start"])
@@ -105,8 +105,9 @@ def generate_change_per_decade(df: pd.DataFrame) -> None:
 def main() -> None:
     """Load PET data and generate all analytical CSVs."""
     logger.info("Loading pet.csv into memory...")
+    _materialize_pet_csv_if_needed()
     try:
-        df = cast("pd.DataFrame", cast("Any", pd).read_csv("pet.csv"))
+        df = cast("pd.DataFrame", cast("Any", pd).read_csv(pet_csv))
     except FileNotFoundError:
         logger.exception("pet.csv not found. Ensure calculate_pet.py has run.")
         return
@@ -120,6 +121,22 @@ def main() -> None:
     generate_change_per_decade(df)
 
     logger.info("Analytics generation complete.")
+
+
+def _materialize_pet_csv_if_needed() -> None:
+    pet_csv_path = Path(pet_csv)
+    if pet_csv_path.exists():
+        return
+
+    shard_paths = sorted(Path("pet_data_csv").rglob(pet_csv))
+    if not shard_paths:
+        return
+
+    logger.info("Building pet.csv from %s PET shard CSV files...", len(shard_paths))
+    shard_frames = [cast("Any", pd).read_csv(shard_path) for shard_path in shard_paths]
+    cast("Any", pd).concat(shard_frames, ignore_index=True).to_csv(
+        pet_csv_path, index=False,
+    )
 
 
 if __name__ == "__main__":

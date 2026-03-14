@@ -9,7 +9,7 @@ Parameters:
 
 Resources:
   PetParquetFilesAccessLogsBucket:
-    Type: AWS::S3::Bucket # NOSONAR: destination logging bucket must not self-log, or it will generate recursive access logs.
+    Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub '${BucketName}-access-logs'
       PublicAccessBlockConfiguration:
