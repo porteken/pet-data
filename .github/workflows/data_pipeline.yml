@@ -148,8 +148,7 @@ jobs:
       fail-fast: false
       matrix:
         year: [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-        month: ["05", "06", "07", "08", "09"]
-    name: MRT ${{ matrix.year }}-${{ matrix.month }}
+    name: MRT ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -169,15 +168,13 @@ jobs:
         env:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: python pull_cds.py --dataset mrt --year ${{ matrix.year }} --month ${{ matrix.month }}
+        run: python pull_cds.py --dataset mrt --year ${{ matrix.year }}
       - name: Upload MRT Shards to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          MONTH_NUM=$((10#${{ matrix.month }}))
-          aws s3 sync ./utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_NUM}/ s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_NUM}/
+        run: aws s3 sync ./utci_data_parquet/year=${{ matrix.year }}/ s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/
 
   process-pet:
     needs: [setup-locations, process-weather, process-mrt]
@@ -187,8 +184,7 @@ jobs:
       fail-fast: false
       matrix:
         year: [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-        month: ["05", "06", "07", "08", "09"]
-    name: PET ${{ matrix.year }}-${{ matrix.month }}
+    name: PET ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -210,20 +206,19 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          MONTH_NUM=$((10#${{ matrix.month }}))
           mkdir -p ./weather_data_parquet/year=${{ matrix.year }}
-          mkdir -p ./utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_NUM}
+          mkdir -p ./utci_data_parquet/year=${{ matrix.year }}
           aws s3 sync s3://pet-parquet-files/weather_data_parquet/year=${{ matrix.year }}/ ./weather_data_parquet/year=${{ matrix.year }}/
-          aws s3 sync s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_NUM}/ ./utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_NUM}/
+          aws s3 sync s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/ ./utci_data_parquet/year=${{ matrix.year }}/
       - name: Combine and Compute PET
         run: |
-          python combine.py --year ${{ matrix.year }} --month ${{ matrix.month }}
-          python calculate_pet.py --year ${{ matrix.year }} --month ${{ matrix.month }}
+          python combine.py --year ${{ matrix.year }}
+          python calculate_pet.py --year ${{ matrix.year }}
       - name: Upload Computed PET Shard
         uses: actions/upload-artifact@v6
         with:
-          name: pet-shard-${{ matrix.year }}-${{ matrix.month }}
-          path: pet_${{ matrix.year }}_${{ matrix.month }}.csv
+          name: pet-shard-${{ matrix.year }}
+          path: pet_data_csv/year=${{ matrix.year }}/
 
   generate-analytics:
     needs: process-pet

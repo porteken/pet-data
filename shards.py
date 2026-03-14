@@ -22,21 +22,20 @@ ShardMapping: TypeAlias = dict["ShardKey", list[str]]
 
 @dataclass(frozen=True, order=True)
 class ShardKey:
-    """A logical year/month/tile shard key."""
+    """A logical year/tile shard key."""
 
     year: int
-    month: int
     tile_id: int
 
     @property
     def partition_path(self) -> str:
         """Return the canonical partition path for this shard."""
-        return f"year={self.year}/month={self.month}/tile_id={self.tile_id}"
+        return f"year={self.year}/tile_id={self.tile_id}"
 
     @property
     def label(self) -> str:
         """Return a human-readable shard label."""
-        return f"{self.year}-{self.month:02d}-tile-{self.tile_id:03d}"
+        return f"{self.year}-tile-{self.tile_id:03d}"
 
 
 def resolve_filesystem(base_uri: str | Path) -> tuple[Any, str]:
@@ -97,7 +96,6 @@ def select_shards(
     shard_keys: Iterable[ShardKey],
     *,
     year: int | None = None,
-    month: int | None = None,
     tile_ids: Iterable[int] | None = None,
     shard_index: int = 0,
     shard_count: int = 1,
@@ -115,7 +113,6 @@ def select_shards(
         shard_key
         for shard_key in sorted(shard_keys)
         if (year is None or shard_key.year == year)
-        and (month is None or shard_key.month == month)
         and (allowed_tiles is None or shard_key.tile_id in allowed_tiles)
     ]
     return [
@@ -154,7 +151,6 @@ def _parse_shard_key(root_path: str, file_path: str) -> ShardKey | None:
     try:
         return ShardKey(
             year=int(partitions["year"]),
-            month=int(partitions["month"]),
             tile_id=int(partitions["tile_id"]),
         )
     except (KeyError, ValueError):

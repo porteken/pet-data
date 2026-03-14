@@ -116,7 +116,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--mrt-root", default="utci_data_parquet")
     parser.add_argument("--out-dir", default="combined_data_parquet")
     parser.add_argument("--year", type=int)
-    parser.add_argument("--month", type=int)
     parser.add_argument("--tile-id", dest="tile_ids", action="append", type=int)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
@@ -136,7 +135,6 @@ def main() -> None:
     selected_shards = select_shards(
         common_shards,
         year=args.year,
-        month=args.month,
         tile_ids=args.tile_ids,
         shard_index=args.shard_index,
         shard_count=args.shard_count,

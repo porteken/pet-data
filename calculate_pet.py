@@ -93,7 +93,7 @@ def calculate_pet_frame(df: DataFrame) -> DataFrame:
         df_pet_unique["pet"] = pd.Series(dtype=float)
 
     LOGGER.info(
-        "PET core computation finished in %.2f seconds.", time.time() - start_time
+        "PET core computation finished in %.2f seconds.", time.time() - start_time,
     )
 
     df_joined: DataFrame = df.merge(
@@ -112,7 +112,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--combined-root", default="combined_data_parquet")
     parser.add_argument("--out-dir", default="pet_data_csv")
     parser.add_argument("--year", type=int)
-    parser.add_argument("--month", type=int)
     parser.add_argument("--tile-id", dest="tile_ids", action="append", type=int)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
@@ -120,12 +119,12 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Compute and save PET CSV outputs for the selected combined shards."""
     args = _parse_args()
     shard_mapping = discover_parquet_shards(args.combined_root)
     selected_shards = select_shards(
         shard_mapping,
         year=args.year,
-        month=args.month,
         tile_ids=args.tile_ids,
         shard_index=args.shard_index,
         shard_count=args.shard_count,
