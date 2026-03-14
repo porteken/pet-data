@@ -8,19 +8,94 @@ import importlib
 import logging
 import math
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, TypeAlias, cast
 from zipfile import ZipFile, is_zipfile
 
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
-from shared_config import SHARED_MONTHS
 from shards import resolve_filesystem
+from shared_config import SHARED_MONTHS
+
+if TYPE_CHECKING:
+    from collections.abc import Collection
+
+DataFrame: TypeAlias = Any
+SeriesLike: TypeAlias = Any
 
 
 class CDSClient(Protocol):
     """Typed subset of the CDS API client used by this module."""
 
     retrieve: Callable[[str, object, str], object]
+
+
+class WeatherSelection(Protocol):
+    """Typed subset of xarray selection objects used for weather extraction."""
+
+    def to_dataframe(self) -> DataFrame:
+        """Convert the selected weather cube to a DataFrame."""
+        ...
+
+
+class WeatherDataset(Protocol):
+    """Typed subset of xarray.Dataset used by the weather path."""
+
+    coords: Collection[str]
+    dims: Collection[str]
+
+    def load(self) -> WeatherDataset:
+        """Eagerly load the dataset."""
+        ...
+
+    def rename(self, names: dict[str, str]) -> WeatherDataset:
+        """Rename coordinates or dimensions."""
+        ...
+
+    def assign_coords(
+        self,
+        coords: dict[str, object] | None = None,
+        **coords_kwargs: object,
+    ) -> WeatherDataset:
+        """Assign updated coordinate values."""
+        ...
+
+    def sortby(self, variables: str) -> WeatherDataset:
+        """Sort the dataset by one coordinate."""
+        ...
+
+    def reset_coords(self, names: str, *, drop: bool = False) -> WeatherDataset:
+        """Drop scalar coordinates before merging."""
+        ...
+
+    def squeeze(self, dim: str, *, drop: bool = False) -> WeatherDataset:
+        """Remove length-1 dimensions."""
+        ...
+
+    def sel(self, *args: object, **kwargs: object) -> WeatherSelection:
+        """Select coordinates from the dataset."""
+        ...
+
+    def __getitem__(self, key: str) -> object:
+        """Return one coordinate or variable by name."""
+        ...
+
+
+class WeatherDatasetContext(Protocol):
+    """Typed context manager returned by xarray.open_dataset."""
+
+    def __enter__(self) -> WeatherDataset:
+        """Open the dataset context."""
+        ...
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> bool | None:
+        """Close the dataset context."""
+        ...
 
 
 create_cds_client = cast(
@@ -32,9 +107,6 @@ pd = cast("Any", importlib.import_module("pandas"))
 pq = cast("Any", importlib.import_module("pyarrow.parquet"))
 xr = cast("Any", importlib.import_module("xarray"))
 
-DataFrame: TypeAlias = Any
-SeriesLike: TypeAlias = Any
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -45,7 +117,7 @@ LOGGER = logging.getLogger(__name__)
 B = 17.625
 C = 243.04
 
-WEATHER_DATASET = "reanalysis-era5-land-timeseries"
+WEATHER_DATASET = "reanalysis-era5-land"
 WEATHER_VARIABLES = [
     "10m_u_component_of_wind",
     "10m_v_component_of_wind",
@@ -88,6 +160,7 @@ def process_weather(
     tile_ids: list[int] | None = None,
     tile_shard_index: int = 0,
     tile_shard_count: int = 1,
+    max_workers: int = 4,
 ) -> None:
     """Download and process ERA5 weather data grouped by tile."""
     weather_root = f"{out_dir}/weather_data_parquet"
@@ -96,62 +169,54 @@ def process_weather(
         tile_shard_index=tile_shard_index,
         tile_shard_count=tile_shard_count,
     )
-    date_range = _season_date_range(year)
-    filesystem, base_path = resolve_filesystem(weather_root)
+    tile_jobs = [
+        (
+            tile._asdict(),
+            selected_cells[selected_cells["tile_id"] == tile.tile_id][
+                ["grid_lat", "grid_lon"]
+            ].reset_index(drop=True),
+        )
+        for tile in selected_tiles.itertuples(index=False)
+    ]
+    if not tile_jobs:
+        LOGGER.warning("No weather tiles selected for processing.")
+        return
 
-    with tempfile.TemporaryDirectory() as tmpdir_name:
-        tmpdir = Path(tmpdir_name)
-        for tile in selected_tiles.itertuples(index=False):
-            if _weather_tile_exists(weather_root, year, int(tile.tile_id)):
+    worker_count = max(1, min(max_workers, len(tile_jobs)))
+    if worker_count == 1:
+        for tile_row, tile_cells in tile_jobs:
+            _process_weather_tile(
+                client=client,
+                year=year,
+                weather_root=weather_root,
+                tile_row=tile_row,
+                tile_cells=tile_cells,
+            )
+    else:
+        LOGGER.info(
+            "Processing %s weather tiles with %s worker threads.",
+            len(tile_jobs),
+            worker_count,
+        )
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_to_tile_id = {
+                executor.submit(
+                    _process_weather_tile_with_new_client,
+                    year=year,
+                    weather_root=weather_root,
+                    tile_row=tile_row,
+                    tile_cells=tile_cells,
+                ): int(tile_row["tile_id"])
+                for tile_row, tile_cells in tile_jobs
+            }
+            for future in as_completed(future_to_tile_id):
+                tile_id = future_to_tile_id[future]
+                future.result()
                 LOGGER.info(
-                    "Weather tile %s already exists for %s. Skipping.",
-                    tile.tile_id,
+                    "Weather tile %s completed for %s.",
+                    tile_id,
                     year,
                 )
-                continue
-
-            tile_cells = selected_cells[selected_cells["tile_id"] == tile.tile_id]
-            LOGGER.info(
-                "Starting weather tile %s for %s with %s snapped cells.",
-                tile.tile_id,
-                year,
-                len(tile_cells),
-            )
-
-            for cell in tile_cells.itertuples(index=False):
-                coord_slug = _coord_slug(cell.grid_lat, cell.grid_lon)
-                download_path = (
-                    tmpdir / f"weather_{year}_tile_{tile.tile_id}_{coord_slug}.csv"
-                )
-                client.retrieve(
-                    WEATHER_DATASET,
-                    {
-                        "variable": WEATHER_VARIABLES,
-                        "location": {
-                            "longitude": float(cell.grid_lon),
-                            "latitude": float(cell.grid_lat),
-                        },
-                        "date": [date_range],
-                        "data_format": "csv",
-                    },
-                    str(download_path),
-                )
-
-                weather_df = _load_weather_timeseries(download_path)
-                weather_df["lat"] = float(cell.grid_lat)
-                weather_df["lng"] = float(cell.grid_lon)
-                finalized_df = _finalize_weather_frame(weather_df)
-
-                for month_value, month_df in finalized_df.groupby("month", sort=True):
-                    partition_dir = (
-                        f"{base_path}/year={year}/month={int(month_value)}"
-                        f"/tile_id={int(tile.tile_id)}"
-                    )
-                    filesystem.create_dir(partition_dir, recursive=True)
-                    output_path = f"{partition_dir}/{coord_slug}.parquet"
-                    table: Any = pa.Table.from_pandas(month_df, preserve_index=False)
-                    with filesystem.open_output_stream(output_path) as output_stream:
-                        pq.write_table(table, output_stream)
 
     LOGGER.info(
         "Weather processing complete for %s selected tiles.",
@@ -248,7 +313,7 @@ def _load_selected_tiles(
     tile_shard_index: int,
     tile_shard_count: int,
 ) -> tuple[DataFrame, DataFrame]:
-    generate_tile_outputs()
+    _ensure_tile_outputs()
     tile_boxes_df = pd.read_csv(Path(OUTPUT_DIR) / "tile_boxes.csv")
     unique_cells_df = pd.read_csv(Path(OUTPUT_DIR) / "unique_grid_cells.csv")
     unique_cells_df = unique_cells_df.merge(
@@ -284,27 +349,265 @@ def _load_selected_tiles(
 
 def _weather_tile_exists(base_uri: str, year: str, tile_id: int) -> bool:
     return all(
-        partition_exists(base_uri, f"year={year}/month={month_value}/tile_id={tile_id}")
+        _weather_month_exists(base_uri, year, month_value, tile_id)
         for month_value in SHARED_MONTHS
     )
 
 
-def _season_date_range(year: str) -> str:
-    start_month = min(SHARED_MONTHS)
-    end_month = max(SHARED_MONTHS)
-    end_day = calendar.monthrange(int(year), end_month)[1]
-    return f"{year}-{start_month:02d}-01/{year}-{end_month:02d}-{end_day:02d}"
+def _ensure_tile_outputs() -> None:
+    required_paths = [
+        Path(OUTPUT_DIR) / "tile_boxes.csv",
+        Path(OUTPUT_DIR) / "unique_grid_cells.csv",
+    ]
+    if all(path.exists() for path in required_paths):
+        LOGGER.info("Using existing tile metadata under %s.", OUTPUT_DIR)
+        return
+
+    LOGGER.info("Tile metadata missing. Regenerating under %s.", OUTPUT_DIR)
+    generate_tile_outputs()
 
 
-def _load_weather_timeseries(download_path: Path) -> DataFrame:
-    csv_files = _extract_files(download_path, suffix=".csv")
-    frames = [pd.read_csv(csv_file) for csv_file in csv_files]
-    if not frames:
-        msg = f"No CSV files found in weather download: {download_path}"
-        raise FileNotFoundError(msg)
+def _process_weather_tile(
+    *,
+    client: CDSClient,
+    year: str,
+    weather_root: str,
+    tile_row: dict[str, Any],
+    tile_cells: DataFrame,
+) -> None:
+    tile_id = int(tile_row["tile_id"])
+    if _weather_tile_exists(weather_root, year, tile_id):
+        LOGGER.info("Weather tile %s already exists for %s. Skipping.", tile_id, year)
+        return
 
-    weather_df = pd.concat(frames, ignore_index=True)
-    return _normalize_weather_columns(weather_df)
+    LOGGER.info(
+        "Starting weather tile %s for %s with %s snapped cells.",
+        tile_id,
+        year,
+        len(tile_cells),
+    )
+    with tempfile.TemporaryDirectory() as tmpdir_name:
+        tmpdir = Path(tmpdir_name)
+        for month_value in SHARED_MONTHS:
+            if _weather_month_exists(weather_root, year, month_value, tile_id):
+                LOGGER.info(
+                    "Weather tile %s already exists for %s-%02d. Skipping.",
+                    tile_id,
+                    year,
+                    month_value,
+                )
+                continue
+
+            download_path = (
+                tmpdir / f"weather_{year}_{month_value:02d}_tile_{tile_id}.grib"
+            )
+            client.retrieve(
+                WEATHER_DATASET,
+                _build_weather_request(tile_row, year, month_value),
+                str(download_path),
+            )
+
+            weather_df = _load_weather_grib_frame(download_path, tile_cells)
+            if weather_df.empty:
+                LOGGER.warning(
+                    (
+                        "No weather rows remained after local cell selection "
+                        "for tile %s %s-%02d."
+                    ),
+                    tile_id,
+                    year,
+                    month_value,
+                )
+                continue
+            finalized_df = _finalize_weather_frame(weather_df)
+            _write_weather_partition(
+                weather_root=weather_root,
+                year=year,
+                month=month_value,
+                tile_id=tile_id,
+                weather_df=finalized_df,
+            )
+
+
+def _process_weather_tile_with_new_client(
+    *,
+    year: str,
+    weather_root: str,
+    tile_row: dict[str, Any],
+    tile_cells: DataFrame,
+) -> None:
+    _process_weather_tile(
+        client=create_cds_client(),
+        year=year,
+        weather_root=weather_root,
+        tile_row=tile_row,
+        tile_cells=tile_cells,
+    )
+
+
+def _weather_month_exists(base_uri: str, year: str, month: int, tile_id: int) -> bool:
+    return partition_exists(
+        base_uri,
+        _weather_partition_path(year, month, tile_id),
+    )
+
+
+def _weather_partition_path(year: str, month: int, tile_id: int) -> str:
+    return f"year={year}/month={month}/tile_id={tile_id}"
+
+
+def _build_weather_request(
+    tile_row: dict[str, Any],
+    year: str,
+    month: int,
+) -> dict[str, object]:
+    day_count = calendar.monthrange(int(year), month)[1]
+    return {
+        "variable": WEATHER_VARIABLES,
+        "year": year,
+        "month": f"{month:02d}",
+        "day": [f"{day:02d}" for day in range(1, day_count + 1)],
+        "time": [f"{hour:02d}:00" for hour in range(24)],
+        "area": [
+            float(tile_row["north"]),
+            float(tile_row["west"]),
+            float(tile_row["south"]),
+            float(tile_row["east"]),
+        ],
+        "format": "grib",
+    }
+
+
+def _load_weather_grib_frame(download_path: Path, tile_cells: DataFrame) -> DataFrame:
+    datasets: list[WeatherDataset] = []
+    for level_value in (2, 10):
+        dataset_context = cast(
+            "WeatherDatasetContext",
+            xr.open_dataset(
+                download_path,
+                engine="cfgrib",
+                backend_kwargs={
+                    "indexpath": "",
+                    "filter_by_keys": {
+                        "typeOfLevel": "heightAboveGround",
+                        "level": level_value,
+                    },
+                },
+            ),
+        )
+        with dataset_context as dataset:
+            normalized_dataset = _normalize_weather_dataset(dataset.load())
+        if "heightAboveGround" in normalized_dataset.coords:
+            normalized_dataset = normalized_dataset.reset_coords(
+                "heightAboveGround",
+                drop=True,
+            )
+        if "heightAboveGround" in normalized_dataset.dims:
+            normalized_dataset = normalized_dataset.squeeze(
+                "heightAboveGround",
+                drop=True,
+            )
+        datasets.append(normalized_dataset)
+
+    merged_dataset = cast(
+        "WeatherDataset",
+        xr.merge(datasets, compat="override", join="exact"),
+    )
+    selected_df = _select_weather_cells(merged_dataset, tile_cells)
+
+    return _normalize_weather_columns(selected_df)
+
+
+def _normalize_weather_dataset(dataset: WeatherDataset) -> WeatherDataset:
+    normalized_dataset = dataset
+    rename_map = {
+        source_name: target_name
+        for source_name, target_name in {
+            "valid_time": "time",
+            "longitude": "longitude",
+            "latitude": "latitude",
+            "lon": "longitude",
+            "lat": "latitude",
+        }.items()
+        if source_name in normalized_dataset.coords
+        or source_name in normalized_dataset.dims
+    }
+    if rename_map:
+        normalized_dataset = normalized_dataset.rename(rename_map)
+
+    if "longitude" in normalized_dataset.coords:
+        normalized_dataset = normalized_dataset.assign_coords(
+            longitude=_normalize_longitude_values(normalized_dataset["longitude"]),
+        ).sortby("longitude")
+    if "latitude" in normalized_dataset.coords:
+        normalized_dataset = normalized_dataset.sortby("latitude")
+    return normalized_dataset
+
+
+def _select_weather_cells(dataset: WeatherDataset, tile_cells: DataFrame) -> DataFrame:
+    requested_cells = tile_cells.reset_index(drop=True).copy()
+    requested_cells["cell"] = requested_cells.index
+    requested_cells["grid_lat"] = pd.to_numeric(
+        requested_cells["grid_lat"],
+        errors="coerce",
+    )
+    requested_cells["grid_lon"] = pd.to_numeric(
+        requested_cells["grid_lon"],
+        errors="coerce",
+    )
+
+    selection = dataset.sel(
+        latitude=xr.DataArray(
+            requested_cells["grid_lat"].to_numpy(),
+            dims="cell",
+            coords={"cell": requested_cells["cell"].to_numpy()},
+        ),
+        longitude=xr.DataArray(
+            _normalize_longitude_values(requested_cells["grid_lon"].to_numpy()),
+            dims="cell",
+            coords={"cell": requested_cells["cell"].to_numpy()},
+        ),
+        method="nearest",
+    )
+    frame = selection.to_dataframe().reset_index()
+    frame = frame.merge(
+        requested_cells[["cell", "grid_lat", "grid_lon"]],
+        how="inner",
+        on="cell",
+        validate="many_to_one",
+    )
+    frame["lat"] = frame.pop("grid_lat")
+    frame["lng"] = frame.pop("grid_lon")
+    return frame.drop(
+        columns=["cell", "latitude", "longitude", "surface", "number", "step"],
+        errors="ignore",
+    )
+
+
+def _normalize_longitude_values(values: object) -> object:
+    longitude_values = cast("Any", values)
+    return ((longitude_values + 180) % 360) - 180
+
+
+def _write_weather_partition(
+    *,
+    weather_root: str,
+    year: str,
+    month: int,
+    tile_id: int,
+    weather_df: DataFrame,
+) -> None:
+    filesystem, base_path = resolve_filesystem(weather_root)
+    partition_path = _weather_partition_path(year, month, tile_id)
+    partition_dir = f"{base_path}/{partition_path}"
+    filesystem.create_dir(partition_dir, recursive=True)
+    output_path = f"{partition_dir}/weather.parquet"
+    table: Any = pa.Table.from_pandas(
+        weather_df.sort_values(["timestamp", "lat", "lng"]).reset_index(drop=True),
+        preserve_index=False,
+    )
+    with filesystem.open_output_stream(output_path) as output_stream:
+        pq.write_table(table, output_stream)
 
 
 def _normalize_weather_columns(df: DataFrame) -> DataFrame:
@@ -451,14 +754,6 @@ def _extract_files(download_path: Path, *, suffix: str) -> list[Path]:
     return []
 
 
-def _coord_slug(lat_value: float, lng_value: float) -> str:
-    return f"lat_{_value_slug(lat_value)}_lng_{_value_slug(lng_value)}"
-
-
-def _value_slug(value: float) -> str:
-    return f"{value:.2f}".replace("-", "m").replace(".", "p")
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull weather and MRT data from CDS.")
     parser.add_argument(
@@ -503,6 +798,12 @@ def _parse_args() -> argparse.Namespace:
         default=1,
         help="Total number of tile shards across CI jobs.",
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum number of concurrent weather tile workers.",
+    )
     args = parser.parse_args()
     if args.dataset in {"mrt", "all"} and not args.month:
         parser.error("--month is required when dataset includes mrt")
@@ -530,6 +831,7 @@ def main() -> None:
                 tile_ids=args.tile_ids,
                 tile_shard_index=args.tile_shard_index,
                 tile_shard_count=args.tile_shard_count,
+                max_workers=args.max_workers,
             )
 
         if args.dataset in {"mrt", "all"} and args.month:

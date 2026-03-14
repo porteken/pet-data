@@ -58,13 +58,11 @@ Resources:
     DependsOn: PetParquetFilesAccessLogsBucketPolicy
     Properties:
       BucketName: !Ref BucketName
-      # Best practice: Block all public access since this is raw backend data
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      # Best practice: Encrypt data at rest
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
