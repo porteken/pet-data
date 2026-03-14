@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 pa = cast("Any", import_module("pyarrow"))
 dataset_module = cast("Any", import_module("pyarrow.dataset"))
+fs_module = cast("Any", import_module("pyarrow.fs"))
 
 DataFrame: TypeAlias = Any
 LOGGER = logging.getLogger(__name__)
@@ -42,10 +43,10 @@ def resolve_filesystem(base_uri: str | Path) -> tuple[Any, str]:
     """Return a filesystem object plus normalized root path."""
     uri_text = str(base_uri)
     if "://" in uri_text:
-        return pa.fs.FileSystem.from_uri(uri_text)
+        return fs_module.FileSystem.from_uri(uri_text)
 
     root_path = str(Path(uri_text).expanduser().resolve())
-    return pa.fs.LocalFileSystem(), root_path
+    return fs_module.LocalFileSystem(), root_path
 
 
 def discover_parquet_shards(base_uri: str | Path) -> ShardMapping:
@@ -53,7 +54,7 @@ def discover_parquet_shards(base_uri: str | Path) -> ShardMapping:
     filesystem, root_path = resolve_filesystem(base_uri)
     try:
         file_infos = filesystem.get_file_info(
-            pa.fs.FileSelector(root_path, recursive=True),
+            fs_module.FileSelector(root_path, recursive=True),
         )
     except (OSError, pa.ArrowException) as exc:
         LOGGER.warning("Could not list parquet files under %s: %s", base_uri, exc)
@@ -61,7 +62,7 @@ def discover_parquet_shards(base_uri: str | Path) -> ShardMapping:
 
     shards: ShardMapping = {}
     for file_info in file_infos:
-        if file_info.type != pa.fs.FileType.File or not file_info.path.endswith(
+        if file_info.type != fs_module.FileType.File or not file_info.path.endswith(
             ".parquet",
         ):
             continue

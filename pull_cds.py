@@ -14,6 +14,7 @@ from zipfile import ZipFile, is_zipfile
 
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from shared_config import SHARED_MONTHS
+from shards import resolve_filesystem
 
 
 class CDSClient(Protocol):
@@ -66,7 +67,7 @@ WEATHER_VARIABLE_ALIASES = {
 def partition_exists(base_uri: str, partition_path: str) -> bool:
     """Check whether a partition directory already exists."""
     try:
-        filesystem, base_path = pa.fs.FileSystem.from_uri(base_uri)
+        filesystem, base_path = resolve_filesystem(base_uri)
         file_info = filesystem.get_file_info(f"{base_path}/{partition_path}")
     except (OSError, pa.ArrowException) as exc:
         LOGGER.warning(
@@ -96,7 +97,7 @@ def process_weather(
         tile_shard_count=tile_shard_count,
     )
     date_range = _season_date_range(year)
-    filesystem, base_path = pa.fs.FileSystem.from_uri(weather_root)
+    filesystem, base_path = resolve_filesystem(weather_root)
 
     with tempfile.TemporaryDirectory() as tmpdir_name:
         tmpdir = Path(tmpdir_name)
@@ -175,7 +176,7 @@ def process_mrt(
         tile_shard_index=tile_shard_index,
         tile_shard_count=tile_shard_count,
     )
-    filesystem, base_path = pa.fs.FileSystem.from_uri(mrt_root)
+    filesystem, base_path = resolve_filesystem(mrt_root)
 
     with tempfile.TemporaryDirectory() as tmpdir_name:
         tmpdir = Path(tmpdir_name)
