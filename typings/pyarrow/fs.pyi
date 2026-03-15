@@ -84,57 +84,54 @@ class FSSpecHandler(FileSystemHandler):
     """
     def __init__(self, fs) -> None:
         ...
-    
+
     def __eq__(self, other) -> bool:
         ...
-    
+
     def __ne__(self, other) -> bool:
         ...
-    
+
     def get_type_name(self): # -> str:
         ...
-    
+
     def normalize_path(self, path):
         ...
-    
+
     def get_file_info(self, paths): # -> list[Any]:
         ...
-    
+
     def get_file_info_selector(self, selector): # -> list[Any]:
         ...
-    
+
     def create_dir(self, path, recursive): # -> None:
         ...
-    
+
     def delete_dir(self, path): # -> None:
         ...
-    
+
     def delete_dir_contents(self, path, missing_dir_ok): # -> None:
         ...
-    
+
     def delete_root_dir_contents(self): # -> None:
         ...
-    
+
     def delete_file(self, path): # -> None:
         ...
-    
+
     def move(self, src, dest): # -> None:
         ...
-    
+
     def copy_file(self, src, dest): # -> None:
         ...
-    
+
     def open_input_stream(self, path):
         ...
-    
+
     def open_input_file(self, path):
         ...
-    
+
     def open_output_stream(self, path, metadata):
         ...
-    
+
     def open_append_stream(self, path, metadata):
         ...
-    
-
-

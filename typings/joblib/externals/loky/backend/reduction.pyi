@@ -11,11 +11,11 @@ def register(type_, reduce_function): # -> None:
 class _C:
     def f(self): # -> None:
         ...
-    
+
     @classmethod
     def h(cls): # -> None:
         ...
-    
+
 
 
 if sys.platform != "win32":
@@ -29,8 +29,8 @@ _loky_pickler_name = ...
 def set_loky_pickler(loky_pickler=...): # -> None:
     class CustomizablePickler(loky_pickler_cls):
         ...
-    
-    
+
+
 
 def get_loky_pickler_name(): # -> str | None:
     ...

@@ -133,27 +133,27 @@ class ParquetFile:
     """
     def __init__(self, source, *, metadata=..., common_metadata=..., read_dictionary=..., binary_type=..., list_type=..., memory_map=..., buffer_size=..., pre_buffer=..., coerce_int96_timestamp_unit=..., decryption_properties=..., thrift_string_size_limit=..., thrift_container_size_limit=..., filesystem=..., page_checksum_verification=..., arrow_extensions_enabled=...) -> None:
         ...
-    
+
     def __enter__(self): # -> Self:
         ...
-    
+
     def __exit__(self, *args, **kwargs): # -> None:
         ...
-    
+
     @property
     def metadata(self):
         """
         Return the Parquet metadata.
         """
         ...
-    
+
     @property
     def schema(self):
         """
         Return the Parquet schema, unconverted to Arrow types
         """
         ...
-    
+
     @property
     def schema_arrow(self):
         """
@@ -179,7 +179,7 @@ class ParquetFile:
         animal: string
         """
         ...
-    
+
     @property
     def num_row_groups(self):
         """
@@ -199,14 +199,14 @@ class ParquetFile:
         1
         """
         ...
-    
+
     def close(self, force: bool = ...): # -> None:
         ...
-    
+
     @property
     def closed(self) -> bool:
         ...
-    
+
     def read_row_group(self, i, columns=..., use_threads=..., use_pandas_metadata=...):
         """
         Read a single row group from a Parquet file.
@@ -249,7 +249,7 @@ class ParquetFile:
         animal: [["Flamingo","Parrot",...,"Brittle stars","Centipede"]]
         """
         ...
-    
+
     def read_row_groups(self, row_groups, columns=..., use_threads=..., use_pandas_metadata=...):
         """
         Read a multiple row groups from a Parquet file.
@@ -292,7 +292,7 @@ class ParquetFile:
         animal: [["Flamingo","Parrot","Dog",...,"Brittle stars","Centipede"]]
         """
         ...
-    
+
     def iter_batches(self, batch_size=..., row_groups=..., columns=..., use_threads=..., use_pandas_metadata=...):
         """
         Read streaming batches from a Parquet file.
@@ -344,7 +344,7 @@ class ParquetFile:
         5     100      Centipede
         """
         ...
-    
+
     def read(self, columns=..., use_threads=..., use_pandas_metadata=...):
         """
         Read a Table from Parquet format.
@@ -387,7 +387,7 @@ class ParquetFile:
         animal: [["Flamingo","Parrot",...,"Brittle stars","Centipede"]]
         """
         ...
-    
+
     def scan_contents(self, columns=..., batch_size=...):
         """
         Read contents of file for the given columns and batch size.
@@ -423,7 +423,7 @@ class ParquetFile:
         6
         """
         ...
-    
+
 
 
 _SPARK_DISALLOWED_CHARS = ...
@@ -433,16 +433,16 @@ class ParquetWriter:
     __doc__ = ...
     def __init__(self, where, schema, filesystem=..., flavor=..., version=..., use_dictionary=..., compression=..., write_statistics=..., use_deprecated_int96_timestamps=..., compression_level=..., use_byte_stream_split=..., column_encoding=..., writer_engine_version=..., data_page_version=..., use_compliant_nested_type=..., encryption_properties=..., write_batch_size=..., dictionary_pagesize_limit=..., store_schema=..., write_page_index=..., write_page_checksum=..., sorting_columns=..., store_decimal_as_integer=..., write_time_adjusted_to_utc=..., max_rows_per_page=..., **options) -> None:
         ...
-    
+
     def __del__(self): # -> None:
         ...
-    
+
     def __enter__(self): # -> Self:
         ...
-    
+
     def __exit__(self, *args, **kwargs): # -> Literal[False]:
         ...
-    
+
     def write(self, table_or_batch, row_group_size=...): # -> None:
         """
         Write RecordBatch or Table to the Parquet file.
@@ -456,7 +456,7 @@ class ParquetWriter:
             Table/RecordBatch and 1024 * 1024.
         """
         ...
-    
+
     def write_batch(self, batch, row_group_size=...): # -> None:
         """
         Write RecordBatch to the Parquet file.
@@ -471,7 +471,7 @@ class ParquetWriter:
             then 64 * 1024 * 1024 will be used instead.
         """
         ...
-    
+
     def write_table(self, table, row_group_size=...): # -> None:
         """
         Write Table to the Parquet file.
@@ -487,13 +487,13 @@ class ParquetWriter:
 
         """
         ...
-    
+
     def close(self): # -> None:
         """
         Close the connection to the Parquet file.
         """
         ...
-    
+
     def add_key_value_metadata(self, key_value_metadata): # -> None:
         """
         Add key-value metadata to the file.
@@ -505,7 +505,7 @@ class ParquetWriter:
             Keys and values must be string-like / coercible to bytes.
         """
         ...
-    
+
 
 
 EXCLUDED_PARQUET_PATHS = ...
@@ -515,13 +515,13 @@ class ParquetDataset:
     __doc__ = ...
     def __init__(self, path_or_paths, filesystem=..., schema=..., *, filters=..., read_dictionary=..., binary_type=..., list_type=..., memory_map=..., buffer_size=..., partitioning=..., ignore_prefixes=..., pre_buffer=..., coerce_int96_timestamp_unit=..., decryption_properties=..., thrift_string_size_limit=..., thrift_container_size_limit=..., page_checksum_verification=..., arrow_extensions_enabled=...) -> None:
         ...
-    
+
     def equals(self, other):
         ...
-    
+
     def __eq__(self, other) -> bool:
         ...
-    
+
     @property
     def schema(self):
         """
@@ -549,7 +549,7 @@ class ParquetDataset:
         year: dictionary<values=int32, indices=int32, ordered=0>
         """
         ...
-    
+
     def read(self, columns=..., use_threads=..., use_pandas_metadata=...):
         """
         Read (multiple) Parquet files as a single pyarrow.Table.
@@ -593,7 +593,7 @@ class ParquetDataset:
         n_legs: [[5],[2],[4,100],[2,4]]
         """
         ...
-    
+
     def read_pandas(self, **kwargs):
         """
         Read dataset including pandas metadata, if any. Other arguments passed
@@ -631,7 +631,7 @@ class ParquetDataset:
         {'index_columns': [{'kind': 'range', 'name': None, 'start': 0, ...}
         """
         ...
-    
+
     @property
     def fragments(self): # -> list[Any]:
         """
@@ -658,7 +658,7 @@ class ParquetDataset:
         [<pyarrow.dataset.ParquetFileFragment path=dataset_v2_fragments/...
         """
         ...
-    
+
     @property
     def files(self):
         """
@@ -684,21 +684,21 @@ class ParquetDataset:
         ['dataset_v2_files/year=2019/...-0.parquet', ...
         """
         ...
-    
+
     @property
     def filesystem(self):
         """
         The filesystem type of the Dataset source.
         """
         ...
-    
+
     @property
     def partitioning(self):
         """
         The partitioning of the Dataset source, if discovered.
         """
         ...
-    
+
 
 
 _read_table_docstring = ...

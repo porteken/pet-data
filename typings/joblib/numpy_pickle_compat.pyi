@@ -41,11 +41,11 @@ class NDArrayWrapper:
     def __init__(self, filename, subclass, allow_mmap=...) -> None:
         """Constructor. Store the useful information for later."""
         ...
-    
+
     def read(self, unpickler): # -> Any:
         """Reconstruct the array."""
         ...
-    
+
 
 
 class ZNDArrayWrapper(NDArrayWrapper):
@@ -65,11 +65,11 @@ class ZNDArrayWrapper(NDArrayWrapper):
     def __init__(self, filename, init_args, state) -> None:
         """Constructor. Store the useful information for later."""
         ...
-    
+
     def read(self, unpickler): # -> object | Any:
         """Reconstruct the array from the meta-information and the z-file."""
         ...
-    
+
 
 
 class ZipNumpyUnpickler(Unpickler):
@@ -78,7 +78,7 @@ class ZipNumpyUnpickler(Unpickler):
     def __init__(self, filename, file_handle, mmap_mode=...) -> None:
         """Constructor."""
         ...
-    
+
     def load_build(self): # -> None:
         """Set the state of a newly created object.
 
@@ -87,7 +87,7 @@ class ZipNumpyUnpickler(Unpickler):
         replace them directly in the stack of pickler.
         """
         ...
-    
+
 
 
 def load_compatibility(filename): # -> Any:
@@ -117,4 +117,3 @@ def load_compatibility(filename): # -> Any:
     dump.
     """
     ...
-

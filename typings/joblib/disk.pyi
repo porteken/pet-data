@@ -38,4 +38,3 @@ def rm_subdirs(path, onerror=...): # -> None:
 def delete_folder(folder_path, onerror=..., allow_non_empty=...): # -> None:
     """Utility function to cleanup a temporary folder if it still exists."""
     ...
-

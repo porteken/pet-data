@@ -6,19 +6,19 @@ WRAP_CACHE = ...
 class CloudpickledObjectWrapper:
     def __init__(self, obj, keep_wrapper=...) -> None:
         ...
-    
+
     def __reduce__(self): # -> tuple[Callable[..., Any], tuple[bytes]] | tuple[Callable[..., CallableObjectWrapper | CloudpickledObjectWrapper], tuple[bytes, bool]]:
         ...
-    
+
     def __getattr__(self, attr): # -> Any:
         ...
-    
+
 
 
 class CallableObjectWrapper(CloudpickledObjectWrapper):
     def __call__(self, *args, **kwargs):
         ...
-    
+
 
 
 def wrap_non_picklable_objects(obj, keep_wrapper=...): # -> type[CloudpickledClassWrapper] | CallableObjectWrapper | CloudpickledObjectWrapper:
@@ -31,4 +31,3 @@ def wrap_non_picklable_objects(obj, keep_wrapper=...): # -> type[CloudpickledCla
     complex classes.
     """
     ...
-

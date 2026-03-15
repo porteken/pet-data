@@ -36,21 +36,21 @@ class _PyArrowBuffer:
         Handle PyArrow Buffers.
         """
         ...
-    
+
     @property
     def bufsize(self) -> int:
         """
         Buffer size in bytes.
         """
         ...
-    
+
     @property
     def ptr(self) -> int:
         """
         Pointer to start of the buffer as an integer.
         """
         ...
-    
+
     def __dlpack__(self):
         """
         Produce DLPack capsule (see array API standard).
@@ -63,7 +63,7 @@ class _PyArrowBuffer:
         it's not completely trivial to implement for a Python-only library.
         """
         ...
-    
+
     def __dlpack_device__(self) -> tuple[DlpackDeviceType, int | None]:
         """
         Device type and device ID for where the data in the buffer resides.
@@ -71,9 +71,6 @@ class _PyArrowBuffer:
         Note: must be implemented even if ``__dlpack__`` is not.
         """
         ...
-    
+
     def __repr__(self) -> str:
         ...
-    
-
-

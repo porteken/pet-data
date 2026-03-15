@@ -24,32 +24,32 @@ class _WeakKeyDictionary:
     """
     def __init__(self) -> None:
         ...
-    
+
     def __getitem__(self, obj):
         ...
-    
+
     def __setitem__(self, obj, value): # -> None:
         ...
-    
+
     def __len__(self): # -> int:
         ...
-    
+
     def clear(self): # -> None:
         ...
-    
+
 
 
 class Batch:
     """dask-compatible wrapper that executes a batch of tasks"""
     def __init__(self, tasks) -> None:
         ...
-    
+
     def __call__(self, tasks=...): # -> list[Any]:
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
 
 
 class DaskDistributedBackend(AutoBatchingMixin, ParallelBackendBase):
@@ -59,38 +59,38 @@ class DaskDistributedBackend(AutoBatchingMixin, ParallelBackendBase):
     default_n_jobs = ...
     def __init__(self, scheduler_host=..., scatter=..., client=..., loop=..., wait_for_workers_timeout=..., **submit_kwargs) -> None:
         ...
-    
+
     def __reduce__(self): # -> tuple[type[DaskDistributedBackend], tuple[()]]:
         ...
-    
+
     def get_nested_backend(self): # -> tuple[DaskDistributedBackend, Literal[-1]]:
         ...
-    
+
     def configure(self, n_jobs=..., parallel=..., **backend_args): # -> int:
         ...
-    
+
     def start_call(self): # -> None:
         ...
-    
+
     def stop_call(self): # -> None:
         ...
-    
+
     def effective_n_jobs(self, n_jobs): # -> int:
         ...
-    
+
     def apply_async(self, func, callback=...): # -> Future[Any]:
         ...
-    
+
     def retrieve_result_callback(self, out):
         ...
-    
+
     def abort_everything(self, ensure_ready=...): # -> None:
         """Tell the client to cancel any task submitted via this instance
 
         joblib.Parallel will never access those results
         """
         ...
-    
+
     @contextlib.contextmanager
     def retrieval_context(self): # -> Generator[None, Any, None]:
         """Override ParallelBackendBase.retrieval_context to avoid deadlocks.
@@ -99,6 +99,3 @@ class DaskDistributedBackend(AutoBatchingMixin, ParallelBackendBase):
         Seceding avoids deadlock in nested parallelism settings.
         """
         ...
-    
-
-

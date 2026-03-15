@@ -139,7 +139,7 @@ class _empty_cell_value:
     @classmethod
     def __reduce__(cls): # -> str:
         ...
-    
+
 
 
 _DATACLASSE_FIELD_TYPE_SENTINELS = ...
@@ -148,10 +148,10 @@ class Pickler(pickle.Pickler):
     dispatch_table = ...
     def dump(self, obj): # -> None:
         ...
-    
+
     def __init__(self, file, protocol=..., buffer_callback=...) -> None:
         ...
-    
+
     if not PYPY:
         dispatch = ...
         def reducer_override(self, obj): # -> tuple[type[type], tuple[None]] | tuple[type[type], tuple[EllipsisType]] | tuple[type[type], tuple[NotImplementedType]] | tuple[Callable[..., type[type] | Any], tuple[Any]] | tuple[Callable[..., Any], tuple[tuple[type, ...], str, str, dict[str, Any], str, str | Any, None], tuple[dict[str, Any], dict[Any, Any]], None, None, Callable[..., Any]] | tuple[Callable[..., Any | type], tuple[type[Any], Any, Any, dict[Any, Any], str | Any, None], tuple[dict[str, Any], dict[Any, Any]], None, None, Callable[..., Any]] | NotImplementedType | tuple[Callable[..., FunctionType], tuple[Any, Any, None, None, tuple[CellType | Any, ...] | None], tuple[dict[str, Any], dict[str, Any]], None, None, Callable[..., None]]:
@@ -186,7 +186,7 @@ class Pickler(pickle.Pickler):
               https://github.com/cloudpipe/cloudpickle/issues/248
             """
             ...
-        
+
     else:
         dispatch = ...
         def save_global(self, obj, name=..., pack=...): # -> None:
@@ -196,7 +196,7 @@ class Pickler(pickle.Pickler):
             dispatched here.
             """
             ...
-        
+
         def save_function(self, obj, name=...): # -> None:
             """Registered with the dispatch to handle all function types.
 
@@ -204,7 +204,7 @@ class Pickler(pickle.Pickler):
             interactive prompt, etc) and handles the pickling appropriately.
             """
             ...
-        
+
         def save_pypy_builtin_func(self, obj): # -> None:
             """Save pypy equivalent of builtin functions.
 
@@ -224,7 +224,7 @@ class Pickler(pickle.Pickler):
             3.6 and later.
             """
             ...
-        
+
 
 
 def dump(obj, file, protocol=..., buffer_callback=...): # -> None:

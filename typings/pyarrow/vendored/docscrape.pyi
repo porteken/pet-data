@@ -24,43 +24,43 @@ class Reader:
 
         """
         ...
-    
+
     def __getitem__(self, n):
         ...
-    
+
     def reset(self): # -> None:
         ...
-    
+
     def read(self): # -> Literal['']:
         ...
-    
+
     def seek_next_non_empty_line(self): # -> None:
         ...
-    
+
     def eof(self): # -> bool:
         ...
-    
+
     def read_to_condition(self, condition_func): # -> list[Any]:
         ...
-    
+
     def read_to_next_empty_line(self): # -> list[Any]:
         ...
-    
+
     def read_to_next_unindented_line(self): # -> list[Any]:
         ...
-    
+
     def peek(self, n=...): # -> Literal['']:
         ...
-    
+
     def is_empty(self): # -> bool:
         ...
-    
+
 
 
 class ParseError(Exception):
     def __str__(self) -> str:
         ...
-    
+
 
 
 Parameter = ...
@@ -73,19 +73,19 @@ class NumpyDocString(Mapping):
     sections = ...
     def __init__(self, docstring, config=...) -> None:
         ...
-    
+
     def __getitem__(self, key):
         ...
-    
+
     def __setitem__(self, key, val): # -> None:
         ...
-    
+
     def __iter__(self): # -> Iterator[str]:
         ...
-    
+
     def __len__(self): # -> int:
         ...
-    
+
     _role = ...
     _funcbacktick = ...
     _funcplain = ...
@@ -98,7 +98,7 @@ class NumpyDocString(Mapping):
     empty_description = ...
     def __str__(self, func_role=...) -> str:
         ...
-    
+
 
 
 def dedent_lines(lines): # -> list[str]:
@@ -108,36 +108,35 @@ def dedent_lines(lines): # -> list[str]:
 class FunctionDoc(NumpyDocString):
     def __init__(self, func, role=..., doc=..., config=...) -> None:
         ...
-    
+
     def get_func(self): # -> tuple[Any | Callable[..., Any], Any | str]:
         ...
-    
+
     def __str__(self) -> str:
         ...
-    
+
 
 
 class ObjDoc(NumpyDocString):
     def __init__(self, obj, doc=..., config=...) -> None:
         ...
-    
+
 
 
 class ClassDoc(NumpyDocString):
     extra_public_methods = ...
     def __init__(self, cls, doc=..., modulename=..., func_doc=..., config=...) -> None:
         ...
-    
+
     @property
     def methods(self): # -> list[Any] | list[str]:
         ...
-    
+
     @property
     def properties(self): # -> list[Any] | list[str]:
         ...
-    
+
 
 
 def get_doc_object(obj, what=..., doc=..., config=...): # -> ClassDoc | FunctionDoc | ObjDoc:
     ...
-

@@ -15,7 +15,7 @@ class FeatherDataset:
     """
     def __init__(self, path_or_paths, validate_schema=...) -> None:
         ...
-    
+
     def read_table(self, columns=...):
         """
         Read multiple feather files as a single pyarrow.Table
@@ -31,10 +31,10 @@ class FeatherDataset:
             Content of the file as a table (of columns)
         """
         ...
-    
+
     def validate_schemas(self, piece, table): # -> None:
         ...
-    
+
     def read_pandas(self, columns=..., use_threads=...):
         """
         Read multiple Parquet files as a single pandas DataFrame
@@ -52,7 +52,7 @@ class FeatherDataset:
             Content of the file as a pandas DataFrame (of columns)
         """
         ...
-    
+
 
 
 def check_chunked_overflow(name, col): # -> None:
@@ -135,4 +135,3 @@ def read_table(source, columns=..., memory_map=..., use_threads=...):
         The contents of the Feather file as a pyarrow.Table
     """
     ...
-

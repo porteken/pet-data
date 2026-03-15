@@ -153,10 +153,6 @@ def _retrieve_with_retry_attempt(
         return completed_result
 
 
-def _is_queue_limit_rejection(exc: Exception) -> bool:
-    return _is_queue_limit_message(str(exc))
-
-
 def _is_retryable_rejection(exc: Exception) -> bool:
     message = str(exc)
     return _is_queue_limit_message(message) or _is_empty_rejection_message(message)

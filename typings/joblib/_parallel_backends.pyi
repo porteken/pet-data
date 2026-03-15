@@ -19,15 +19,15 @@ class ParallelBackendBase(metaclass=ABCMeta):
     @property
     def supports_return_generator(self): # -> bool:
         ...
-    
+
     @property
     def supports_timeout(self): # -> bool:
         ...
-    
+
     nesting_level = ...
     def __init__(self, nesting_level=..., inner_max_num_threads=..., **backend_kwargs) -> None:
         ...
-    
+
     MAX_NUM_THREADS_VARS = ...
     TBB_ENABLE_IPC_VAR = ...
     @abstractmethod
@@ -48,11 +48,11 @@ class ParallelBackendBase(metaclass=ABCMeta):
         as long as all the workers have enough work to do.
         """
         ...
-    
+
     def apply_async(self, func, callback=...):
         """Deprecated: implement `submit` instead."""
         ...
-    
+
     def submit(self, func, callback=...):
         """Schedule a function to be run and return a future-like object.
 
@@ -83,7 +83,7 @@ class ParallelBackendBase(metaclass=ABCMeta):
             A future-like object to track the execution of the submitted function.
         """
         ...
-    
+
     def retrieve_result_callback(self, out): # -> None:
         """Called within the callback function passed to `submit`.
 
@@ -101,7 +101,7 @@ class ParallelBackendBase(metaclass=ABCMeta):
             The result of the function executed in parallel.
         """
         ...
-    
+
     def retrieve_result(self, out, timeout=...):
         """Hook to retrieve the result when support_retrieve_callback=False.
 
@@ -110,7 +110,7 @@ class ParallelBackendBase(metaclass=ABCMeta):
         the computation failed.
         """
         ...
-    
+
     def configure(self, n_jobs=..., parallel=..., prefer=..., require=..., **backend_kwargs): # -> None:
         """Reconfigure the backend and return the number of workers.
 
@@ -118,27 +118,27 @@ class ParallelBackendBase(metaclass=ABCMeta):
         successive independent calls to Parallel with different parameters.
         """
         ...
-    
+
     def start_call(self): # -> None:
         """Call-back method called at the beginning of a Parallel call"""
         ...
-    
+
     def stop_call(self): # -> None:
         """Call-back method called at the end of a Parallel call"""
         ...
-    
+
     def terminate(self): # -> None:
         """Shutdown the workers and free the shared memory."""
         ...
-    
+
     def compute_batch_size(self): # -> Literal[1]:
         """Determine the optimal batch size"""
         ...
-    
+
     def batch_completed(self, batch_size, duration): # -> None:
         """Callback indicate how long it took to run a batch"""
         ...
-    
+
     def abort_everything(self, ensure_ready=...): # -> None:
         """Abort any running tasks
 
@@ -160,7 +160,7 @@ class ParallelBackendBase(metaclass=ABCMeta):
         point in re-creating new workers.
         """
         ...
-    
+
     def get_nested_backend(self): # -> tuple[SequentialBackend, None] | tuple[ThreadingBackend, None]:
         """Backend instance to be used by nested Parallel calls.
 
@@ -169,7 +169,7 @@ class ParallelBackendBase(metaclass=ABCMeta):
         many threads on the host.
         """
         ...
-    
+
     @contextlib.contextmanager
     def retrieval_context(self): # -> Generator[None, Any, None]:
         """Context manager to manage an execution context.
@@ -186,11 +186,11 @@ class ParallelBackendBase(metaclass=ABCMeta):
         tasks.
         """
         ...
-    
+
     @staticmethod
     def in_main_thread(): # -> bool:
         ...
-    
+
 
 
 class SequentialBackend(ParallelBackendBase):
@@ -206,17 +206,17 @@ class SequentialBackend(ParallelBackendBase):
     def effective_n_jobs(self, n_jobs): # -> Literal[1]:
         """Determine the number of jobs which are going to run in parallel"""
         ...
-    
+
     def submit(self, func, callback=...):
         """Schedule a func to be run"""
         ...
-    
+
     def retrieve_result_callback(self, out):
         ...
-    
+
     def get_nested_backend(self): # -> tuple[Any | _Sentinel | object, _Sentinel | Any | object]:
         ...
-    
+
 
 
 class PoolManagerMixin:
@@ -225,23 +225,23 @@ class PoolManagerMixin:
     def effective_n_jobs(self, n_jobs): # -> int:
         """Determine the number of jobs which are going to run in parallel"""
         ...
-    
+
     def terminate(self): # -> None:
         """Shutdown the process or thread pool"""
         ...
-    
+
     def submit(self, func, callback=...):
         """Schedule a func to be run"""
         ...
-    
+
     def retrieve_result_callback(self, result):
         """Mimic concurrent.futures results, raising an error if needed."""
         ...
-    
+
     def abort_everything(self, ensure_ready=...): # -> None:
         """Shutdown the pool and restart a new one with the same parameters"""
         ...
-    
+
 
 
 class AutoBatchingMixin:
@@ -252,22 +252,22 @@ class AutoBatchingMixin:
     _DEFAULT_SMOOTHED_BATCH_DURATION = ...
     def __init__(self, **kwargs) -> None:
         ...
-    
+
     def compute_batch_size(self): # -> int:
         """Determine the optimal batch size"""
         ...
-    
+
     def batch_completed(self, batch_size, duration): # -> None:
         """Callback indicate how long it took to run a batch"""
         ...
-    
+
     def reset_batch_stats(self): # -> None:
         """Reset batch statistics to default values.
 
         This avoids interferences with future jobs.
         """
         ...
-    
+
 
 
 class ThreadingBackend(PoolManagerMixin, ParallelBackendBase):
@@ -290,7 +290,7 @@ class ThreadingBackend(PoolManagerMixin, ParallelBackendBase):
     def configure(self, n_jobs=..., parallel=..., **backend_kwargs): # -> int:
         """Build a process or thread pool and return the number of workers"""
         ...
-    
+
 
 
 class MultiprocessingBackend(PoolManagerMixin, AutoBatchingMixin, ParallelBackendBase):
@@ -309,15 +309,15 @@ class MultiprocessingBackend(PoolManagerMixin, AutoBatchingMixin, ParallelBacken
         loop.
         """
         ...
-    
+
     def configure(self, n_jobs=..., parallel=..., prefer=..., require=..., **memmapping_pool_kwargs): # -> int:
         """Build a process or thread pool and return the number of workers"""
         ...
-    
+
     def terminate(self): # -> None:
         """Shutdown the process or thread pool"""
         ...
-    
+
 
 
 class LokyBackend(AutoBatchingMixin, ParallelBackendBase):
@@ -327,36 +327,35 @@ class LokyBackend(AutoBatchingMixin, ParallelBackendBase):
     def configure(self, n_jobs=..., parallel=..., prefer=..., require=..., idle_worker_timeout=..., **memmapping_executor_kwargs): # -> int:
         """Build a process executor and return the number of workers"""
         ...
-    
+
     def effective_n_jobs(self, n_jobs): # -> int:
         """Determine the number of jobs which are going to run in parallel"""
         ...
-    
+
     def submit(self, func, callback=...): # -> Future:
         """Schedule a func to be run"""
         ...
-    
+
     def retrieve_result_callback(self, future):
         """Retrieve the result, here out is the future given by submit"""
         ...
-    
+
     def terminate(self): # -> None:
         ...
-    
+
     def abort_everything(self, ensure_ready=...): # -> None:
         """Shutdown the workers and restart a new one with the same parameters"""
         ...
-    
+
 
 
 class FallbackToBackend(Exception):
     """Raised when configuration should fallback to another backend"""
     def __init__(self, backend) -> None:
         ...
-    
+
 
 
 def inside_dask_worker(): # -> bool:
     """Check whether the current function is executed inside a Dask worker."""
     ...
-

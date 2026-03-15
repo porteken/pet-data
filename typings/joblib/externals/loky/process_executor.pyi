@@ -57,16 +57,16 @@ _USE_PSUTIL = ...
 class _ThreadWakeup:
     def __init__(self) -> None:
         ...
-    
+
     def close(self): # -> None:
         ...
-    
+
     def wakeup(self): # -> None:
         ...
-    
+
     def clear(self): # -> None:
         ...
-    
+
 
 
 class _ExecutorFlags:
@@ -78,13 +78,13 @@ class _ExecutorFlags:
     """
     def __init__(self, shutdown_lock) -> None:
         ...
-    
+
     def flag_as_shutting_down(self, kill_workers=...): # -> None:
         ...
-    
+
     def flag_as_broken(self, broken): # -> None:
         ...
-    
+
 
 
 _global_shutdown = ...
@@ -96,51 +96,51 @@ class _RemoteTraceback(Exception):
     """Embed stringification of remote traceback in local traceback"""
     def __init__(self, tb=...) -> None:
         ...
-    
+
     def __str__(self) -> str:
         ...
-    
+
 
 
 class _ExceptionWithTraceback:
     def __init__(self, exc) -> None:
         ...
-    
+
     def __reduce__(self): # -> tuple[Callable[..., Any], tuple[Any, str]]:
         ...
-    
+
 
 
 class _WorkItem:
     __slots__ = ...
     def __init__(self, future, fn, args, kwargs) -> None:
         ...
-    
+
 
 
 class _ResultItem:
     def __init__(self, work_id, exception=..., result=...) -> None:
         ...
-    
+
 
 
 class _CallItem:
     def __init__(self, work_id, fn, args, kwargs) -> None:
         ...
-    
+
     def __call__(self):
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
 
 
 class _SafeQueue(Queue):
     """Safe Queue set exception to the future object linked to a job"""
     def __init__(self, max_size=..., ctx=..., pending_work_items=..., running_work_items=..., thread_wakeup=..., shutdown_lock=..., reducers=...) -> None:
         ...
-    
+
 
 
 class _ExecutorManagerThread(threading.Thread):
@@ -156,40 +156,40 @@ class _ExecutorManagerThread(threading.Thread):
     """
     def __init__(self, executor) -> None:
         ...
-    
+
     def run(self): # -> None:
         ...
-    
+
     def add_call_item_to_queue(self): # -> None:
         ...
-    
+
     def wait_result_broken_or_wakeup(self): # -> tuple[_RemoteTraceback | Any | None, bool, BrokenProcessPool | TerminatedWorkerError | None]:
         ...
-    
+
     def process_result_item(self, result_item): # -> None:
         ...
-    
+
     def is_shutting_down(self): # -> bool:
         ...
-    
+
     def terminate_broken(self, bpe): # -> None:
         ...
-    
+
     def flag_executor_shutting_down(self): # -> None:
         ...
-    
+
     def kill_workers(self, reason=...): # -> None:
         ...
-    
+
     def shutdown_workers(self): # -> None:
         ...
-    
+
     def join_executor_internals(self): # -> None:
         ...
-    
+
     def get_n_children_alive(self): # -> int:
         ...
-    
+
 
 
 _system_limits_checked = ...
@@ -254,10 +254,10 @@ class ProcessPoolExecutor(Executor):
                 loaded. Note that this only works with the loky context.
         """
         ...
-    
+
     def submit(self, fn, *args, **kwargs): # -> Future:
         ...
-    
+
     def map(self, fn, *iterables, **kwargs): # -> Generator[Any, Any, None]:
         """Returns an iterator equivalent to map(fn, iter).
 
@@ -281,9 +281,6 @@ class ProcessPoolExecutor(Executor):
             Exception: If fn(*args) raises for any values.
         """
         ...
-    
+
     def shutdown(self, wait=..., kill_workers=...): # -> None:
         ...
-    
-
-

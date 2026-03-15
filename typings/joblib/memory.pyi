@@ -75,33 +75,33 @@ class MemorizedResult(Logger):
     """
     def __init__(self, location, call_id, backend=..., mmap_mode=..., verbose=..., timestamp=..., metadata=...) -> None:
         ...
-    
+
     @property
     def func(self):
         ...
-    
+
     @property
     def func_id(self):
         ...
-    
+
     @property
     def args_id(self):
         ...
-    
+
     def get(self): # -> Any:
         """Read value from cache and return it."""
         ...
-    
+
     def clear(self): # -> None:
         """Clear value from cache"""
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
     def __getstate__(self): # -> dict[str, Any]:
         ...
-    
+
 
 
 class NotMemorizedResult:
@@ -112,22 +112,22 @@ class NotMemorizedResult:
     __slots__ = ...
     def __init__(self, value) -> None:
         ...
-    
+
     def get(self): # -> Any | None:
         ...
-    
+
     def clear(self): # -> None:
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
     def __getstate__(self): # -> dict[str, Any]:
         ...
-    
+
     def __setstate__(self, state): # -> None:
         ...
-    
+
 
 
 class NotMemorizedFunc:
@@ -143,31 +143,31 @@ class NotMemorizedFunc:
     """
     def __init__(self, func) -> None:
         ...
-    
+
     def __call__(self, *args, **kwargs):
         ...
-    
+
     def call_and_shelve(self, *args, **kwargs): # -> NotMemorizedResult:
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
     def clear(self, warn=...): # -> None:
         ...
-    
+
     def call(self, *args, **kwargs): # -> tuple[Any, dict[Any, Any]]:
         ...
-    
+
     def check_call_in_cache(self, *args, **kwargs): # -> Literal[False]:
         ...
-    
+
 
 
 class AsyncNotMemorizedFunc(NotMemorizedFunc):
     async def call_and_shelve(self, *args, **kwargs): # -> NotMemorizedResult:
         ...
-    
+
 
 
 class MemorizedFunc(Logger):
@@ -217,11 +217,11 @@ class MemorizedFunc(Logger):
     """
     def __init__(self, func, location, backend=..., ignore=..., mmap_mode=..., compress=..., verbose=..., timestamp=..., cache_validation_callback=...) -> None:
         ...
-    
+
     @property
     def func_code_info(self): # -> tuple[str, str | Any, int] | tuple[str, Any, Any] | tuple[str, Any | str | None, Literal[-1]]:
         ...
-    
+
     def call_and_shelve(self, *args, **kwargs): # -> MemorizedResult | Any:
         """Call wrapped function, cache result and return a reference.
 
@@ -238,13 +238,13 @@ class MemorizedFunc(Logger):
             activated (e.g. location=None in Memory).
         """
         ...
-    
+
     def __call__(self, *args, **kwargs): # -> MemorizedResult | Any:
         ...
-    
+
     def __getstate__(self): # -> dict[str, Any]:
         ...
-    
+
     def check_call_in_cache(self, *args, **kwargs): # -> bool:
         """Check if the function call is cached and valid for given arguments.
 
@@ -262,11 +262,11 @@ class MemorizedFunc(Logger):
             Whether or not the function call is in cache and can be used.
         """
         ...
-    
+
     def clear(self, warn=...): # -> None:
         """Empty the function's cache."""
         ...
-    
+
     def call(self, *args, **kwargs): # -> tuple[MemorizedResult, dict[str, Any]] | tuple[Any, dict[str, Any]]:
         """Force the execution of the function with the given arguments.
 
@@ -288,22 +288,22 @@ class MemorizedFunc(Logger):
             The metadata associated with the call.
         """
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
 
 
 class AsyncMemorizedFunc(MemorizedFunc):
     async def __call__(self, *args, **kwargs): # -> Any | MemorizedResult:
         ...
-    
+
     async def call_and_shelve(self, *args, **kwargs): # -> Any | MemorizedResult:
         ...
-    
+
     async def call(self, *args, **kwargs): # -> Any | tuple[MemorizedResult, dict[str, Any]] | tuple[Any, dict[str, Any]]:
         ...
-    
+
 
 
 class Memory(Logger):
@@ -349,7 +349,7 @@ class Memory(Logger):
     """
     def __init__(self, location=..., backend=..., mmap_mode=..., compress=..., verbose=..., backend_options=...) -> None:
         ...
-    
+
     def cache(self, func=..., ignore=..., verbose=..., mmap_mode=..., cache_validation_callback=...): # -> partial[Any] | AsyncNotMemorizedFunc | NotMemorizedFunc | AsyncMemorizedFunc | MemorizedFunc:
         """Decorates the given function func to only compute its return
         value for input arguments not cached on disk.
@@ -384,11 +384,11 @@ class Memory(Logger):
             documentation for :class:`joblib.memory.MemorizedFunc`.
         """
         ...
-    
+
     def clear(self, warn=...): # -> None:
         """Erase the complete cache directory."""
         ...
-    
+
     def reduce_size(self, bytes_limit=..., items_limit=..., age_limit=...): # -> None:
         """Remove cache elements to make the cache fit its limits.
 
@@ -418,7 +418,7 @@ class Memory(Logger):
             accepted.
         """
         ...
-    
+
     def eval(self, func, *args, **kwargs): # -> CoroutineType[Any, Any, Any | MemorizedResult] | MemorizedResult | Any:
         """Eval function func with arguments `*args` and `**kwargs`,
         in the context of the memory.
@@ -429,16 +429,16 @@ class Memory(Logger):
 
         """
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
     def __getstate__(self): # -> dict[str, Any]:
         """We don't store the timestamp when pickling, to avoid the hash
         depending from it.
         """
         ...
-    
+
 
 
 def expires_after(days=..., seconds=..., microseconds=..., milliseconds=..., minutes=..., hours=..., weeks=...): # -> Callable[..., Any]:
@@ -450,4 +450,3 @@ def expires_after(days=..., seconds=..., microseconds=..., milliseconds=..., min
         argument passed to a timedelta.
     """
     ...
-

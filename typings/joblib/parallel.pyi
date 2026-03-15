@@ -166,16 +166,16 @@ class parallel_config:
     """
     def __init__(self, backend=..., *, n_jobs=..., verbose=..., temp_folder=..., max_nbytes=..., mmap_mode=..., prefer=..., require=..., inner_max_num_threads=..., **backend_params) -> None:
         ...
-    
+
     def __enter__(self): # -> dict[Any, Any] | Any:
         ...
-    
+
     def __exit__(self, type, value, traceback): # -> None:
         ...
-    
+
     def unregister(self): # -> None:
         ...
-    
+
 
 
 class parallel_backend(parallel_config):
@@ -260,10 +260,10 @@ class parallel_backend(parallel_config):
     """
     def __init__(self, backend, n_jobs=..., inner_max_num_threads=..., **backend_params) -> None:
         ...
-    
+
     def __enter__(self): # -> tuple[Any, Any]:
         ...
-    
+
 
 
 DEFAULT_MP_CONTEXT = ...
@@ -273,16 +273,16 @@ class BatchedCalls:
     """Wrap a sequence of (func, args, kwargs) tuples as a single callable"""
     def __init__(self, iterator_slice, backend_and_jobs, reducer_callback=..., pickle_cache=...) -> None:
         ...
-    
+
     def __call__(self): # -> list[Any]:
         ...
-    
+
     def __reduce__(self): # -> tuple[type[BatchedCalls], tuple[list[Any], tuple[Any, Any | None], None, Any | dict[Any, Any]]]:
         ...
-    
+
     def __len__(self): # -> int:
         ...
-    
+
 
 
 TASK_DONE = ...
@@ -324,11 +324,11 @@ class BatchCompletionCallBack:
     """
     def __init__(self, dispatch_timestamp, batch_size, parallel) -> None:
         ...
-    
+
     def register_job(self, job): # -> None:
         """Register the object returned by `submit`."""
         ...
-    
+
     def get_result(self, timeout):
         """Returns the raw result of the task that was submitted.
 
@@ -347,7 +347,7 @@ class BatchCompletionCallBack:
         waiting for retrieval to complete, after that it raises a TimeoutError.
         """
         ...
-    
+
     def get_status(self, timeout): # -> str | None:
         """Get the status of the task.
 
@@ -355,11 +355,11 @@ class BatchCompletionCallBack:
         the TimeoutError outcome when it is the case.
         """
         ...
-    
+
     def __call__(self, *args, **kwargs): # -> None:
         """Function called by the callback thread after a job is completed."""
         ...
-    
+
 
 
 def register_parallel_backend(name, factory, make_default=...): # -> None:
@@ -657,13 +657,13 @@ class Parallel(Logger):
     """
     def __init__(self, n_jobs=..., backend=..., return_as=..., verbose=..., timeout=..., pre_dispatch=..., batch_size=..., temp_folder=..., max_nbytes=..., mmap_mode=..., prefer=..., require=..., **backend_kwargs) -> None:
         ...
-    
+
     def __enter__(self): # -> Self:
         ...
-    
+
     def __exit__(self, exc_type, exc_value, traceback): # -> None:
         ...
-    
+
     def dispatch_next(self): # -> None:
         """Dispatch more data for parallel processing
 
@@ -672,7 +672,7 @@ class Parallel(Logger):
         against concurrent consumption of the unprotected iterator.
         """
         ...
-    
+
     def dispatch_one_batch(self, iterator): # -> bool:
         """Prefetch the tasks for the next batch and dispatch them.
 
@@ -684,19 +684,16 @@ class Parallel(Logger):
 
         """
         ...
-    
+
     def print_progress(self): # -> None:
         """Display the process of the parallel execution only a fraction
         of time, controlled by self.verbose.
         """
         ...
-    
+
     def __call__(self, iterable): # -> Generator[Any | None, Any, None] | list[Any | None]:
         """Main function to dispatch parallel tasks."""
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
-
-

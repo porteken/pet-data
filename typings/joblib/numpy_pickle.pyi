@@ -38,10 +38,10 @@ class NumpyArrayWrapper:
     def __init__(self, subclass, shape, order, dtype, allow_mmap=..., numpy_array_alignment_bytes=...) -> None:
         """Constructor. Store the useful information for later."""
         ...
-    
+
     def safe_get_numpy_array_alignment_bytes(self): # -> Any | None:
         ...
-    
+
     def write_array(self, array, pickler): # -> None:
         """Write array bytes to pickler file handle.
 
@@ -49,7 +49,7 @@ class NumpyArrayWrapper:
         available in version 1.10.1 in numpy/lib/format.py.
         """
         ...
-    
+
     def read_array(self, unpickler, ensure_native_byte_order): # -> Any:
         """Read array from unpickler file handle.
 
@@ -57,11 +57,11 @@ class NumpyArrayWrapper:
         available in version 1.10.1 in numpy/lib/format.py.
         """
         ...
-    
+
     def read_mmap(self, unpickler): # -> memmap[_AnyShape, dtype[Any]]:
         """Read an array using numpy memmap."""
         ...
-    
+
     def read(self, unpickler, ensure_native_byte_order): # -> Any | memmap[_AnyShape, dtype[Any]]:
         """Read the array corresponding to this wrapper.
 
@@ -80,7 +80,7 @@ class NumpyArrayWrapper:
 
         """
         ...
-    
+
 
 
 class NumpyPickler(Pickler):
@@ -100,7 +100,7 @@ class NumpyPickler(Pickler):
     dispatch = ...
     def __init__(self, fp, protocol=...) -> None:
         ...
-    
+
     def save(self, obj): # -> None:
         """Subclass the Pickler `save` method.
 
@@ -112,7 +112,7 @@ class NumpyPickler(Pickler):
         pickle format. As such it can not be read with `pickle.load`.
         """
         ...
-    
+
 
 
 class NumpyUnpickler(Unpickler):
@@ -137,7 +137,7 @@ class NumpyUnpickler(Unpickler):
     dispatch = ...
     def __init__(self, filename, file_handle, ensure_native_byte_order, mmap_mode=...) -> None:
         ...
-    
+
     def load_build(self): # -> None:
         """Called to set the state of a newly created object.
 
@@ -147,7 +147,7 @@ class NumpyUnpickler(Unpickler):
         NDArrayWrapper is used for backward compatibility with joblib <= 0.9.
         """
         ...
-    
+
 
 
 def dump(value, filename, compress=..., protocol=...): # -> list[str | Any] | None:
@@ -244,4 +244,3 @@ def load(filename, mmap_mode=..., ensure_native_byte_order=...): # -> Any:
     file was saved with compression, the arrays cannot be memmapped.
     """
     ...
-

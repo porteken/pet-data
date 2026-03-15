@@ -16,4 +16,3 @@ def get_exitcodes_terminated_worker(processes): # -> str:
     exitcode of one terminated worker.
     """
     ...
-

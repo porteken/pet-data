@@ -15,14 +15,14 @@ class _ConsistentSet:
     """
     def __init__(self, set_sequence) -> None:
         ...
-    
+
 
 
 class _MyHash:
     """Class used to hash objects that won't normally pickle"""
     def __init__(self, *args) -> None:
         ...
-    
+
 
 
 class Hasher(Pickler):
@@ -32,23 +32,23 @@ class Hasher(Pickler):
     """
     def __init__(self, hash_name=...) -> None:
         ...
-    
+
     def hash(self, obj, return_digest=...): # -> str | None:
         ...
-    
+
     def save(self, obj): # -> None:
         ...
-    
+
     def memoize(self, obj): # -> None:
         ...
-    
+
     def save_global(self, obj, name=..., pack=...): # -> None:
         ...
-    
+
     dispatch = ...
     def save_set(self, set_items): # -> None:
         ...
-    
+
 
 
 class NumpyHasher(Hasher):
@@ -64,14 +64,14 @@ class NumpyHasher(Hasher):
             objects.
         """
         ...
-    
+
     def save(self, obj): # -> None:
         """Subclass the save method, to hash ndarray subclass, rather
         than pickling them. Off course, this is a total abuse of
         the Pickler class.
         """
         ...
-    
+
 
 
 def hash(obj, hash_name=..., coerce_mmap=...): # -> str | None:
@@ -87,4 +87,3 @@ def hash(obj, hash_name=..., coerce_mmap=...): # -> str | None:
         Make no difference between np.memmap and np.ndarray
     """
     ...
-

@@ -353,4 +353,3 @@ def scalar(value):
         An Expression representing the scalar value
     """
     ...
-

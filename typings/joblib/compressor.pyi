@@ -43,15 +43,15 @@ class CompressorWrapper:
     """
     def __init__(self, obj, prefix=..., extension=...) -> None:
         ...
-    
+
     def compressor_file(self, fileobj, compresslevel=...):
         """Returns an instance of a compressor file object."""
         ...
-    
+
     def decompressor_file(self, fileobj):
         """Returns an instance of a decompressor file object."""
         ...
-    
+
 
 
 class BZ2CompressorWrapper(CompressorWrapper):
@@ -59,15 +59,15 @@ class BZ2CompressorWrapper(CompressorWrapper):
     extension = ...
     def __init__(self) -> None:
         ...
-    
+
     def compressor_file(self, fileobj, compresslevel=...): # -> BZ2File:
         """Returns an instance of a compressor file object."""
         ...
-    
+
     def decompressor_file(self, fileobj): # -> BZ2File:
         """Returns an instance of a decompressor file object."""
         ...
-    
+
 
 
 class LZMACompressorWrapper(CompressorWrapper):
@@ -76,15 +76,15 @@ class LZMACompressorWrapper(CompressorWrapper):
     _lzma_format_name = ...
     def __init__(self) -> None:
         ...
-    
+
     def compressor_file(self, fileobj, compresslevel=...): # -> LZMAFile:
         """Returns an instance of a compressor file object."""
         ...
-    
+
     def decompressor_file(self, fileobj): # -> LZMAFile:
         """Returns an instance of a decompressor file object."""
         ...
-    
+
 
 
 class XZCompressorWrapper(LZMACompressorWrapper):
@@ -98,15 +98,15 @@ class LZ4CompressorWrapper(CompressorWrapper):
     extension = ...
     def __init__(self) -> None:
         ...
-    
+
     def compressor_file(self, fileobj, compresslevel=...):
         """Returns an instance of a compressor file object."""
         ...
-    
+
     def decompressor_file(self, fileobj):
         """Returns an instance of a decompressor file object."""
         ...
-    
+
 
 
 _MODE_CLOSED = ...
@@ -140,7 +140,7 @@ class BinaryZlibFile(io.BufferedIOBase):
     wbits = ...
     def __init__(self, filename, mode=..., compresslevel=...) -> None:
         ...
-    
+
     def close(self): # -> None:
         """Flush and close the file.
 
@@ -148,28 +148,28 @@ class BinaryZlibFile(io.BufferedIOBase):
         closed, any other operation on it will raise a ValueError.
         """
         ...
-    
+
     @property
     def closed(self): # -> bool:
         """True if this file is closed."""
         ...
-    
+
     def fileno(self): # -> int:
         """Return the file descriptor for the underlying file."""
         ...
-    
+
     def seekable(self): # -> bool:
         """Return whether the file supports seeking."""
         ...
-    
+
     def readable(self): # -> bool:
         """Return whether the file was opened for reading."""
         ...
-    
+
     def writable(self): # -> bool:
         """Return whether the file was opened for writing."""
         ...
-    
+
     def read(self, size=...): # -> bytes | None:
         """Read up to size uncompressed bytes from the file.
 
@@ -177,14 +177,14 @@ class BinaryZlibFile(io.BufferedIOBase):
         Returns b'' if the file is already at EOF.
         """
         ...
-    
+
     def readinto(self, b): # -> int:
         """Read up to len(b) bytes into b.
 
         Returns the number of bytes read (0 for EOF).
         """
         ...
-    
+
     def write(self, data): # -> int:
         """Write a byte string to the file.
 
@@ -193,7 +193,7 @@ class BinaryZlibFile(io.BufferedIOBase):
         may not reflect the data written until close() is called.
         """
         ...
-    
+
     def seek(self, offset, whence=...): # -> int:
         """Change the file position.
 
@@ -210,17 +210,17 @@ class BinaryZlibFile(io.BufferedIOBase):
         this operation may be extremely slow.
         """
         ...
-    
+
     def tell(self): # -> int:
         """Return the current file position."""
         ...
-    
+
 
 
 class ZlibCompressorWrapper(CompressorWrapper):
     def __init__(self) -> None:
         ...
-    
+
 
 
 class BinaryGzipFile(BinaryZlibFile):
@@ -242,6 +242,3 @@ class BinaryGzipFile(BinaryZlibFile):
 class GzipCompressorWrapper(CompressorWrapper):
     def __init__(self) -> None:
         ...
-    
-
-

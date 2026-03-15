@@ -279,7 +279,7 @@ def _discover_weather_city_shards(weather_root: str) -> dict[int, list[str]]:
     shards: dict[int, list[str]] = {}
     for file_info in file_infos:
         if file_info.type != fs_module.FileType.File or not file_info.path.endswith(
-            ".parquet"
+            ".parquet",
         ):
             continue
         shard_index = _parse_partition_value(

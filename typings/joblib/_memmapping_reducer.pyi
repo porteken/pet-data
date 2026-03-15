@@ -35,16 +35,16 @@ class _WeakArrayKeyMap:
     """
     def __init__(self) -> None:
         ...
-    
+
     def get(self, obj):
         ...
-    
+
     def set(self, obj, value): # -> None:
         ...
-    
+
     def __getstate__(self):
         ...
-    
+
 
 
 def has_shareable_memory(a): # -> bool:
@@ -81,13 +81,13 @@ class ArrayMemmapForwardReducer:
     """
     def __init__(self, max_nbytes, temp_folder_resolver, mmap_mode, unlink_on_gc_collect, verbose=..., prewarm=...) -> None:
         ...
-    
+
     def __reduce__(self): # -> tuple[type[ArrayMemmapForwardReducer], tuple[Any, None, Any, Any], dict[str, Any]]:
         ...
-    
+
     def __call__(self, a): # -> tuple[Callable[..., memmap[_AnyShape, dtype[Any]] | NDArray[Any]], tuple[str | None, Any, str, int | Any, str, Any, Any | None, Any | None, bool]] | tuple[Callable[..., Any], tuple[str, Any, Any]] | tuple[Callable[..., Any], tuple[bytes]]:
         ...
-    
+
 
 
 def get_memmapping_reducers(forward_reducers=..., backward_reducers=..., temp_folder_resolver=..., max_nbytes=..., mmap_mode=..., verbose=..., prewarm=..., unlink_on_gc_collect=..., **kwargs): # -> tuple[dict[Any, Any] | Any, dict[Any, Any] | Any]:
@@ -110,19 +110,16 @@ class TemporaryResourcesManager:
     """
     def __init__(self, temp_folder_root=..., context_id=...) -> None:
         ...
-    
+
     def set_current_context(self, context_id): # -> None:
         ...
-    
+
     def register_new_context(self, context_id): # -> None:
         ...
-    
+
     def resolve_temp_folder_name(self):
         """Return a folder name specific to the currently activated context"""
         ...
-    
+
     def register_folder_finalizer(self, pool_subfolder, context_id): # -> None:
         ...
-    
-
-

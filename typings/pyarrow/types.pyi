@@ -309,4 +309,3 @@ def is_interval(t):
 @doc(is_null, datatype="primitive type")
 def is_primitive(t):
     ...
-

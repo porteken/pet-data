@@ -8,30 +8,27 @@ __all__ = ["Queue", "SimpleQueue", "Full"]
 class Queue(mp_Queue):
     def __init__(self, maxsize=..., reducers=..., ctx=...) -> None:
         ...
-    
+
     def __getstate__(self): # -> tuple[Any, Any, Any, Any, Any | None, Any, Any, Any, Any]:
         ...
-    
+
     def __setstate__(self, state): # -> None:
         ...
-    
+
 
 
 class SimpleQueue(mp_SimpleQueue):
     def __init__(self, reducers=..., ctx=...) -> None:
         ...
-    
+
     def close(self): # -> None:
         ...
-    
+
     def __getstate__(self): # -> tuple[Any, Any, Any | None, Any, Any]:
         ...
-    
+
     def __setstate__(self, state): # -> None:
         ...
-    
+
     def put(self, obj): # -> None:
         ...
-    
-
-

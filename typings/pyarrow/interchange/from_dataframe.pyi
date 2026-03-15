@@ -223,4 +223,3 @@ def validity_buffer_nan_sentinel(data_pa_buffer: BufferObject, data_type: Dtype,
     pa.Buffer
     """
     ...
-

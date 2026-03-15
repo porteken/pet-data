@@ -35,11 +35,11 @@ class CustomizablePickler(Pickler):
     """
     def __init__(self, writer, reducers=..., protocol=...) -> None:
         ...
-    
+
     def register(self, type, reduce_func): # -> None:
         """Attach a reducer function to a given type in the dispatch table."""
         ...
-    
+
 
 
 class CustomizablePicklingQueue:
@@ -60,16 +60,16 @@ class CustomizablePicklingQueue:
     """
     def __init__(self, context, reducers=...) -> None:
         ...
-    
+
     def __getstate__(self): # -> tuple[Any, Any, Any, Any, Any | None]:
         ...
-    
+
     def __setstate__(self, state): # -> None:
         ...
-    
+
     def empty(self): # -> bool:
         ...
-    
+
 
 
 class PicklingPool(Pool):
@@ -90,7 +90,7 @@ class PicklingPool(Pool):
     """
     def __init__(self, processes=..., forward_reducers=..., backward_reducers=..., **kwargs) -> None:
         ...
-    
+
 
 
 class MemmappingPool(PicklingPool):
@@ -171,9 +171,6 @@ class MemmappingPool(PicklingPool):
     """
     def __init__(self, processes=..., temp_folder=..., max_nbytes=..., mmap_mode=..., forward_reducers=..., backward_reducers=..., verbose=..., prewarm=..., **kwargs) -> None:
         ...
-    
+
     def terminate(self): # -> None:
         ...
-    
-
-

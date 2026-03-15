@@ -73,4 +73,3 @@ def get_library_dirs(): # -> list[str]:
     linking C or Cython extensions using pyarrow
     """
     ...
-

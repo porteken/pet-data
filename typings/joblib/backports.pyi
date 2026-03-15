@@ -18,25 +18,25 @@ class Version:
     """
     def __init__(self, vstring=...) -> None:
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
     def __eq__(self, other) -> bool:
         ...
-    
+
     def __lt__(self, other) -> bool:
         ...
-    
+
     def __le__(self, other) -> bool:
         ...
-    
+
     def __gt__(self, other) -> bool:
         ...
-    
+
     def __ge__(self, other) -> bool:
         ...
-    
+
 
 
 class LooseVersion(Version):
@@ -51,16 +51,16 @@ class LooseVersion(Version):
     component_re = ...
     def __init__(self, vstring=...) -> None:
         ...
-    
+
     def parse(self, vstring): # -> None:
         ...
-    
+
     def __str__(self) -> str:
         ...
-    
+
     def __repr__(self): # -> str:
         ...
-    
+
 
 
 def make_memmap(filename, dtype=..., mode=..., offset=..., shape=..., order=..., unlink_on_gc_collect=...): # -> memmap[_AnyShape, dtype[Any]]:

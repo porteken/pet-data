@@ -37,16 +37,13 @@ class _Sentinel:
     default_value: object
     def __repr__(self): # -> str:
         ...
-    
+
 
 
 class _TracebackCapturingWrapper:
     """Protect function call and return error with traceback."""
     def __init__(self, func) -> None:
         ...
-    
+
     def __call__(self, **kwargs): # -> _ExceptionWithTraceback:
         ...
-    
-
-

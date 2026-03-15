@@ -172,10 +172,12 @@ def _split_city_records(
     child_tiles: dict[tuple[float, float], list[CityRecord]] = defaultdict(list)
     for record in city_records:
         lat_index = min(
-            max(int((record.grid_lat - tile_lat_min) / half_tile_deg), 0), 1
+            max(int((record.grid_lat - tile_lat_min) / half_tile_deg), 0),
+            1,
         )
         lon_index = min(
-            max(int((record.grid_lon - tile_lon_min) / half_tile_deg), 0), 1
+            max(int((record.grid_lon - tile_lon_min) / half_tile_deg), 0),
+            1,
         )
         child_tiles[
             (

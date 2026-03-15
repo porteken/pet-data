@@ -28,4 +28,3 @@ def check_subprocess_call(cmd, timeout=..., stdout_regex=..., stderr_regex=...):
     stderr if stderr_regex is set.
     """
     ...
-

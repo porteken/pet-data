@@ -107,10 +107,10 @@ def disabled_gc(): # -> Generator[None, Any, None]:
 class FSProtocolClass:
     def __init__(self, path) -> None:
         ...
-    
+
     def __fspath__(self): # -> str:
         ...
-    
+
 
 
 class ProxyHandler(pyarrow.fs.FileSystemHandler):
@@ -120,58 +120,58 @@ class ProxyHandler(pyarrow.fs.FileSystemHandler):
     """
     def __init__(self, fs) -> None:
         ...
-    
+
     def __eq__(self, other) -> bool:
         ...
-    
+
     def __ne__(self, other) -> bool:
         ...
-    
+
     def get_type_name(self):
         ...
-    
+
     def normalize_path(self, path):
         ...
-    
+
     def get_file_info(self, paths):
         ...
-    
+
     def get_file_info_selector(self, selector):
         ...
-    
+
     def create_dir(self, path, recursive):
         ...
-    
+
     def delete_dir(self, path):
         ...
-    
+
     def delete_dir_contents(self, path, missing_dir_ok):
         ...
-    
+
     def delete_root_dir_contents(self):
         ...
-    
+
     def delete_file(self, path):
         ...
-    
+
     def move(self, src, dest):
         ...
-    
+
     def copy_file(self, src, dest):
         ...
-    
+
     def open_input_stream(self, path):
         ...
-    
+
     def open_input_file(self, path):
         ...
-    
+
     def open_output_stream(self, path, metadata):
         ...
-    
+
     def open_append_stream(self, path, metadata):
         ...
-    
+
 
 
 @contextlib.contextmanager
@@ -190,4 +190,3 @@ def running_on_musllinux(): # -> bool:
     Checks whether it's running on musl systems or not.
     """
     ...
-

@@ -44,4 +44,3 @@ def varargs_agg_func_fixture(): # -> tuple[Callable[..., Any], Literal['sum_mean
     Register a unary aggregate function
     """
     ...
-

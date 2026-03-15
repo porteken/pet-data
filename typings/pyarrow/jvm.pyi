@@ -20,10 +20,10 @@ class _JvmBufferNanny:
     ref_manager = ...
     def __init__(self, jvm_buf) -> None:
         ...
-    
+
     def __del__(self): # -> None:
         ...
-    
+
 
 
 def jvm_buffer(jvm_buf):
@@ -100,4 +100,3 @@ def record_batch(jvm_vector_schema_root):
     record_batch: pyarrow.RecordBatch
     """
     ...
-

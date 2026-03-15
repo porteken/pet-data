@@ -12,4 +12,3 @@ def rebuild_connection(df, readable, writable): # -> Connection[Any, Any]:
 
 def reduce_connection(conn): # -> tuple[Callable[..., Connection[Any, Any]], tuple[Any | DupFd, Any, Any]]:
     ...
-

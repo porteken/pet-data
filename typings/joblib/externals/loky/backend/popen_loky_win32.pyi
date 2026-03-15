@@ -21,7 +21,7 @@ class Popen(_Popen):
     method = ...
     def __init__(self, process_obj) -> None:
         ...
-    
+
 
 
 def get_command_line(pipe_handle, parent_pid, **kwds): # -> list[Any]:
@@ -35,4 +35,3 @@ def is_forking(argv): # -> bool:
 def main(pipe_handle, parent_pid=...):
     """Run code specified by data received over pipe."""
     ...
-

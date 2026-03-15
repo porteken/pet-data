@@ -21,10 +21,10 @@ class MemmappingExecutor(_ReusablePoolExecutor):
         numpy arrays.
         """
         ...
-    
+
     def terminate(self, kill_workers=...): # -> None:
         ...
-    
+
 
 
 class _TestingMemmappingExecutor(MemmappingExecutor):
@@ -35,9 +35,6 @@ class _TestingMemmappingExecutor(MemmappingExecutor):
     def apply_async(self, func, args): # -> Future:
         """Schedule a func to be run"""
         ...
-    
+
     def map(self, f, *args): # -> list[Any]:
         ...
-    
-
-

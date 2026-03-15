@@ -143,7 +143,7 @@ class _PyArrowColumn:
         Handles PyArrow Arrays and ChunkedArrays.
         """
         ...
-    
+
     def size(self) -> int:
         """
         Size of the column, in elements.
@@ -155,7 +155,7 @@ class _PyArrowColumn:
         expensive) computation for some dataframe implementations.
         """
         ...
-    
+
     @property
     def offset(self) -> int:
         """
@@ -166,7 +166,7 @@ class _PyArrowColumn:
         ``offset = n * M``, ``n = 0 .. N-1``.
         """
         ...
-    
+
     @property
     def dtype(self) -> Tuple[DtypeKind, int, str, str]:
         """
@@ -198,7 +198,7 @@ class _PyArrowColumn:
               decimal, and nested (list, struct, map, union) dtypes.
         """
         ...
-    
+
     @property
     def describe_categorical(self) -> CategoricalDescription:
         """
@@ -223,7 +223,7 @@ class _PyArrowColumn:
         TBD: are there any other in-memory representations that are needed?
         """
         ...
-    
+
     @property
     def describe_null(self) -> Tuple[ColumnNullType, Any]:
         """
@@ -235,7 +235,7 @@ class _PyArrowColumn:
         None otherwise.
         """
         ...
-    
+
     @property
     def null_count(self) -> int:
         """
@@ -244,20 +244,20 @@ class _PyArrowColumn:
         Note: Arrow uses -1 to indicate "unknown", but None seems cleaner.
         """
         ...
-    
+
     @property
     def metadata(self) -> Dict[str, Any]:
         """
         The metadata for the column. See `DataFrame.metadata` for more details.
         """
         ...
-    
+
     def num_chunks(self) -> int:
         """
         Return the number of chunks the column consists of.
         """
         ...
-    
+
     def get_chunks(self, n_chunks: Optional[int] = ...) -> Iterable[_PyArrowColumn]:
         """
         Return an iterator yielding the chunks.
@@ -265,7 +265,7 @@ class _PyArrowColumn:
         See `DataFrame.get_chunks` for details on ``n_chunks``.
         """
         ...
-    
+
     def get_buffers(self) -> ColumnBuffers:
         """
         Return a dictionary containing the underlying buffers.
@@ -288,6 +288,3 @@ class _PyArrowColumn:
                          buffer.
         """
         ...
-    
-
-

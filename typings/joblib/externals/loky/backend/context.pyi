@@ -58,36 +58,36 @@ class LokyContext(BaseContext):
     def Queue(self, maxsize=..., reducers=...): # -> Queue:
         """Returns a queue object"""
         ...
-    
+
     def SimpleQueue(self, reducers=...): # -> SimpleQueue:
         """Returns a queue object"""
         ...
-    
+
     if sys.platform != "win32":
         def Semaphore(self, value=...): # -> Semaphore:
             """Returns a semaphore object"""
             ...
-        
+
         def BoundedSemaphore(self, value): # -> BoundedSemaphore:
             """Returns a bounded semaphore object"""
             ...
-        
+
         def Lock(self): # -> Lock:
             """Returns a lock object"""
             ...
-        
+
         def RLock(self): # -> RLock:
             """Returns a recurrent lock object"""
             ...
-        
+
         def Condition(self, lock=...): # -> Condition:
             """Returns a condition object"""
             ...
-        
+
         def Event(self): # -> Event:
             """Returns an event object"""
             ...
-        
+
 
 
 class LokyInitMainContext(LokyContext):

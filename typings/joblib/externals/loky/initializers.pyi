@@ -10,9 +10,6 @@ class _ChainedInitializer:
     """
     def __init__(self, initializers) -> None:
         ...
-    
+
     def __call__(self, *chained_args): # -> None:
         ...
-    
-
-

@@ -35,7 +35,7 @@ class ResourceTracker(_ResourceTracker):
     def maybe_unlink(self, name, rtype): # -> None:
         """Decrement the refcount of a resource, and delete it if it hits 0"""
         ...
-    
+
     def ensure_running(self): # -> None:
         """Make sure that resource tracker process is running.
 
@@ -46,10 +46,10 @@ class ResourceTracker(_ResourceTracker):
         versions before 3.13.7.
         """
         ...
-    
+
     def __del__(self): # -> None:
         ...
-    
+
 
 
 _resource_tracker = ...
@@ -64,4 +64,3 @@ def main(fd, verbose=...):
 
 def spawnv_passfds(path, args, passfds): # -> int:
     ...
-

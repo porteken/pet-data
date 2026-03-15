@@ -30,7 +30,7 @@ class StoreBackendBase(metaclass=ABCMeta):
             directory.
         """
         ...
-    
+
     @abstractmethod
     def clear_location(self, location): # -> None:
         """Clears a location on the store.
@@ -42,7 +42,7 @@ class StoreBackendBase(metaclass=ABCMeta):
             directory or a filename absolute path
         """
         ...
-    
+
     @abstractmethod
     def get_items(self): # -> None:
         """Returns the whole list of items available in the store.
@@ -53,7 +53,7 @@ class StoreBackendBase(metaclass=ABCMeta):
         filesystem).
         """
         ...
-    
+
     @abstractmethod
     def configure(self, location, verbose=..., backend_options=...): # -> None:
         """Configures the store.
@@ -70,7 +70,7 @@ class StoreBackendBase(metaclass=ABCMeta):
             store backend.
         """
         ...
-    
+
 
 
 class StoreBackendMixin:
@@ -85,65 +85,65 @@ class StoreBackendMixin:
     def load_item(self, call_id, verbose=..., timestamp=..., metadata=...): # -> Any:
         """Load an item from the store given its id as a list of str."""
         ...
-    
+
     def dump_item(self, call_id, item, verbose=...): # -> None:
         """Dump an item in the store at the id given as a list of str."""
         ...
-    
+
     def clear_item(self, call_id): # -> None:
         """Clear the item at the id, given as a list of str."""
         ...
-    
+
     def contains_item(self, call_id):
         """Check if there is an item at the id, given as a list of str."""
         ...
-    
+
     def get_item_info(self, call_id): # -> dict[str, Any]:
         """Return information about item."""
         ...
-    
+
     def get_metadata(self, call_id): # -> Any | dict[Any, Any]:
         """Return actual metadata of an item."""
         ...
-    
+
     def store_metadata(self, call_id, metadata): # -> None:
         """Store metadata of a computation."""
         ...
-    
+
     def contains_path(self, call_id):
         """Check cached function is available in store."""
         ...
-    
+
     def clear_path(self, call_id): # -> None:
         """Clear all items with a common path in the store."""
         ...
-    
+
     def store_cached_func_code(self, call_id, func_code=...): # -> None:
         """Store the code of the cached function."""
         ...
-    
+
     def get_cached_func_code(self, call_id):
         """Store the code of the cached function."""
         ...
-    
+
     def get_cached_func_info(self, call_id): # -> dict[str, Any]:
         """Return information related to the cached function if it exists."""
         ...
-    
+
     def clear(self): # -> None:
         """Clear the whole store content."""
         ...
-    
+
     def enforce_store_limits(self, bytes_limit, items_limit=..., age_limit=...): # -> None:
         """
         Remove the store's oldest files to enforce item, byte, and age limits.
         """
         ...
-    
+
     def __repr__(self): # -> str:
         """Printable representation of the store location."""
         ...
-    
+
 
 
 class FileSystemStoreBackend(StoreBackendBase, StoreBackendMixin):
@@ -154,21 +154,18 @@ class FileSystemStoreBackend(StoreBackendBase, StoreBackendMixin):
     def clear_location(self, location): # -> None:
         """Delete location on store."""
         ...
-    
+
     def create_location(self, location): # -> None:
         """Create object location on store"""
         ...
-    
+
     def get_items(self): # -> list[Any]:
         """Returns the whole list of items available in the store."""
         ...
-    
+
     def configure(self, location, verbose=..., backend_options=...): # -> None:
         """Configure the store backend.
 
         For this backend, valid store options are 'compress' and 'mmap_mode'
         """
         ...
-    
-
-

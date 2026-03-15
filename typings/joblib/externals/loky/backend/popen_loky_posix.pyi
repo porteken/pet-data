@@ -6,10 +6,10 @@ __all__ = ["Popen"]
 class _DupFd:
     def __init__(self, fd) -> None:
         ...
-    
+
     def detach(self): # -> Any:
         ...
-    
+
 
 
 class Popen:
@@ -17,23 +17,23 @@ class Popen:
     DupFd = _DupFd
     def __init__(self, process_obj) -> None:
         ...
-    
+
     def duplicate_for_child(self, fd):
         ...
-    
+
     def poll(self, flag=...): # -> int | None:
         ...
-    
+
     def wait(self, timeout=...): # -> int | None:
         ...
-    
+
     def terminate(self): # -> None:
         ...
-    
+
     @staticmethod
     def thread_is_spawning(): # -> Literal[True]:
         ...
-    
+
 
 
 if __name__ == "__main__":

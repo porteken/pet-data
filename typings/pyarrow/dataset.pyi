@@ -463,4 +463,3 @@ Table/RecordBatch, or iterable of RecordBatch
         filesystems that do not require directories.
     """
     ...
-

@@ -62,4 +62,3 @@ def download_tzdata_on_windows():
     location expected by Arrow which is %USERPROFILE%\Downloads\tzdata.
     """
     ...
-

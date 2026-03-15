@@ -21,7 +21,7 @@ class RecordBatchStreamReader(lib._RecordBatchStreamReader):
     """
     def __init__(self, source, *, options=..., memory_pool=...) -> None:
         ...
-    
+
 
 
 _ipc_writer_class_doc = ...
@@ -30,7 +30,7 @@ class RecordBatchStreamWriter(lib._RecordBatchStreamWriter):
     __doc__ = ...
     def __init__(self, sink, schema, *, options=...) -> None:
         ...
-    
+
 
 
 class RecordBatchFileReader(lib._RecordBatchFileReader):
@@ -53,14 +53,14 @@ class RecordBatchFileReader(lib._RecordBatchFileReader):
     """
     def __init__(self, source, footer_offset=..., *, options=..., memory_pool=...) -> None:
         ...
-    
+
 
 
 class RecordBatchFileWriter(lib._RecordBatchFileWriter):
     __doc__ = ...
     def __init__(self, sink, schema, *, options=..., metadata=...) -> None:
         ...
-    
+
 
 
 def new_stream(sink, schema, *, options=...): # -> RecordBatchStreamWriter:
@@ -152,4 +152,3 @@ def deserialize_pandas(buf, *, use_threads=...):
         The buffer deserialized as pandas DataFrame
     """
     ...
-

@@ -77,4 +77,3 @@ def format_call(func, args, kwargs, object_name=...): # -> str:
     call with the given arguments.
     """
     ...
-
