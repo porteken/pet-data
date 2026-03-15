@@ -28,7 +28,7 @@ from shards import resolve_filesystem
 from shared_config import build_year_months
 
 MRT_DATASET = "derived-utci-historical"
-MRT_CDS_REQUEST_CONCURRENCY = 4
+MRT_CDS_REQUEST_CONCURRENCY = 2
 
 
 def process_mrt(
