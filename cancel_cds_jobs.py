@@ -8,6 +8,7 @@ import os
 from typing import Any, cast
 
 import requests
+from requests.auth import HTTPBasicAuth
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CDS_API_URL = "https://cds.climate.copernicus.eu/api"
@@ -29,22 +30,41 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-key",
         default=os.getenv("CDSAPI_KEY"),
-        help="CDS API bearer token. Defaults to CDSAPI_KEY.",
+        help="CDS API credential. Supports token-only or legacy uid:key. Defaults to CDSAPI_KEY.",
     )
     return parser.parse_args()
 
 
-def _authorization_headers(api_key: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"}
+def _request_kwargs(api_key: str) -> dict[str, Any]:
+    if ":" in api_key:
+        user_id, _, api_token = api_key.partition(":")
+        return {"auth": HTTPBasicAuth(user_id, api_token)}
+
+    return {"headers": {"PRIVATE-TOKEN": api_key}}
+
+
+def _raise_for_status(response: requests.Response, *, api_key: str) -> None:
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        if response.status_code != requests.codes.unauthorized:
+            raise
+
+        credential_shape = "legacy uid:key" if ":" in api_key else "token-only"
+        msg = (
+            f"{exc}. CDS rejected the {credential_shape} credential sent to "
+            f"{response.request.method} {response.url}."
+        )
+        raise requests.HTTPError(msg, response=response) from exc
 
 
 def _list_jobs(api_url: str, *, api_key: str) -> list[dict[str, Any]]:
     response = requests.get(
         f"{api_url.rstrip('/')}/retrieve/v1/jobs",
-        headers=_authorization_headers(api_key),
         timeout=REQUEST_TIMEOUT_SECONDS,
+        **_request_kwargs(api_key),
     )
-    response.raise_for_status()
+    _raise_for_status(response, api_key=api_key)
     payload = response.json()
     jobs = payload.get("jobs", [])
     if not isinstance(jobs, list):
@@ -58,15 +78,15 @@ def _list_jobs(api_url: str, *, api_key: str) -> list[dict[str, Any]]:
 def _cancel_job(api_url: str, *, api_key: str, job_id: str) -> bool:
     response = requests.delete(
         f"{api_url.rstrip('/')}/retrieve/v1/jobs/{job_id}",
-        headers=_authorization_headers(api_key),
         timeout=REQUEST_TIMEOUT_SECONDS,
+        **_request_kwargs(api_key),
     )
     if response.status_code == HTTP_NO_CONTENT:
         return True
     if response.status_code == HTTP_NOT_FOUND:
         LOGGER.info("CDS job %s was already gone.", job_id)
         return False
-    response.raise_for_status()
+    _raise_for_status(response, api_key=api_key)
     return False
 
 
