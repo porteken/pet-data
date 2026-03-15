@@ -296,10 +296,14 @@ def _load_selected_tiles(
     _ensure_tile_outputs()
     tile_boxes_df = pd.read_csv(Path(OUTPUT_DIR) / "tile_boxes.csv")
     unique_cells_df = pd.read_csv(Path(OUTPUT_DIR) / "unique_grid_cells.csv")
+    merge_columns = ["tile_lat_min", "tile_lon_min"]
+    if "tile_deg" in tile_boxes_df.columns and "tile_deg" in unique_cells_df.columns:
+        merge_columns.append("tile_deg")
+
     unique_cells_df = unique_cells_df.merge(
-        tile_boxes_df[["tile_id", "tile_lat_min", "tile_lon_min"]],
+        tile_boxes_df[["tile_id", *merge_columns]],
         how="inner",
-        on=["tile_lat_min", "tile_lon_min"],
+        on=merge_columns,
         validate="many_to_one",
     )
 
