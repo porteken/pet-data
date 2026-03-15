@@ -7,6 +7,7 @@ import importlib
 import logging
 import math
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
@@ -82,6 +83,77 @@ WEATHER_VARIABLE_ALIASES = {
     "d2m": "d2m",
     "t2m": "t2m",
 }
+QUEUE_LIMIT_REJECTION_TEXT = (
+    "Number queued requests for this dataset is temporarily limited."
+)
+CDS_RETRY_ATTEMPTS = 6
+CDS_RETRY_BASE_DELAY_SECONDS = 30
+CDS_RETRY_MAX_DELAY_SECONDS = 300
+
+
+def _retrieve_once(
+    client: CDSClient,
+    name: str,
+    request: object,
+    target: str | None = None,
+) -> CDSResult:
+    """Submit a single CDS retrieval request."""
+    return client.retrieve(name, request, target)
+
+
+def retrieve_with_retry(
+    client: CDSClient,
+    name: str,
+    request: object,
+    target: str | None = None,
+) -> CDSResult:
+    """Retry CDS retrievals when the service rejects jobs due to queue limits."""
+    return _retrieve_with_retry_attempt(
+        client=client,
+        name=name,
+        request=request,
+        target=target,
+        attempt=1,
+    )
+
+
+def _retrieve_with_retry_attempt(
+    *,
+    client: CDSClient,
+    name: str,
+    request: object,
+    target: str | None,
+    attempt: int,
+) -> CDSResult:
+    try:
+        return _retrieve_once(client, name, request, target)
+    except Exception as exc:
+        if not _is_queue_limit_rejection(exc) or attempt == CDS_RETRY_ATTEMPTS:
+            raise
+
+        delay_seconds = min(
+            CDS_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
+            CDS_RETRY_MAX_DELAY_SECONDS,
+        )
+        LOGGER.warning(
+            "CDS queue limit hit for %s (attempt %s/%s). Retrying in %s seconds.",
+            name,
+            attempt,
+            CDS_RETRY_ATTEMPTS,
+            delay_seconds,
+        )
+        time.sleep(delay_seconds)
+        return _retrieve_with_retry_attempt(
+            client=client,
+            name=name,
+            request=request,
+            target=target,
+            attempt=attempt + 1,
+        )
+
+
+def _is_queue_limit_rejection(exc: Exception) -> bool:
+    return QUEUE_LIMIT_REJECTION_TEXT in str(exc)
 
 
 def partition_exists(base_uri: str, partition_path: str) -> bool:
@@ -208,7 +280,8 @@ def process_mrt(
 
             zip_path = tmpdir / f"mrt_{year}_tile_{tile.tile_id}.zip"
             LOGGER.info("Starting MRT tile %s for %s.", tile.tile_id, year)
-            client.retrieve(
+            retrieve_with_retry(
+                client,
                 "derived-utci-historical",
                 {
                     "variable": ["mean_radiant_temperature"],
@@ -337,7 +410,8 @@ def _process_weather_tile(
                 tmpdir
                 / f"weather_{year}_tile_{tile_id}_lat_{lat}_lng_{lng}.csv"
             )
-            client.retrieve(
+            retrieve_with_retry(
+                client,
                 WEATHER_DATASET,
                 _build_weather_request(lat, lng, year),
             ).download(str(download_path))
