@@ -8,9 +8,10 @@ import csv
 import importlib
 import logging
 import math
+import multiprocessing
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 from zipfile import ZipFile, is_zipfile
@@ -266,27 +267,18 @@ def process_mrt(
         LOGGER.warning("No MRT tiles selected for processing.")
         return
 
-    _run_parallel_tile_jobs(
+    _run_mrt_tile_jobs(
         tile_jobs=tile_jobs,
         max_workers=max_workers,
-        dataset_label="MRT",
+        mrt_root=mrt_root,
         year=year,
-        process_tile=lambda tile_row, tile_cells: _process_mrt_tile(
-            client=client,
-            year=year,
-            mrt_root=mrt_root,
-            tile_row=tile_row,
-            tile_cells=tile_cells,
-        ),
-        process_tile_with_new_client=lambda tile_row, tile_cells: _process_mrt_tile_with_new_client(
-            year=year,
-            mrt_root=mrt_root,
-            tile_row=tile_row,
-            tile_cells=tile_cells,
-        ),
+        client=client,
     )
 
-    LOGGER.info("MRT processing complete for %s selected tiles.", len(selected_tiles))
+    LOGGER.info(
+        "MRT processing complete for %s selected tiles.",
+        len(selected_tiles),
+    )
 
 
 def _load_selected_tiles(
@@ -383,6 +375,51 @@ def _run_parallel_tile_jobs(
                 tile_id,
                 year,
             )
+
+
+def _run_mrt_tile_jobs(
+    *,
+    tile_jobs: list[tuple[dict[str, Any], DataFrame]],
+    max_workers: int,
+    mrt_root: str,
+    year: str,
+    client: CDSClient,
+) -> None:
+    worker_count = max(1, min(max_workers, len(tile_jobs)))
+    if worker_count == 1:
+        for tile_row, tile_cells in tile_jobs:
+            _process_mrt_tile(
+                client=client,
+                year=year,
+                mrt_root=mrt_root,
+                tile_row=tile_row,
+                tile_cells=tile_cells,
+            )
+        return
+
+    LOGGER.info(
+        "Processing %s MRT tiles with %s worker processes.",
+        len(tile_jobs),
+        worker_count,
+    )
+    with ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=multiprocessing.get_context("spawn"),
+    ) as executor:
+        future_to_tile_id = {
+            executor.submit(
+                _process_mrt_tile_with_new_client,
+                year=year,
+                mrt_root=mrt_root,
+                tile_row=tile_row,
+                tile_cells=tile_cells,
+            ): int(tile_row["tile_id"])
+            for tile_row, tile_cells in tile_jobs
+        }
+        for future in as_completed(future_to_tile_id):
+            tile_id = future_to_tile_id[future]
+            future.result()
+            LOGGER.info("MRT tile %s completed for %s.", tile_id, year)
 
 
 def _process_weather_tile(
@@ -568,33 +605,17 @@ def _build_weather_request(
 
 
 def _build_weather_date_ranges(year: str) -> list[str]:
+    if not SHARED_MONTHS:
+        return []
+
+    start_month = min(SHARED_MONTHS)
+    end_month = max(SHARED_MONTHS)
     return [
         (
             f"{year}-{start_month:02d}-01/"
             f"{year}-{end_month:02d}-{calendar.monthrange(int(year), end_month)[1]:02d}"
         )
-        for start_month, end_month in _group_contiguous_months(SHARED_MONTHS)
     ]
-
-
-def _group_contiguous_months(months: tuple[int, ...]) -> list[tuple[int, int]]:
-    if not months:
-        return []
-
-    grouped_months: list[tuple[int, int]] = []
-    range_start = months[0]
-    range_end = months[0]
-    for month_value in months[1:]:
-        if month_value == range_end + 1:
-            range_end = month_value
-            continue
-
-        grouped_months.append((range_start, range_end))
-        range_start = month_value
-        range_end = month_value
-
-    grouped_months.append((range_start, range_end))
-    return grouped_months
 
 
 def _load_weather_csv_frame(
