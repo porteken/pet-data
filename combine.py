@@ -278,7 +278,9 @@ def _discover_weather_city_shards(weather_root: str) -> dict[int, list[str]]:
 
     shards: dict[int, list[str]] = {}
     for file_info in file_infos:
-        if file_info.type != fs_module.FileType.File or not file_info.path.endswith(".parquet"):
+        if file_info.type != fs_module.FileType.File or not file_info.path.endswith(
+            ".parquet"
+        ):
             continue
         shard_index = _parse_partition_value(
             root_path,
@@ -409,9 +411,9 @@ def main() -> None:
 
     city_lookup = _load_city_lookup(len(weather_city_shards))
     for shard_key in selected_shards:
-        tile_cities_df = city_lookup[
-            city_lookup["tile_id"] == shard_key.tile_id
-        ][["location_id", "lat", "lng", "city_shard_index"]].copy()
+        tile_cities_df = city_lookup[city_lookup["tile_id"] == shard_key.tile_id][
+            ["location_id", "lat", "lng", "city_shard_index"]
+        ].copy()
         if tile_cities_df.empty:
             LOGGER.warning("No cities found for tile %s.", shard_key.tile_id)
             continue

@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 from zipfile import is_zipfile
@@ -24,7 +26,7 @@ from pull_cds_shared import (
     retrieve_with_retry,
 )
 from shards import resolve_filesystem
-from shared_config import build_full_date_range
+from shared_config import build_full_date_range, build_year_date_range
 
 B = 17.625
 C = 243.04
@@ -52,28 +54,27 @@ WEATHER_CSV_ENCODINGS = (
     "utf-16",
     "latin-1",
 )
-WEATHER_CDS_REQUEST_CONCURRENCY = 1
+WEATHER_CDS_REQUEST_CONCURRENCY = 2
 
 WEATHER_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(
     WEATHER_CDS_REQUEST_CONCURRENCY,
 )
+WEATHER_THREAD_LOCAL = threading.local()
 
 
 def process_weather(
     client: CDSClient,
     out_dir: str,
     *,
+    year: int | None = None,
+    month: int | None = None,
     city_shard_index: int = 0,
     city_shard_count: int = 1,
     max_workers: int = 4,
 ) -> None:
     """Download and process ERA5 weather data grouped by city shards."""
     weather_root = f"{out_dir}/weather_data_parquet"
-    if max_workers != 1:
-        LOGGER.info(
-            "Weather pulls run one shard per invocation; ignoring --max-workers=%s.",
-            max_workers,
-        )
+    date_range = _build_weather_date_range(year=year, month=month)
 
     shard_city_cells = _load_weather_city_shard(
         city_shard_index=city_shard_index,
@@ -88,13 +89,16 @@ def process_weather(
         weather_root=weather_root,
         city_cells=shard_city_cells,
         city_shard_index=city_shard_index,
+        date_range=date_range,
+        max_workers=max_workers,
     )
 
     LOGGER.info(
-        "Weather processing complete for shard %s/%s with %s cities.",
+        "Weather processing complete for shard %s/%s with %s cities over %s.",
         city_shard_index + 1,
         city_shard_count,
         len(shard_city_cells),
+        date_range,
     )
 
 
@@ -178,6 +182,8 @@ def _process_weather_shard(
     weather_root: str,
     city_cells: DataFrame,
     city_shard_index: int,
+    date_range: str,
+    max_workers: int,
 ) -> None:
     if _weather_shard_exists(weather_root, city_shard_index):
         LOGGER.info("Weather shard %s already exists. Skipping.", city_shard_index)
@@ -187,37 +193,26 @@ def _process_weather_shard(
         "Starting weather shard %s for %s cities over %s.",
         city_shard_index,
         len(city_cells),
-        build_full_date_range(),
+        date_range,
     )
     with tempfile.TemporaryDirectory() as tmpdir_name:
         tmpdir = Path(tmpdir_name)
-        frames: list[DataFrame] = []
-        for cell in city_cells.itertuples(index=False):
-            location_id = int(cell.location_id)
-            lat = float(cell.lat)
-            lng = float(cell.lng)
-            download_path = (
+        city_jobs = [
+            (
+                int(cell.location_id),
+                float(cell.lat),
+                float(cell.lng),
                 tmpdir
-                / f"weather_shard_{city_shard_index}_location_{location_id}.csv"
+                / f"weather_shard_{city_shard_index}_location_{int(cell.location_id)}.csv",
             )
-            with WEATHER_CDS_REQUEST_SEMAPHORE:
-                retrieve_with_retry(
-                    client,
-                    WEATHER_DATASET,
-                    _build_weather_request(lat, lng),
-                ).download(str(download_path))
-
-            weather_df = _load_weather_csv_frame(download_path, lat=lat, lng=lng)
-            if weather_df.empty:
-                LOGGER.warning(
-                    "No weather rows returned for location_id %s at (%s, %s).",
-                    location_id,
-                    lat,
-                    lng,
-                )
-                continue
-            weather_df["location_id"] = location_id
-            frames.append(weather_df)
+            for cell in city_cells.itertuples(index=False)
+        ]
+        frames = _run_weather_city_jobs(
+            client=client,
+            city_jobs=city_jobs,
+            date_range=date_range,
+            max_workers=max_workers,
+        )
 
         if not frames:
             LOGGER.warning(
@@ -238,14 +233,136 @@ def _weather_partition_path(city_shard_index: int) -> str:
     return f"city_shard_index={city_shard_index}"
 
 
+def _build_weather_date_range(*, year: int | None, month: int | None) -> str:
+    if month is not None and year is None:
+        msg = "--month requires --year for weather pulls."
+        raise ValueError(msg)
+    if year is None:
+        return build_full_date_range()
+    return build_year_date_range(year, month=month)
+
+
+def _run_weather_city_jobs(
+    *,
+    client: CDSClient,
+    city_jobs: list[tuple[int, float, float, Path]],
+    date_range: str,
+    max_workers: int,
+) -> list[DataFrame]:
+    worker_count = max(
+        1,
+        min(
+            max_workers,
+            len(city_jobs),
+            WEATHER_CDS_REQUEST_CONCURRENCY,
+            os.cpu_count() or 1,
+        ),
+    )
+    if worker_count == 1:
+        return [
+            weather_df
+            for weather_df in (
+                _process_weather_location(
+                    client=client,
+                    location_id=location_id,
+                    lat=lat,
+                    lng=lng,
+                    date_range=date_range,
+                    download_path=download_path,
+                )
+                for location_id, lat, lng, download_path in city_jobs
+            )
+            if not weather_df.empty
+        ]
+
+    LOGGER.info(
+        "Processing %s weather locations with %s worker threads.",
+        len(city_jobs),
+        worker_count,
+    )
+    frames: list[DataFrame] = []
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(
+                _process_weather_location_with_thread_client,
+                location_id=location_id,
+                lat=lat,
+                lng=lng,
+                date_range=date_range,
+                download_path=download_path,
+            )
+            for location_id, lat, lng, download_path in city_jobs
+        ]
+        for future in as_completed(futures):
+            weather_df = future.result()
+            if not weather_df.empty:
+                frames.append(weather_df)
+    return frames
+
+
+def _process_weather_location_with_thread_client(
+    *,
+    location_id: int,
+    lat: float,
+    lng: float,
+    date_range: str,
+    download_path: Path,
+) -> DataFrame:
+    client = getattr(WEATHER_THREAD_LOCAL, "client", None)
+    if client is None:
+        client = create_cds_client()
+        WEATHER_THREAD_LOCAL.client = client
+    return _process_weather_location(
+        client=client,
+        location_id=location_id,
+        lat=lat,
+        lng=lng,
+        date_range=date_range,
+        download_path=download_path,
+    )
+
+
+def _process_weather_location(
+    *,
+    client: CDSClient,
+    location_id: int,
+    lat: float,
+    lng: float,
+    date_range: str,
+    download_path: Path,
+) -> DataFrame:
+    with WEATHER_CDS_REQUEST_SEMAPHORE:
+        retrieve_with_retry(
+            client,
+            WEATHER_DATASET,
+            _build_weather_request(lat, lng, date_range=date_range),
+            str(download_path),
+        )
+
+    weather_df = _load_weather_csv_frame(download_path, lat=lat, lng=lng)
+    if weather_df.empty:
+        LOGGER.warning(
+            "No weather rows returned for location_id %s at (%s, %s).",
+            location_id,
+            lat,
+            lng,
+        )
+        return pd.DataFrame()
+
+    weather_df["location_id"] = location_id
+    return weather_df
+
+
 def _build_weather_request(
     lat: float,
     lng: float,
+    *,
+    date_range: str,
 ) -> dict[str, object]:
     return {
         "variable": WEATHER_VARIABLES,
         "location": {"longitude": lng, "latitude": lat},
-        "date": [build_full_date_range()],
+        "date": [date_range],
         "data_format": "csv",
     }
 
@@ -415,6 +532,17 @@ def _finalize_weather_frame(df: DataFrame) -> DataFrame:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull weather data from CDS.")
     parser.add_argument(
+        "--year",
+        type=int,
+        help="Optional year to download instead of the full historical window.",
+    )
+    parser.add_argument(
+        "--month",
+        type=int,
+        choices=range(1, 13),
+        help="Optional month to download within the requested weather year (1-12).",
+    )
+    parser.add_argument(
         "--out-dir",
         type=str,
         default=".",
@@ -460,6 +588,8 @@ def main() -> None:
         process_weather(
             client,
             args.out_dir,
+            year=args.year,
+            month=args.month,
             city_shard_index=args.weather_city_shard_index,
             city_shard_count=args.weather_city_shard_count,
             max_workers=args.max_workers,

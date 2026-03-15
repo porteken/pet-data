@@ -22,19 +22,24 @@ ShardMapping: TypeAlias = dict["ShardKey", list[str]]
 
 @dataclass(frozen=True, order=True)
 class ShardKey:
-    """A logical year/tile shard key."""
+    """A logical year/month/tile shard key."""
 
     year: int
     tile_id: int
+    month: int = 0
 
     @property
     def partition_path(self) -> str:
         """Return the canonical partition path for this shard."""
+        if self.month:
+            return f"year={self.year}/month={self.month:02d}/tile_id={self.tile_id}"
         return f"year={self.year}/tile_id={self.tile_id}"
 
     @property
     def label(self) -> str:
         """Return a human-readable shard label."""
+        if self.month:
+            return f"{self.year}-{self.month:02d}-tile-{self.tile_id:03d}"
         return f"{self.year}-tile-{self.tile_id:03d}"
 
 
@@ -152,6 +157,7 @@ def _parse_shard_key(root_path: str, file_path: str) -> ShardKey | None:
     try:
         return ShardKey(
             year=int(partitions["year"]),
+            month=int(partitions.get("month", "0")),
             tile_id=int(partitions["tile_id"]),
         )
     except (KeyError, ValueError):

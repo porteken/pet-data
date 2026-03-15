@@ -7,3 +7,4 @@ cfgrib
 netCDF4
 tqdm
 psycopg2-binary
+requests

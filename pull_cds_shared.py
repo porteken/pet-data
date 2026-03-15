@@ -77,6 +77,10 @@ QUEUE_LIMIT_REJECTION_MARKERS = (
     "too many requests",
     "request limit exceeded",
 )
+EMPTY_REJECTION_MARKERS = (
+    "ended in state rejected: no reason provided",
+    "ended in state failed: no reason provided",
+)
 CDS_RETRY_ATTEMPTS = 6
 CDS_RETRY_BASE_DELAY_SECONDS = 30
 CDS_RETRY_MAX_DELAY_SECONDS = 300
@@ -123,7 +127,7 @@ def _retrieve_with_retry_attempt(
         if target is not None:
             completed_result.download(target)
     except Exception as exc:
-        if not _is_queue_limit_rejection(exc) or attempt == CDS_RETRY_ATTEMPTS:
+        if not _is_retryable_rejection(exc) or attempt == CDS_RETRY_ATTEMPTS:
             raise
 
         delay_seconds = min(
@@ -131,7 +135,7 @@ def _retrieve_with_retry_attempt(
             CDS_RETRY_MAX_DELAY_SECONDS,
         )
         LOGGER.warning(
-            "CDS queue limit hit for %s (attempt %s/%s). Retrying in %s seconds.",
+            "Retryable CDS rejection for %s (attempt %s/%s). Retrying in %s seconds.",
             name,
             attempt,
             CDS_RETRY_ATTEMPTS,
@@ -153,9 +157,19 @@ def _is_queue_limit_rejection(exc: Exception) -> bool:
     return _is_queue_limit_message(str(exc))
 
 
+def _is_retryable_rejection(exc: Exception) -> bool:
+    message = str(exc)
+    return _is_queue_limit_message(message) or _is_empty_rejection_message(message)
+
+
 def _is_queue_limit_message(message: str) -> bool:
     normalized_message = message.lower()
     return any(marker in normalized_message for marker in QUEUE_LIMIT_REJECTION_MARKERS)
+
+
+def _is_empty_rejection_message(message: str) -> bool:
+    normalized_message = message.lower()
+    return any(marker in normalized_message for marker in EMPTY_REJECTION_MARKERS)
 
 
 def _wait_for_completion(result: CDSResult, *, name: str) -> CDSResult:

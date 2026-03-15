@@ -195,15 +195,28 @@ def _process_mrt_tile(
     tile_cells: DataFrame,
 ) -> None:
     tile_id = int(tile_row["tile_id"])
-    partition_path = _mrt_partition_path(year, tile_id)
+    partition_path = _mrt_partition_path(year, tile_id, month=month)
     if partition_exists(mrt_root, partition_path):
-        LOGGER.info("MRT tile %s already exists for %s. Skipping.", tile_id, year)
+        LOGGER.info(
+            "MRT tile %s already exists for %s%s. Skipping.",
+            tile_id,
+            year,
+            "" if month is None else f"-{month:02d}",
+        )
         return
 
     with tempfile.TemporaryDirectory() as tmpdir_name:
         tmpdir = Path(tmpdir_name)
-        zip_path = tmpdir / f"mrt_{year}_tile_{tile_id}.zip"
-        LOGGER.info("Starting MRT tile %s for %s.", tile_id, year)
+        zip_label = f"{year}_tile_{tile_id}"
+        if month is not None:
+            zip_label = f"{year}_{month:02d}_tile_{tile_id}"
+        zip_path = tmpdir / f"mrt_{zip_label}.zip"
+        LOGGER.info(
+            "Starting MRT tile %s for %s%s.",
+            tile_id,
+            year,
+            "" if month is None else f"-{month:02d}",
+        )
         retrieve_with_retry(
             client,
             MRT_DATASET,
@@ -266,7 +279,14 @@ def _process_mrt_tile_with_new_client(
     )
 
 
-def _mrt_partition_path(year: str, tile_id: int) -> str:
+def _mrt_partition_path(
+    year: str,
+    tile_id: int,
+    *,
+    month: int | None = None,
+) -> str:
+    if month is not None:
+        return f"year={year}/month={month:02d}/tile_id={tile_id}"
     return f"year={year}/tile_id={tile_id}"
 
 
