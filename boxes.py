@@ -135,7 +135,7 @@ def build_tile_box(
 
 def _approx_grid_cells_downloaded(tile_deg: float) -> int:
     """Return the approximate number of ERA5 cells requested for a tile size."""
-    cells_per_side = int(round(tile_deg / GRID_DEG))
+    cells_per_side = round(tile_deg / GRID_DEG)
     return cells_per_side**2
 
 
@@ -171,8 +171,12 @@ def _split_city_records(
     half_tile_deg = tile_deg / 2
     child_tiles: dict[tuple[float, float], list[CityRecord]] = defaultdict(list)
     for record in city_records:
-        lat_index = min(max(int((record.grid_lat - tile_lat_min) / half_tile_deg), 0), 1)
-        lon_index = min(max(int((record.grid_lon - tile_lon_min) / half_tile_deg), 0), 1)
+        lat_index = min(
+            max(int((record.grid_lat - tile_lat_min) / half_tile_deg), 0), 1
+        )
+        lon_index = min(
+            max(int((record.grid_lon - tile_lon_min) / half_tile_deg), 0), 1
+        )
         child_tiles[
             (
                 tile_lat_min + lat_index * half_tile_deg,

@@ -1,30 +1,48 @@
-CREATE OR REPLACE VIEW public.pet_year_avg AS
+CREATE MATERIALIZED VIEW public.pet_year_avg AS
 SELECT
-  pet.location_id,
-  round(avg(pet.pet)::numeric, 1) as pet,
-  date_part('year'::text, pet.date) as year
-FROM
-  pet
+  p.location_id,
+  EXTRACT(YEAR FROM p.date)::int AS year,
+  ROUND(AVG(p.pet)::numeric, 1) AS pet
+FROM public.pet AS p
 GROUP BY
-  pet.location_id,
-  (date_part('year'::text, pet.date));
+  p.location_id,
+  EXTRACT(YEAR FROM p.date)::int;
 
-CREATE OR REPLACE VIEW public.pet_year_max AS
+CREATE UNIQUE INDEX pet_year_avg_location_year_uidx
+  ON public.pet_year_avg (location_id, year);
+
+CREATE INDEX pet_year_avg_year_idx
+  ON public.pet_year_avg (year);
+
+CREATE MATERIALIZED VIEW public.pet_year_max AS
 SELECT
-  pet.location_id,
-  round(max(pet.pet)::numeric, 1) as pet,
-  date_part('year'::text, pet.date) as year
-FROM
-  pet
+  p.location_id,
+  EXTRACT(YEAR FROM p.date)::int AS year,
+  ROUND(MAX(p.pet)::numeric, 1) AS pet
+FROM public.pet AS p
 GROUP BY
-  pet.location_id,
-  (date_part('year'::text, pet.date));
+  p.location_id,
+  EXTRACT(YEAR FROM p.date)::int;
 
-CREATE OR REPLACE VIEW public.pet_year AS
+CREATE UNIQUE INDEX pet_year_max_location_year_uidx
+  ON public.pet_year_max (location_id, year);
+
+CREATE INDEX pet_year_max_year_idx
+  ON public.pet_year_max (year);
+
+CREATE MATERIALIZED VIEW public.pet_year AS
 SELECT
-  pet.location_id,
-  pet.pet,
-  pet.date,
-  date_part('year'::text, pet.date) as year
-FROM
-  pet;
+  p.location_id,
+  p.date,
+  EXTRACT(YEAR FROM p.date)::int AS year,
+  p.pet
+FROM public.pet AS p;
+
+CREATE UNIQUE INDEX pet_year_location_date_uidx
+  ON public.pet_year (location_id, date);
+
+CREATE INDEX pet_year_location_year_idx
+  ON public.pet_year (location_id, year);
+
+CREATE INDEX pet_year_year_idx
+  ON public.pet_year (year);

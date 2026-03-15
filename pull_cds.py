@@ -30,8 +30,18 @@ if TYPE_CHECKING:
 class CDSResult(Protocol):
     """Typed subset of CDS result objects used by this module."""
 
+    reply: dict[str, Any]
+
     def download(self, target: str) -> object:
         """Download the result into a target path."""
+        ...
+
+    def update(self, request_id: str | None = None) -> object:
+        """Refresh the current request state."""
+        ...
+
+    def delete(self) -> object:
+        """Delete the remote job when supported by CDS."""
         ...
 
 
@@ -51,8 +61,8 @@ class CDSClient(Protocol):
 def create_cds_client() -> CDSClient:
     """Build a CDS API client with a stable static type."""
     cdsapi_module = cast("Any", importlib.import_module("cdsapi"))
-    client_factory = cast("Callable[[], CDSClient]", cdsapi_module.Client)
-    return client_factory()
+    client_factory = cast("Callable[..., CDSClient]", cdsapi_module.Client)
+    return client_factory(wait_until_complete=False)
 
 
 pa = cast("Any", importlib.import_module("pyarrow"))
@@ -97,9 +107,17 @@ WEATHER_CSV_ENCODINGS = (
 QUEUE_LIMIT_REJECTION_TEXT = (
     "Number queued requests for this dataset is temporarily limited."
 )
+QUEUE_LIMIT_REJECTION_MARKERS = (
+    QUEUE_LIMIT_REJECTION_TEXT.lower(),
+    "rate limit exceeded",
+    "too many requests",
+    "request limit exceeded",
+)
 CDS_RETRY_ATTEMPTS = 6
 CDS_RETRY_BASE_DELAY_SECONDS = 30
 CDS_RETRY_MAX_DELAY_SECONDS = 300
+CDS_POLL_INITIAL_DELAY_SECONDS = 5
+CDS_POLL_MAX_DELAY_SECONDS = 60
 WEATHER_CDS_REQUEST_CONCURRENCY = 1
 MRT_CDS_REQUEST_CONCURRENCY = 2
 
@@ -112,10 +130,9 @@ def _retrieve_once(
     client: CDSClient,
     name: str,
     request: object,
-    target: str | None = None,
 ) -> CDSResult:
     """Submit a single CDS retrieval request."""
-    return client.retrieve(name, request, target)
+    return client.retrieve(name, request)
 
 
 def retrieve_with_retry(
@@ -143,7 +160,10 @@ def _retrieve_with_retry_attempt(
     attempt: int,
 ) -> CDSResult:
     try:
-        return _retrieve_once(client, name, request, target)
+        result = _retrieve_once(client, name, request)
+        completed_result = _wait_for_completion(result, name=name)
+        if target is not None:
+            completed_result.download(target)
     except Exception as exc:
         if not _is_queue_limit_rejection(exc) or attempt == CDS_RETRY_ATTEMPTS:
             raise
@@ -167,10 +187,73 @@ def _retrieve_with_retry_attempt(
             target=target,
             attempt=attempt + 1,
         )
+    else:
+        return completed_result
 
 
 def _is_queue_limit_rejection(exc: Exception) -> bool:
-    return QUEUE_LIMIT_REJECTION_TEXT in str(exc)
+    return _is_queue_limit_message(str(exc))
+
+
+def _is_queue_limit_message(message: str) -> bool:
+    normalized_message = message.lower()
+    return any(marker in normalized_message for marker in QUEUE_LIMIT_REJECTION_MARKERS)
+
+
+def _wait_for_completion(result: CDSResult, *, name: str) -> CDSResult:
+    delay_seconds = CDS_POLL_INITIAL_DELAY_SECONDS
+    last_state: str | None = None
+
+    while True:
+        reply = result.reply
+        state = str(reply.get("state", "")).lower()
+        if state != last_state:
+            LOGGER.info(
+                "CDS request %s for %s is %s.",
+                reply.get("request_id", "<unknown>"),
+                name,
+                state or "<unknown>",
+            )
+            last_state = state
+
+        if state == "completed":
+            return result
+
+        if state in {"accepted", "queued", "running"}:
+            time.sleep(delay_seconds)
+            delay_seconds = min(delay_seconds * 2, CDS_POLL_MAX_DELAY_SECONDS)
+            result.update()
+            continue
+
+        error_message = _result_error_message(reply)
+        if state in {"failed", "rejected"} and _is_queue_limit_message(error_message):
+            raise RuntimeError(error_message)
+
+        if state in {"failed", "rejected"}:
+            msg = (
+                f"CDS request {reply.get('request_id', '<unknown>')} for {name} "
+                f"ended in state {state}: {error_message or 'no reason provided'}"
+            )
+            raise RuntimeError(msg)
+
+        msg = (
+            f"CDS request {reply.get('request_id', '<unknown>')} for {name} "
+            f"returned unknown state {state!r}."
+        )
+        raise RuntimeError(msg)
+
+
+def _result_error_message(reply: dict[str, Any]) -> str:
+    error_payload = reply.get("error")
+    if isinstance(error_payload, dict):
+        error_details = cast("dict[str, object]", error_payload)
+        message_parts = [
+            str(error_details.get("message", "")).strip(),
+            str(error_details.get("reason", "")).strip(),
+        ]
+        return ". ".join(part for part in message_parts if part)
+
+    return str(reply.get("reason", "")).strip()
 
 
 def partition_exists(base_uri: str, partition_path: str) -> bool:
@@ -193,7 +276,9 @@ def partition_file_exists(base_uri: str, partition_path: str, file_name: str) ->
     """Check whether a specific partition file already exists."""
     try:
         filesystem, base_path = resolve_filesystem(base_uri)
-        file_info = filesystem.get_file_info(f"{base_path}/{partition_path}/{file_name}")
+        file_info = filesystem.get_file_info(
+            f"{base_path}/{partition_path}/{file_name}"
+        )
     except (OSError, pa.ArrowException) as exc:
         LOGGER.warning(
             "Could not verify partition file existence for %s/%s: %s",
@@ -211,6 +296,7 @@ def process_weather(
     year: str,
     out_dir: str,
     *,
+    month: int | None = None,
     tile_ids: list[int] | None = None,
     city_shard_index: int = 0,
     city_shard_count: int = 1,
@@ -249,6 +335,7 @@ def process_weather(
         process_tile=lambda tile_row, tile_cells: _process_weather_tile(
             client=client,
             year=year,
+            month=month,
             weather_root=weather_root,
             tile_row=tile_row,
             tile_cells=tile_cells,
@@ -256,6 +343,7 @@ def process_weather(
         ),
         process_tile_with_new_client=lambda tile_row, tile_cells: _process_weather_tile_with_new_client(
             year=year,
+            month=month,
             weather_root=weather_root,
             tile_row=tile_row,
             tile_cells=tile_cells,
@@ -275,6 +363,7 @@ def process_mrt(
     year: str,
     out_dir: str,
     *,
+    month: int | None = None,
     tile_ids: list[int] | None = None,
     tile_shard_index: int = 0,
     tile_shard_count: int = 1,
@@ -305,6 +394,7 @@ def process_mrt(
         max_workers=max_workers,
         mrt_root=mrt_root,
         year=year,
+        month=month,
         client=client,
     )
 
@@ -512,6 +602,7 @@ def _run_mrt_tile_jobs(
     max_workers: int,
     mrt_root: str,
     year: str,
+    month: int | None,
     client: CDSClient,
 ) -> None:
     worker_count = max(
@@ -523,6 +614,7 @@ def _run_mrt_tile_jobs(
             _process_mrt_tile(
                 client=client,
                 year=year,
+                month=month,
                 mrt_root=mrt_root,
                 tile_row=tile_row,
                 tile_cells=tile_cells,
@@ -542,6 +634,7 @@ def _run_mrt_tile_jobs(
             executor.submit(
                 _process_mrt_tile_with_new_client,
                 year=year,
+                month=month,
                 mrt_root=mrt_root,
                 tile_row=tile_row,
                 tile_cells=tile_cells,
@@ -558,6 +651,7 @@ def _process_weather_tile(
     *,
     client: CDSClient,
     year: str,
+    month: int | None,
     weather_root: str,
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
@@ -592,7 +686,7 @@ def _process_weather_tile(
                 retrieve_with_retry(
                     client,
                     WEATHER_DATASET,
-                    _build_weather_request(lat, lng, year),
+                    _build_weather_request(lat, lng, year, month=month),
                 ).download(str(download_path))
 
             weather_df = _load_weather_csv_frame(download_path, lat=lat, lng=lng)
@@ -628,6 +722,7 @@ def _process_weather_tile(
 def _process_weather_tile_with_new_client(
     *,
     year: str,
+    month: int | None,
     weather_root: str,
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
@@ -636,6 +731,7 @@ def _process_weather_tile_with_new_client(
     _process_weather_tile(
         client=create_cds_client(),
         year=year,
+        month=month,
         weather_root=weather_root,
         tile_row=tile_row,
         tile_cells=tile_cells,
@@ -647,6 +743,7 @@ def _process_mrt_tile(
     *,
     client: CDSClient,
     year: str,
+    month: int | None,
     mrt_root: str,
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
@@ -669,7 +766,7 @@ def _process_mrt_tile(
                 "version": "1_1",
                 "product_type": "consolidated_dataset",
                 "year": year,
-                "month": build_year_months(int(year)),
+                "month": build_year_months(int(year), month=month),
                 "day": [f"{day:02d}" for day in range(1, 32)],
                 "area": [
                     float(tile_row["north"]),
@@ -708,6 +805,7 @@ def _process_mrt_tile(
 def _process_mrt_tile_with_new_client(
     *,
     year: str,
+    month: int | None,
     mrt_root: str,
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
@@ -715,6 +813,7 @@ def _process_mrt_tile_with_new_client(
     _process_mrt_tile(
         client=create_cds_client(),
         year=year,
+        month=month,
         mrt_root=mrt_root,
         tile_row=tile_row,
         tile_cells=tile_cells,
@@ -733,11 +832,13 @@ def _build_weather_request(
     lat: float,
     lng: float,
     year: str,
+    *,
+    month: int | None = None,
 ) -> dict[str, object]:
     return {
         "variable": WEATHER_VARIABLES,
         "location": {"longitude": lng, "latitude": lat},
-        "date": [build_year_date_range(int(year))],
+        "date": [build_year_date_range(int(year), month=month)],
         "data_format": "csv",
     }
 
@@ -1011,6 +1112,12 @@ def _parse_args() -> argparse.Namespace:
         help="Year to download (e.g., 2023)",
     )
     parser.add_argument(
+        "--month",
+        type=int,
+        choices=range(1, 13),
+        help="Optional month to download within the requested year (1-12).",
+    )
+    parser.add_argument(
         "--dataset",
         choices=["weather", "mrt", "all"],
         default="all",
@@ -1083,6 +1190,7 @@ def main() -> None:
                 client,
                 args.year,
                 args.out_dir,
+                month=args.month,
                 tile_ids=args.tile_ids,
                 city_shard_index=args.weather_city_shard_index,
                 city_shard_count=args.weather_city_shard_count,
@@ -1094,6 +1202,7 @@ def main() -> None:
                 client,
                 args.year,
                 args.out_dir,
+                month=args.month,
                 tile_ids=args.tile_ids,
                 tile_shard_index=args.tile_shard_index,
                 tile_shard_count=args.tile_shard_count,

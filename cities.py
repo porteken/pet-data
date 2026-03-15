@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import logging
+from importlib import import_module
+from typing import Any, TypeAlias, cast
 
-import numpy as np
-import pandas as pd
+DataFrame: TypeAlias = Any
+np: Any = cast("Any", import_module("numpy"))
+pd: Any = cast("Any", import_module("pandas"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def load_data(url: str) -> pd.DataFrame:
+def load_data(url: str) -> DataFrame:
     """Load and normalize data from Plotly."""
     df = pd.read_csv(url)
     rename_map = {
@@ -27,7 +30,7 @@ def load_data(url: str) -> pd.DataFrame:
     return df
 
 
-def filter_bounding_box(df: pd.DataFrame) -> pd.DataFrame:
+def filter_bounding_box(df: DataFrame) -> DataFrame:
     """Filter cities within continental US."""
     min_lat, max_lat = 24.25, 49.25
     min_lng, max_lng = -124.5, -66.5
@@ -39,7 +42,7 @@ def filter_bounding_box(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
-def process_cities(df: pd.DataFrame) -> pd.DataFrame:
+def process_cities(df: DataFrame) -> DataFrame:
     """Keep highest population city per .25' and return top 500 cities."""
     df = df.copy()
 
