@@ -22,6 +22,30 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+  build-year-range:
+    runs-on: ubuntu-latest
+    outputs:
+      start_year: ${{ steps.compute.outputs.start_year }}
+      end_year: ${{ steps.compute.outputs.end_year }}
+      years: ${{ steps.compute.outputs.years }}
+      end_date: ${{ steps.compute.outputs.end_date }}
+    steps:
+      - id: compute
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from datetime import date, timedelta
+
+          start_year = 2000
+          end_date = date.today().replace(day=1) - timedelta(days=1)
+          years = list(range(start_year, end_date.year + 1))
+
+          print(f"start_year={start_year}")
+          print(f"end_year={end_date.year}")
+          print(f"end_date={end_date.isoformat()}")
+          print(f"years={json.dumps(years)}")
+          PY
+
   setup-locations:
     runs-on: ubuntu-latest
     steps:
@@ -116,7 +140,7 @@ jobs:
         run: aws s3 rm s3://pet-parquet-files/utci_data_parquet/ --recursive
 
   process-weather:
-    needs: [sonarqube, setup-locations, clear-weather-output]
+    needs: [sonarqube, setup-locations, clear-weather-output, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 3
@@ -147,7 +171,7 @@ jobs:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
-          for year in $(seq 2000 2026); do
+          for year in $(seq "${{ needs.build-year-range.outputs.start_year }}" "${{ needs.build-year-range.outputs.end_year }}"); do
             python pull_cds.py \
               --dataset weather \
               --year "$year" \
@@ -164,13 +188,13 @@ jobs:
         run: aws s3 sync ./weather_data_parquet/ s3://pet-parquet-files/weather_data_parquet/
 
   process-mrt:
-    needs: [sonarqube, setup-locations, clear-mrt-output]
+    needs: [sonarqube, setup-locations, clear-mrt-output, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 2
       fail-fast: false
       matrix:
-        year: [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+        year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
     name: MRT ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v6
@@ -200,13 +224,13 @@ jobs:
         run: aws s3 sync ./utci_data_parquet/year=${{ matrix.year }}/ s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/
 
   process-pet:
-    needs: [setup-locations, process-weather, process-mrt]
+    needs: [setup-locations, process-weather, process-mrt, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 8
       fail-fast: false
       matrix:
-        year: [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+        year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
     name: PET ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v6

@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 PULL_START_DATE = date(2000, 1, 1)
-PULL_END_DATE = date(2026, 2, 28)
 SHARED_AREA: tuple[float, float, float, float] = (49.25, -124.5, 24.25, -66.5)
+
+
+def pull_end_date(current_date: date | None = None) -> date:
+    """Return the last day of the month before the current date."""
+    reference_date = date.today() if current_date is None else current_date
+    return reference_date.replace(day=1) - timedelta(days=1)
 
 
 def build_year_date_range(year: int) -> str:
     """Return the supported pull window for a specific year."""
+    end_date = pull_end_date()
     year_start = max(PULL_START_DATE, date(year, 1, 1))
-    year_end = min(PULL_END_DATE, date(year, 12, 31))
+    year_end = min(end_date, date(year, 12, 31))
     if year_start > year_end:
         msg = (
             f"Year {year} falls outside the supported pull window "
-            f"{PULL_START_DATE.isoformat()} to {PULL_END_DATE.isoformat()}."
+            f"{PULL_START_DATE.isoformat()} to {end_date.isoformat()}."
         )
         raise ValueError(msg)
 
@@ -25,12 +31,13 @@ def build_year_date_range(year: int) -> str:
 
 def build_year_months(year: int) -> list[str]:
     """Return the supported month list for a specific year."""
+    end_date = pull_end_date()
     year_start = max(PULL_START_DATE, date(year, 1, 1))
-    year_end = min(PULL_END_DATE, date(year, 12, 31))
+    year_end = min(end_date, date(year, 12, 31))
     if year_start > year_end:
         msg = (
             f"Year {year} falls outside the supported pull window "
-            f"{PULL_START_DATE.isoformat()} to {PULL_END_DATE.isoformat()}."
+            f"{PULL_START_DATE.isoformat()} to {end_date.isoformat()}."
         )
         raise ValueError(msg)
 
