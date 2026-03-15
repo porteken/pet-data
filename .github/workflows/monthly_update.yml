@@ -219,6 +219,52 @@ jobs:
   generate-analytics:
     needs: [process-pet, build-target-window]
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 10
+      fail-fast: false
+      matrix:
+        include:
+          - analytics_shard_index: 0
+            analytics_shard_dir: '00000'
+          - analytics_shard_index: 1
+            analytics_shard_dir: '00001'
+          - analytics_shard_index: 2
+            analytics_shard_dir: '00002'
+          - analytics_shard_index: 3
+            analytics_shard_dir: '00003'
+          - analytics_shard_index: 4
+            analytics_shard_dir: '00004'
+          - analytics_shard_index: 5
+            analytics_shard_dir: '00005'
+          - analytics_shard_index: 6
+            analytics_shard_dir: '00006'
+          - analytics_shard_index: 7
+            analytics_shard_dir: '00007'
+          - analytics_shard_index: 8
+            analytics_shard_dir: '00008'
+          - analytics_shard_index: 9
+            analytics_shard_dir: '00009'
+          - analytics_shard_index: 10
+            analytics_shard_dir: '00010'
+          - analytics_shard_index: 11
+            analytics_shard_dir: '00011'
+          - analytics_shard_index: 12
+            analytics_shard_dir: '00012'
+          - analytics_shard_index: 13
+            analytics_shard_dir: '00013'
+          - analytics_shard_index: 14
+            analytics_shard_dir: '00014'
+          - analytics_shard_index: 15
+            analytics_shard_dir: '00015'
+          - analytics_shard_index: 16
+            analytics_shard_dir: '00016'
+          - analytics_shard_index: 17
+            analytics_shard_dir: '00017'
+          - analytics_shard_index: 18
+            analytics_shard_dir: '00018'
+          - analytics_shard_index: 19
+            analytics_shard_dir: '00019'
+    name: Analytics shard ${{ matrix.analytics_shard_index }}/20
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -303,18 +349,121 @@ jobs:
           PY
       - name: Generate Analytics
         run: |
-          python generate_tables.py \
+          python generate_analytics.py \
             --pet-root ./_unused_pet_shards_for_monthly_analytics \
-            --pet-csv ./pet_full.csv
-      - name: Upload Analytics CSVs
+            --pet-csv ./pet_full.csv \
+            --shard-index ${{ matrix.analytics_shard_index }} \
+            --shard-count 20
+      - name: Upload Analytics Shard
         uses: actions/upload-artifact@v6
         with:
-          name: monthly-analytics
-          path: analytics_data_csv/
+          name: monthly-analytics-shard-${{ matrix.analytics_shard_index }}
+          path: analytics_data_csv/shard_count=00020/shard_index=${{ matrix.analytics_shard_dir }}/
 
-  load-to-db:
+  prepare-db-load:
     needs: [process-pet, generate-analytics, build-target-window]
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+      - name: Remove Existing PET Rows And Reset Analytics Tables
+        env:
+          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
+          WINDOW_START: ${{ needs.build-target-window.outputs.window_start }}
+          WINDOW_END: ${{ needs.build-target-window.outputs.window_end }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          import psycopg2
+
+          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          conn.autocommit = True
+          try:
+              with conn.cursor() as cur:
+                  cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
+                  cur.execute("SELECT to_regclass('public.pet')")
+                  if cur.fetchone()[0] is not None:
+                      cur.execute(
+                          """
+                          DELETE FROM pet
+                          WHERE date >= %(window_start)s AND date <= %(window_end)s
+                          """,
+                          {
+                              "window_start": os.environ["WINDOW_START"],
+                              "window_end": os.environ["WINDOW_END"],
+                          },
+                      )
+                  cur.execute(
+                      """
+                      TRUNCATE TABLE
+                        pet_percentiles,
+                        pet_forecast,
+                        pet_change
+                      CASCADE
+                      """,
+                  )
+          finally:
+              conn.close()
+          PY
+
+  load-to-db:
+    needs: prepare-db-load
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 10
+      fail-fast: false
+      matrix:
+        include:
+          - load_shard_index: 0
+            load_shard_dir: '00000'
+          - load_shard_index: 1
+            load_shard_dir: '00001'
+          - load_shard_index: 2
+            load_shard_dir: '00002'
+          - load_shard_index: 3
+            load_shard_dir: '00003'
+          - load_shard_index: 4
+            load_shard_dir: '00004'
+          - load_shard_index: 5
+            load_shard_dir: '00005'
+          - load_shard_index: 6
+            load_shard_dir: '00006'
+          - load_shard_index: 7
+            load_shard_dir: '00007'
+          - load_shard_index: 8
+            load_shard_dir: '00008'
+          - load_shard_index: 9
+            load_shard_dir: '00009'
+          - load_shard_index: 10
+            load_shard_dir: '00010'
+          - load_shard_index: 11
+            load_shard_dir: '00011'
+          - load_shard_index: 12
+            load_shard_dir: '00012'
+          - load_shard_index: 13
+            load_shard_dir: '00013'
+          - load_shard_index: 14
+            load_shard_dir: '00014'
+          - load_shard_index: 15
+            load_shard_dir: '00015'
+          - load_shard_index: 16
+            load_shard_dir: '00016'
+          - load_shard_index: 17
+            load_shard_dir: '00017'
+          - load_shard_index: 18
+            load_shard_dir: '00018'
+          - load_shard_index: 19
+            load_shard_dir: '00019'
+    name: Load shard ${{ matrix.load_shard_index }}/20
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -331,46 +480,47 @@ jobs:
           pattern: monthly-pet-shard-*
           merge-multiple: true
           path: .
-      - name: Download Analytics CSVs
+      - name: Download Analytics Shards
         uses: actions/download-artifact@v7
         with:
-          name: monthly-analytics
+          pattern: monthly-analytics-shard-*
+          merge-multiple: true
           path: .
-      - name: Remove Existing PET Rows For The Target Month
-        env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
-          WINDOW_START: ${{ needs.build-target-window.outputs.window_start }}
-          WINDOW_END: ${{ needs.build-target-window.outputs.window_end }}
-        run: |
-          python - <<'PY'
-          import os
-
-          import psycopg2
-
-          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
-          try:
-              with conn:
-                  with conn.cursor() as cur:
-                      cur.execute("SELECT to_regclass('public.pet')")
-                      if cur.fetchone()[0] is None:
-                          raise SystemExit(0)
-                      cur.execute(
-                          """
-                          DELETE FROM pet
-                          WHERE date >= %(window_start)s AND date <= %(window_end)s
-                          """,
-                          {"window_start": os.environ["WINDOW_START"], "window_end": os.environ["WINDOW_END"]},
-                      )
-          finally:
-              conn.close()
-          PY
-      - name: Load Monthly Updates To Supabase
+      - name: Load Monthly Update Shard To Supabase
         env:
           SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: |
           python load.py \
-            --analytics-shard-count 1 \
+            --append-only \
+            --skip-drop-views \
+            --skip-create-views \
             --skip-table locations \
-            --truncate-table pet_percentiles \
-            --truncate-table pet_forecast \
-            --truncate-table pet_change
+            --analytics-shard-count 20 \
+            --load-shard-index ${{ matrix.load_shard_index }} \
+            --load-shard-count 20
+
+  finalize-db-load:
+    needs: load-to-db
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+      - name: Recreate Views
+        env:
+          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
+        run: |
+          python load.py \
+            --append-only \
+            --skip-drop-views \
+            --skip-table locations \
+            --skip-table pet \
+            --skip-table pet_percentiles \
+            --skip-table pet_forecast \
+            --skip-table pet_change

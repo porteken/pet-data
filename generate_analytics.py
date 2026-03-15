@@ -40,7 +40,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=str(ANALYTICS_ROOT))
     parser.add_argument("--tile-id", dest="tile_ids", action="append", type=int)
     parser.add_argument("--shard-index", type=int, default=0)
-    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--shard-count", type=int, default=20)
     return parser.parse_args()
 
 

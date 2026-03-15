@@ -9,8 +9,7 @@
         "weather_data_parquet",
         "utci_data_parquet",
         "combined_data_parquet",
-        "pet_data_csv",
-        "analytics_data_csv"
+        "**/node_modules", "**/.*"
     ],
     "reportMissingTypeStubs": false,
     "reportMissingImports": false,

@@ -50,8 +50,25 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--pet-csv", default="pet.csv")
     parser.add_argument("--pet-root", default="pet_data_csv")
     parser.add_argument("--analytics-root", default="analytics_data_csv")
-    parser.add_argument("--analytics-shard-count", type=int)
+    parser.add_argument("--analytics-shard-count", type=int, default=20)
+    parser.add_argument("--load-shard-index", type=int, default=0)
+    parser.add_argument("--load-shard-count", type=int, default=1)
     parser.add_argument("--copy-batch-size", type=int, default=COPY_BATCH_SIZE)
+    parser.add_argument(
+        "--append-only",
+        action="store_true",
+        help="Append rows without truncating destination tables first.",
+    )
+    parser.add_argument(
+        "--skip-drop-views",
+        action="store_true",
+        help="Leave existing views in place before loading data.",
+    )
+    parser.add_argument(
+        "--skip-create-views",
+        action="store_true",
+        help="Do not recreate SQL views after loading data.",
+    )
     parser.add_argument(
         "--truncate-table",
         dest="truncate_tables",
@@ -158,6 +175,81 @@ def _extract_partition_marker(
     return None
 
 
+def _validate_load_shard_args(shard_index: int, shard_count: int) -> None:
+    if shard_count < 1:
+        msg = "load_shard_count must be >= 1"
+        raise ValueError(msg)
+    if shard_index < 0 or shard_index >= shard_count:
+        msg = f"load_shard_index must be between 0 and {shard_count - 1}"
+        raise ValueError(msg)
+
+
+def _partition_sort_key(partition_value: str) -> tuple[int, object]:
+    try:
+        return (0, int(partition_value))
+    except ValueError:
+        return (1, partition_value)
+
+
+def _select_partition_shard_paths(
+    csv_paths: list[Path],
+    *,
+    root_path: Path,
+    partition_key: str,
+    shard_index: int,
+    shard_count: int,
+) -> list[Path]:
+    _validate_load_shard_args(shard_index, shard_count)
+    if shard_count == 1:
+        return csv_paths
+
+    grouped_paths: dict[str, list[Path]] = {}
+    for csv_path in csv_paths:
+        partition_value = _extract_partition_marker(csv_path, root_path, partition_key)
+        if partition_value is None:
+            msg = (
+                f"Cannot shard load for {csv_path}; missing {partition_key}=... "
+                f"partition under {root_path}."
+            )
+            raise RuntimeError(msg)
+        grouped_paths.setdefault(partition_value, []).append(csv_path)
+
+    selected_partition_values = {
+        partition_value
+        for position, partition_value in enumerate(
+            sorted(grouped_paths, key=_partition_sort_key),
+        )
+        if position % shard_count == shard_index
+    }
+    return [
+        csv_path
+        for partition_value in sorted(grouped_paths, key=_partition_sort_key)
+        if partition_value in selected_partition_values
+        for csv_path in grouped_paths[partition_value]
+    ]
+
+
+def _filter_paths_by_partition_value(
+    csv_paths: list[Path],
+    *,
+    root_path: Path,
+    partition_key: str,
+    partition_value: str,
+) -> list[Path]:
+    filtered_paths: list[Path] = []
+    for csv_path in csv_paths:
+        marker = _extract_partition_marker(csv_path, root_path, partition_key)
+        if marker is None:
+            msg = (
+                f"Cannot select {partition_key}={partition_value} for {csv_path}; "
+                f"missing partition under {root_path}."
+            )
+            raise RuntimeError(msg)
+        if marker == partition_value:
+            filtered_paths.append(csv_path)
+    return filtered_paths
+
+
 def _copy_csv_file_in_batches(
     conn: connection,
     table_name: str,
@@ -244,14 +336,103 @@ def bulk_insert_csv_files(
     LOGGER.info("Successfully loaded %s rows into %s.", total_rows, table_name)
 
 
+def _discover_locations_csv_paths(args: argparse.Namespace) -> list[Path]:
+    return [Path(args.cities_csv)]
+
+
+def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
+    pet_csv_paths = _discover_csv_inputs(
+        args.pet_csv,
+        shard_root=args.pet_root,
+        shard_file_name="pet.csv",
+        shard_partition_key=None,
+    )
+    return _select_partition_shard_paths(
+        pet_csv_paths,
+        root_path=Path(args.pet_root),
+        partition_key="tile_id",
+        shard_index=args.load_shard_index,
+        shard_count=args.load_shard_count,
+    )
+
+
+def _discover_analytics_csv_paths(
+    args: argparse.Namespace,
+    shard_file_name: str,
+) -> list[Path]:
+    csv_paths = _discover_csv_inputs(
+        shard_file_name,
+        shard_root=args.analytics_root,
+        shard_file_name=shard_file_name,
+        shard_count=args.analytics_shard_count,
+        shard_partition_key="shard_count",
+    )
+    if args.load_shard_count == 1:
+        return csv_paths
+
+    return _filter_paths_by_partition_value(
+        csv_paths,
+        root_path=Path(args.analytics_root),
+        partition_key="shard_index",
+        partition_value=f"{args.load_shard_index:05d}",
+    )
+
+
+def _discover_percentiles_csv_paths(args: argparse.Namespace) -> list[Path]:
+    return _discover_analytics_csv_paths(args, "percentiles.csv")
+
+
+def _discover_forecast_csv_paths(args: argparse.Namespace) -> list[Path]:
+    return _discover_analytics_csv_paths(args, "forecast.csv")
+
+
+def _discover_pet_change_csv_paths(args: argparse.Namespace) -> list[Path]:
+    return _discover_analytics_csv_paths(args, "change_per_decade.csv")
+
+
+def _load_requested_tables(
+    conn: connection,
+    args: argparse.Namespace,
+    *,
+    truncate_tables: set[str],
+    skip_tables: set[str],
+) -> None:
+    table_csv_resolvers = (
+        ("locations", _discover_locations_csv_paths),
+        ("pet", _discover_pet_csv_paths),
+        ("pet_percentiles", _discover_percentiles_csv_paths),
+        ("pet_forecast", _discover_forecast_csv_paths),
+        ("pet_change", _discover_pet_change_csv_paths),
+    )
+
+    for table_name, csv_resolver in table_csv_resolvers:
+        if table_name in skip_tables:
+            continue
+
+        bulk_insert_csv_files(
+            conn,
+            csv_resolver(args),
+            table_name,
+            batch_size=args.copy_batch_size,
+            truncate=table_name in truncate_tables,
+        )
+
+
 def main() -> None:
     """Load all generated CSV datasets and recreate views."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _parse_args()
-    truncate_tables = set(
-        TABLE_NAMES if args.truncate_tables is None else args.truncate_tables
-    )
-    skip_tables = set(args.skip_tables or [])
+    _validate_load_shard_args(args.load_shard_index, args.load_shard_count)
+
+    if args.append_only:
+        truncate_table_names: list[str] = []
+    elif args.truncate_tables is None:
+        truncate_table_names = TABLE_NAMES
+    else:
+        truncate_table_names = args.truncate_tables
+
+    truncate_tables: set[str] = set(truncate_table_names)
+    skip_tables: set[str] = set(args.skip_tables or [])
 
     if not DB_URI:
         msg = "SUPABASE_DB_URI environment variable is not set"
@@ -262,73 +443,18 @@ def main() -> None:
     conn.autocommit = True
 
     try:
-        execute_sql_file(conn, "drop_views.sql")
+        if not args.skip_drop_views:
+            execute_sql_file(conn, "drop_views.sql")
 
-        if "locations" not in skip_tables:
-            bulk_insert_csv_files(
-                conn,
-                [Path(args.cities_csv)],
-                "locations",
-                batch_size=args.copy_batch_size,
-                truncate="locations" in truncate_tables,
-            )
-        if "pet" not in skip_tables:
-            bulk_insert_csv_files(
-                conn,
-                _discover_csv_inputs(
-                    args.pet_csv,
-                    shard_root=args.pet_root,
-                    shard_file_name="pet.csv",
-                    shard_partition_key=None,
-                ),
-                "pet",
-                batch_size=args.copy_batch_size,
-                truncate="pet" in truncate_tables,
-            )
-        if "pet_percentiles" not in skip_tables:
-            bulk_insert_csv_files(
-                conn,
-                _discover_csv_inputs(
-                    "percentiles.csv",
-                    shard_root=args.analytics_root,
-                    shard_file_name="percentiles.csv",
-                    shard_count=args.analytics_shard_count,
-                    shard_partition_key="shard_count",
-                ),
-                "pet_percentiles",
-                batch_size=args.copy_batch_size,
-                truncate="pet_percentiles" in truncate_tables,
-            )
-        if "pet_forecast" not in skip_tables:
-            bulk_insert_csv_files(
-                conn,
-                _discover_csv_inputs(
-                    "forecast.csv",
-                    shard_root=args.analytics_root,
-                    shard_file_name="forecast.csv",
-                    shard_count=args.analytics_shard_count,
-                    shard_partition_key="shard_count",
-                ),
-                "pet_forecast",
-                batch_size=args.copy_batch_size,
-                truncate="pet_forecast" in truncate_tables,
-            )
-        if "pet_change" not in skip_tables:
-            bulk_insert_csv_files(
-                conn,
-                _discover_csv_inputs(
-                    "change_per_decade.csv",
-                    shard_root=args.analytics_root,
-                    shard_file_name="change_per_decade.csv",
-                    shard_count=args.analytics_shard_count,
-                    shard_partition_key="shard_count",
-                ),
-                "pet_change",
-                batch_size=args.copy_batch_size,
-                truncate="pet_change" in truncate_tables,
-            )
+        _load_requested_tables(
+            conn,
+            args,
+            truncate_tables=truncate_tables,
+            skip_tables=skip_tables,
+        )
 
-        execute_sql_file(conn, "create_views.sql")
+        if not args.skip_create_views:
+            execute_sql_file(conn, "create_views.sql")
 
     finally:
         conn.close()
