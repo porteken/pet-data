@@ -120,10 +120,7 @@ jobs:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
-          python pull_cds.py \
-            --dataset weather \
-            --year "${{ needs.build-target-window.outputs.target_year }}" \
-            --month "${{ needs.build-target-window.outputs.target_month }}" \
+          python pull_weather.py \
             --weather-city-shard-index ${{ matrix.city_shard_index }} \
             --weather-city-shard-count 10 \
             --max-workers 1
@@ -131,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: monthly-weather-shard-${{ matrix.city_shard_index }}
-          path: weather_data_parquet/year=${{ needs.build-target-window.outputs.target_year }}/
+          path: weather_data_parquet/city_shard_index=${{ matrix.city_shard_index }}/
 
   process-mrt:
     needs: [setup-locations, build-target-window]
@@ -162,8 +159,7 @@ jobs:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
-          python pull_cds.py \
-            --dataset mrt \
+          python pull_mrt.py \
             --year "${{ needs.build-target-window.outputs.target_year }}" \
             --month "${{ needs.build-target-window.outputs.target_month }}" \
             --tile-shard-index ${{ matrix.tile_shard_index }} \
@@ -178,7 +174,12 @@ jobs:
   process-pet:
     needs: [setup-locations, process-weather, process-mrt, build-target-window]
     runs-on: ubuntu-latest
-    name: PET ${{ needs.build-target-window.outputs.target_label }}
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        pet_shard_index: [0, 1, 2, 3]
+    name: PET shard ${{ matrix.pet_shard_index }}/4 for ${{ needs.build-target-window.outputs.target_label }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -208,13 +209,20 @@ jobs:
           path: .
       - name: Combine And Compute PET
         run: |
-          python combine.py --year ${{ needs.build-target-window.outputs.target_year }}
-          python calculate_pet.py --year ${{ needs.build-target-window.outputs.target_year }}
+          python combine.py \
+            --year ${{ needs.build-target-window.outputs.target_year }} \
+            --shard-index ${{ matrix.pet_shard_index }} \
+            --shard-count 4
+          python calculate_pet.py \
+            --year ${{ needs.build-target-window.outputs.target_year }} \
+            --shard-index ${{ matrix.pet_shard_index }} \
+            --shard-count 4
       - name: Upload PET Shards
         uses: actions/upload-artifact@v6
         with:
-          name: monthly-pet-shard-${{ needs.build-target-window.outputs.target_year }}
+          name: monthly-pet-shard-${{ matrix.pet_shard_index }}
           path: pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/
+          if-no-files-found: ignore
 
   generate-analytics:
     needs: [process-pet, build-target-window]

@@ -75,6 +75,12 @@ def build_year_months(year: int, *, month: int | None = None) -> list[str]:
     ]
 
 
+def build_full_date_range() -> str:
+    """Return the full supported pull window."""
+    end_date = pull_end_date()
+    return f"{PULL_START_DATE.isoformat()}/{end_date.isoformat()}"
+
+
 def shared_area() -> list[float]:
     """Return a fresh geographic bounding box list for config defaults."""
     return list(SHARED_AREA)

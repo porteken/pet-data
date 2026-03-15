@@ -171,14 +171,10 @@ jobs:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
-          for year in $(seq "${{ needs.build-year-range.outputs.start_year }}" "${{ needs.build-year-range.outputs.end_year }}"); do
-            python pull_cds.py \
-              --dataset weather \
-              --year "$year" \
-              --weather-city-shard-index ${{ matrix.city_shard_index }} \
-              --weather-city-shard-count 10 \
-              --max-workers 1
-          done
+          python pull_weather.py \
+            --weather-city-shard-index ${{ matrix.city_shard_index }} \
+            --weather-city-shard-count 10 \
+            --max-workers 1
 
       - name: Upload Weather Shards to S3
         env:
@@ -215,7 +211,7 @@ jobs:
         env:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: python pull_cds.py --dataset mrt --year ${{ matrix.year }} --max-workers 2
+        run: python pull_mrt.py --year ${{ matrix.year }} --max-workers 2
       - name: Upload MRT Shards to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -231,7 +227,8 @@ jobs:
       fail-fast: false
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
-    name: PET ${{ matrix.year }}
+        pet_shard_index: [0, 1, 2, 3]
+    name: PET ${{ matrix.year }} shard ${{ matrix.pet_shard_index }}/4
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -253,19 +250,25 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          mkdir -p ./weather_data_parquet/year=${{ matrix.year }}
           mkdir -p ./utci_data_parquet/year=${{ matrix.year }}
-          aws s3 sync s3://pet-parquet-files/weather_data_parquet/year=${{ matrix.year }}/ ./weather_data_parquet/year=${{ matrix.year }}/
+          aws s3 sync s3://pet-parquet-files/weather_data_parquet/ ./weather_data_parquet/
           aws s3 sync s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/ ./utci_data_parquet/year=${{ matrix.year }}/
       - name: Combine and Compute PET
         run: |
-          python combine.py --year ${{ matrix.year }}
-          python calculate_pet.py --year ${{ matrix.year }}
+          python combine.py \
+            --year ${{ matrix.year }} \
+            --shard-index ${{ matrix.pet_shard_index }} \
+            --shard-count 4
+          python calculate_pet.py \
+            --year ${{ matrix.year }} \
+            --shard-index ${{ matrix.pet_shard_index }} \
+            --shard-count 4
       - name: Upload Computed PET Shard
         uses: actions/upload-artifact@v6
         with:
-          name: pet-shard-${{ matrix.year }}
+          name: pet-shard-${{ matrix.year }}-${{ matrix.pet_shard_index }}
           path: pet_data_csv/year=${{ matrix.year }}/
+          if-no-files-found: ignore
 
   generate-analytics:
     needs: process-pet

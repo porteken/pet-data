@@ -127,6 +127,7 @@ def read_parquet_files(
     file_paths: list[str],
     *,
     columns: list[str] | None = None,
+    filters: object | None = None,
 ) -> DataFrame:
     """Read a set of parquet files from a shared filesystem into a DataFrame."""
     filesystem, _ = resolve_filesystem(base_uri)
@@ -135,7 +136,7 @@ def read_parquet_files(
         filesystem=filesystem,
         format="parquet",
     )
-    table = dataset.to_table(columns=columns)
+    table = dataset.to_table(columns=columns, filter=filters)
     return table.to_pandas()
 
 
