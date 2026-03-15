@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import csv
 import importlib
 import logging
 import math
@@ -485,6 +486,7 @@ def _build_weather_request(
         "variable": WEATHER_VARIABLES,
         "location": {"longitude": lng, "latitude": lat},
         "date": _build_weather_date_ranges(year),
+        "data_format": "csv",
     }
 
 
@@ -525,13 +527,35 @@ def _load_weather_csv_frame(
     lng: float,
 ) -> DataFrame:
     frame = _read_weather_csv(download_path)
-    frame["lat"] = lat
-    frame["lng"] = lng
-    return _normalize_weather_columns(frame)
+    normalized_frame = _normalize_weather_columns(frame)
+    if "lat" not in normalized_frame.columns:
+        normalized_frame["lat"] = lat
+    if "lng" not in normalized_frame.columns:
+        normalized_frame["lng"] = lng
+    return normalized_frame
 
 
 def _read_weather_csv(download_path: Path) -> DataFrame:
-    return _read_weather_csv_with_encoding(download_path, encoding_index=0)
+    csv_path = _resolve_weather_csv_path(download_path)
+    return _read_weather_csv_with_encoding(csv_path, encoding_index=0)
+
+
+def _resolve_weather_csv_path(download_path: Path) -> Path:
+    csv_files = _extract_files(download_path, suffix=".csv")
+    if not csv_files:
+        if is_zipfile(download_path):
+            msg = f"No CSV files found in weather download: {download_path}"
+            raise FileNotFoundError(msg)
+        return download_path
+
+    if len(csv_files) > 1:
+        LOGGER.warning(
+            "Weather download %s contained %s CSV files; using %s.",
+            download_path,
+            len(csv_files),
+            csv_files[0].name,
+        )
+    return csv_files[0]
 
 
 def _read_weather_csv_with_encoding(
@@ -541,8 +565,13 @@ def _read_weather_csv_with_encoding(
 ) -> DataFrame:
     encoding = WEATHER_CSV_ENCODINGS[encoding_index]
     try:
-        return pd.read_csv(download_path, encoding=encoding)
-    except UnicodeError as exc:
+        header_row = _detect_weather_csv_header_row(download_path, encoding=encoding)
+        return pd.read_csv(
+            download_path,
+            encoding=encoding,
+            skiprows=header_row,
+        )
+    except (UnicodeError, csv.Error, pd.errors.ParserError) as exc:
         if encoding_index + 1 < len(WEATHER_CSV_ENCODINGS):
             return _read_weather_csv_with_encoding(
                 download_path,
@@ -555,6 +584,20 @@ def _read_weather_csv_with_encoding(
         f"{download_path} using encodings: {', '.join(WEATHER_CSV_ENCODINGS)}"
     )
     raise ValueError(msg) from last_error
+
+
+def _detect_weather_csv_header_row(download_path: Path, *, encoding: str) -> int:
+    with download_path.open("r", encoding=encoding, newline="") as weather_file:
+        for line_number, line in enumerate(weather_file):
+            normalized_columns = {
+                column_name.strip().lower()
+                for column_name in next(csv.reader([line]))
+                if column_name.strip()
+            }
+            if "valid_time" in normalized_columns or "time" in normalized_columns:
+                return line_number
+
+    return 0
 
 
 def _write_weather_partition(
