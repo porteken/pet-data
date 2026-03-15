@@ -180,7 +180,7 @@ jobs:
           python pull_weather.py \
             --weather-city-shard-index ${{ matrix.city_shard_index }} \
             --weather-city-shard-count 10 \
-            --max-workers 1
+            --max-workers 2
 
       - name: Upload Weather Shards to S3
         env:
