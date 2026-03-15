@@ -10,6 +10,7 @@ import logging
 import math
 import multiprocessing
 import tempfile
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -98,6 +99,11 @@ QUEUE_LIMIT_REJECTION_TEXT = (
 CDS_RETRY_ATTEMPTS = 6
 CDS_RETRY_BASE_DELAY_SECONDS = 30
 CDS_RETRY_MAX_DELAY_SECONDS = 300
+WEATHER_CDS_REQUEST_CONCURRENCY = 1
+
+WEATHER_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(
+    WEATHER_CDS_REQUEST_CONCURRENCY,
+)
 
 
 def _retrieve_once(
@@ -450,11 +456,12 @@ def _process_weather_tile(
             download_path = (
                 tmpdir / f"weather_{year}_tile_{tile_id}_lat_{lat}_lng_{lng}.csv"
             )
-            retrieve_with_retry(
-                client,
-                WEATHER_DATASET,
-                _build_weather_request(lat, lng, year),
-            ).download(str(download_path))
+            with WEATHER_CDS_REQUEST_SEMAPHORE:
+                retrieve_with_retry(
+                    client,
+                    WEATHER_DATASET,
+                    _build_weather_request(lat, lng, year),
+                ).download(str(download_path))
 
             weather_df = _load_weather_csv_frame(download_path, lat=lat, lng=lng)
             if weather_df.empty:
