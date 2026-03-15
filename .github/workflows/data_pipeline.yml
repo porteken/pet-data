@@ -122,9 +122,8 @@ jobs:
       max-parallel: 3
       fail-fast: false
       matrix:
-        year: [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
         city_shard_index: [0, 1, 2, 3, 4]
-    name: Weather ${{ matrix.year }} shard ${{ matrix.city_shard_index }}/5
+    name: Weather shard ${{ matrix.city_shard_index }}/5
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -148,19 +147,21 @@ jobs:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
-          python pull_cds.py \
-            --dataset weather \
-            --year ${{ matrix.year }} \
-            --weather-city-shard-index ${{ matrix.city_shard_index }} \
-            --weather-city-shard-count 5 \
-            --max-workers 2
+          for year in $(seq 2000 2026); do
+            python pull_cds.py \
+              --dataset weather \
+              --year "$year" \
+              --weather-city-shard-index ${{ matrix.city_shard_index }} \
+              --weather-city-shard-count 5 \
+              --max-workers 2
+          done
 
       - name: Upload Weather Shards to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 sync ./weather_data_parquet/year=${{ matrix.year }}/ s3://pet-parquet-files/weather_data_parquet/year=${{ matrix.year }}/
+        run: aws s3 sync ./weather_data_parquet/ s3://pet-parquet-files/weather_data_parquet/
 
   process-mrt:
     needs: [sonarqube, setup-locations, clear-mrt-output]
