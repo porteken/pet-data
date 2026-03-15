@@ -1,9 +1,8 @@
-"""Download and shard ERA5 weather plus UTCI MRT data by tile."""
+"""Download and shard ERA5 weather plus UTCI MRT data."""
 
 from __future__ import annotations
 
 import argparse
-import calendar
 import csv
 import importlib
 import logging
@@ -19,7 +18,7 @@ from zipfile import ZipFile, is_zipfile
 
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from shards import resolve_filesystem
-from shared_config import SHARED_MONTHS
+from shared_config import build_year_date_range, build_year_months
 
 DataFrame: TypeAlias = Any
 SeriesLike: TypeAlias = Any
@@ -69,8 +68,10 @@ LOGGER = logging.getLogger(__name__)
 
 B = 17.625
 C = 243.04
+EXPECTED_WEATHER_LOCATION_COUNT = 500
 
 WEATHER_DATASET = "reanalysis-era5-single-levels-timeseries"
+MRT_DATASET = "derived-utci-historical"
 WEATHER_VARIABLES = [
     "10m_u_component_of_wind",
     "10m_v_component_of_wind",
@@ -100,6 +101,7 @@ CDS_RETRY_ATTEMPTS = 6
 CDS_RETRY_BASE_DELAY_SECONDS = 30
 CDS_RETRY_MAX_DELAY_SECONDS = 300
 WEATHER_CDS_REQUEST_CONCURRENCY = 1
+MRT_CDS_REQUEST_CONCURRENCY = 2
 
 WEATHER_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(
     WEATHER_CDS_REQUEST_CONCURRENCY,
@@ -187,34 +189,56 @@ def partition_exists(base_uri: str, partition_path: str) -> bool:
     return bool(file_info.type != pa.fs.FileType.NotFound)
 
 
+def partition_file_exists(base_uri: str, partition_path: str, file_name: str) -> bool:
+    """Check whether a specific partition file already exists."""
+    try:
+        filesystem, base_path = resolve_filesystem(base_uri)
+        file_info = filesystem.get_file_info(f"{base_path}/{partition_path}/{file_name}")
+    except (OSError, pa.ArrowException) as exc:
+        LOGGER.warning(
+            "Could not verify partition file existence for %s/%s: %s",
+            partition_path,
+            file_name,
+            exc,
+        )
+        return False
+
+    return bool(file_info.type != pa.fs.FileType.NotFound)
+
+
 def process_weather(
     client: CDSClient,
     year: str,
     out_dir: str,
     *,
     tile_ids: list[int] | None = None,
-    tile_shard_index: int = 0,
-    tile_shard_count: int = 1,
+    city_shard_index: int = 0,
+    city_shard_count: int = 1,
     max_workers: int = 4,
 ) -> None:
-    """Download and process ERA5 weather data grouped by tile."""
+    """Download and process ERA5 weather data grouped by city shards."""
     weather_root = f"{out_dir}/weather_data_parquet"
-    selected_tiles, selected_cells = _load_selected_tiles(
+    selected_city_cells = _load_weather_city_cells(
         tile_ids=tile_ids,
-        tile_shard_index=tile_shard_index,
-        tile_shard_count=tile_shard_count,
+        city_shard_index=city_shard_index,
+        city_shard_count=city_shard_count,
+    )
+    weather_output_file_name = _weather_output_file_name(
+        city_shard_index=city_shard_index,
+        city_shard_count=city_shard_count,
     )
     tile_jobs = [
         (
-            tile._asdict(),
-            selected_cells[selected_cells["tile_id"] == tile.tile_id][
-                ["grid_lat", "grid_lon"]
-            ].reset_index(drop=True),
+            {"tile_id": int(tile_id)},
+            tile_cells[["grid_lat", "grid_lon", "location_id"]]
+            .drop_duplicates()
+            .sort_values(["grid_lat", "grid_lon", "location_id"])
+            .reset_index(drop=True),
         )
-        for tile in selected_tiles.itertuples(index=False)
+        for tile_id, tile_cells in selected_city_cells.groupby("tile_id", sort=True)
     ]
     if not tile_jobs:
-        LOGGER.warning("No weather tiles selected for processing.")
+        LOGGER.warning("No weather cities selected for processing.")
         return
 
     _run_parallel_tile_jobs(
@@ -228,18 +252,21 @@ def process_weather(
             weather_root=weather_root,
             tile_row=tile_row,
             tile_cells=tile_cells,
+            output_file_name=weather_output_file_name,
         ),
         process_tile_with_new_client=lambda tile_row, tile_cells: _process_weather_tile_with_new_client(
             year=year,
             weather_root=weather_root,
             tile_row=tile_row,
             tile_cells=tile_cells,
+            output_file_name=weather_output_file_name,
         ),
     )
 
     LOGGER.info(
-        "Weather processing complete for %s selected tiles.",
-        len(selected_tiles),
+        "Weather processing complete for %s selected cities across %s tiles.",
+        len(selected_city_cells),
+        len(tile_jobs),
     )
 
 
@@ -331,8 +358,100 @@ def _load_selected_tiles(
     )
 
 
-def _weather_tile_exists(base_uri: str, year: str, tile_id: int) -> bool:
-    return _weather_year_exists(base_uri, year, tile_id)
+def _load_weather_city_cells(
+    *,
+    tile_ids: list[int] | None,
+    city_shard_index: int,
+    city_shard_count: int,
+) -> DataFrame:
+    """Return the city rows assigned to the requested weather shard."""
+    if city_shard_count < 1:
+        msg = "city_shard_count must be >= 1"
+        raise ValueError(msg)
+    if city_shard_index < 0 or city_shard_index >= city_shard_count:
+        msg = f"city_shard_index must be between 0 and {city_shard_count - 1}"
+        raise ValueError(msg)
+
+    cities_path = Path("cities.csv")
+    if not cities_path.exists():
+        msg = "cities.csv is required before pulling weather data."
+        raise FileNotFoundError(msg)
+
+    cities_df = pd.read_csv(cities_path)
+    required_columns = {"location_id", "lat", "lng"}
+    missing_columns = required_columns.difference(cities_df.columns)
+    if missing_columns:
+        msg = (
+            "cities.csv is missing required columns: "
+            f"{', '.join(sorted(missing_columns))}"
+        )
+        raise ValueError(msg)
+
+    _, selected_cells = _load_selected_tiles(
+        tile_ids=tile_ids,
+        tile_shard_index=0,
+        tile_shard_count=1,
+    )
+    tile_lookup = selected_cells[["tile_id", "grid_lat", "grid_lon"]].drop_duplicates()
+    city_cells = (
+        cities_df.rename(columns={"lat": "grid_lat", "lng": "grid_lon"})
+        .merge(
+            tile_lookup,
+            how="inner",
+            on=["grid_lat", "grid_lon"],
+            validate="one_to_one",
+        )
+        .sort_values(["location_id", "tile_id", "grid_lat", "grid_lon"])
+        .reset_index(drop=True)
+    )
+    if tile_ids is None and len(city_cells) != EXPECTED_WEATHER_LOCATION_COUNT:
+        msg = (
+            "Expected weather sharding to cover exactly "
+            f"{EXPECTED_WEATHER_LOCATION_COUNT} locations, found {len(city_cells)}."
+        )
+        raise ValueError(msg)
+
+    total_cities = len(city_cells)
+    if total_cities % city_shard_count != 0:
+        msg = (
+            f"Cannot evenly split {total_cities} cities across "
+            f"{city_shard_count} weather shards."
+        )
+        raise ValueError(msg)
+
+    shard_size = total_cities // city_shard_count
+    start_index = city_shard_index * shard_size
+    end_index = start_index + shard_size
+    shard_city_cells = city_cells.iloc[start_index:end_index].copy()
+    LOGGER.info(
+        "Weather shard %s/%s selected %s cities.",
+        city_shard_index + 1,
+        city_shard_count,
+        len(shard_city_cells),
+    )
+    return shard_city_cells
+
+
+def _weather_tile_exists(
+    base_uri: str,
+    year: str,
+    tile_id: int,
+    output_file_name: str,
+) -> bool:
+    return partition_file_exists(
+        base_uri,
+        _weather_partition_path(year, tile_id),
+        output_file_name,
+    )
+
+
+def _weather_output_file_name(*, city_shard_index: int, city_shard_count: int) -> str:
+    if city_shard_count == 1:
+        return "weather.parquet"
+    return (
+        f"weather-city-shard-{city_shard_index:03d}"
+        f"-of-{city_shard_count:03d}.parquet"
+    )
 
 
 def _ensure_tile_outputs() -> None:
@@ -395,7 +514,10 @@ def _run_mrt_tile_jobs(
     year: str,
     client: CDSClient,
 ) -> None:
-    worker_count = max(1, min(max_workers, len(tile_jobs)))
+    worker_count = max(
+        1,
+        min(max_workers, len(tile_jobs), MRT_CDS_REQUEST_CONCURRENCY),
+    )
     if worker_count == 1:
         for tile_row, tile_cells in tile_jobs:
             _process_mrt_tile(
@@ -439,14 +561,20 @@ def _process_weather_tile(
     weather_root: str,
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
+    output_file_name: str,
 ) -> None:
     tile_id = int(tile_row["tile_id"])
-    if _weather_tile_exists(weather_root, year, tile_id):
-        LOGGER.info("Weather tile %s already exists for %s. Skipping.", tile_id, year)
+    if _weather_tile_exists(weather_root, year, tile_id, output_file_name):
+        LOGGER.info(
+            "Weather tile %s already contains %s for %s. Skipping.",
+            tile_id,
+            output_file_name,
+            year,
+        )
         return
 
     LOGGER.info(
-        "Starting weather tile %s for %s with %s snapped cells.",
+        "Starting weather tile %s for %s with %s snapped cities.",
         tile_id,
         year,
         len(tile_cells),
@@ -493,6 +621,7 @@ def _process_weather_tile(
             year=year,
             tile_id=tile_id,
             weather_df=finalized_df,
+            output_file_name=output_file_name,
         )
 
 
@@ -502,6 +631,7 @@ def _process_weather_tile_with_new_client(
     weather_root: str,
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
+    output_file_name: str,
 ) -> None:
     _process_weather_tile(
         client=create_cds_client(),
@@ -509,6 +639,7 @@ def _process_weather_tile_with_new_client(
         weather_root=weather_root,
         tile_row=tile_row,
         tile_cells=tile_cells,
+        output_file_name=output_file_name,
     )
 
 
@@ -532,13 +663,13 @@ def _process_mrt_tile(
         LOGGER.info("Starting MRT tile %s for %s.", tile_id, year)
         retrieve_with_retry(
             client,
-            "derived-utci-historical",
+            MRT_DATASET,
             {
                 "variable": ["mean_radiant_temperature"],
                 "version": "1_1",
                 "product_type": "consolidated_dataset",
                 "year": year,
-                "month": [f"{month_value:02d}" for month_value in SHARED_MONTHS],
+                "month": build_year_months(int(year)),
                 "day": [f"{day:02d}" for day in range(1, 32)],
                 "area": [
                     float(tile_row["north"]),
@@ -590,10 +721,6 @@ def _process_mrt_tile_with_new_client(
     )
 
 
-def _weather_year_exists(base_uri: str, year: str, tile_id: int) -> bool:
-    return partition_exists(base_uri, _weather_partition_path(year, tile_id))
-
-
 def _weather_partition_path(year: str, tile_id: int) -> str:
     return f"year={year}/tile_id={tile_id}"
 
@@ -610,23 +737,9 @@ def _build_weather_request(
     return {
         "variable": WEATHER_VARIABLES,
         "location": {"longitude": lng, "latitude": lat},
-        "date": _build_weather_date_ranges(year),
+        "date": [build_year_date_range(int(year))],
         "data_format": "csv",
     }
-
-
-def _build_weather_date_ranges(year: str) -> list[str]:
-    if not SHARED_MONTHS:
-        return []
-
-    start_month = min(SHARED_MONTHS)
-    end_month = max(SHARED_MONTHS)
-    return [
-        (
-            f"{year}-{start_month:02d}-01/"
-            f"{year}-{end_month:02d}-{calendar.monthrange(int(year), end_month)[1]:02d}"
-        )
-    ]
 
 
 def _load_weather_csv_frame(
@@ -715,12 +828,13 @@ def _write_weather_partition(
     year: str,
     tile_id: int,
     weather_df: DataFrame,
+    output_file_name: str,
 ) -> None:
     filesystem, base_path = resolve_filesystem(weather_root)
     partition_path = _weather_partition_path(year, tile_id)
     partition_dir = f"{base_path}/{partition_path}"
     filesystem.create_dir(partition_dir, recursive=True)
-    output_path = f"{partition_dir}/weather.parquet"
+    output_path = f"{partition_dir}/{output_file_name}"
     table: Any = pa.Table.from_pandas(
         weather_df.sort_values(["timestamp", "lat", "lng"]).reset_index(drop=True),
         preserve_index=False,
@@ -919,19 +1033,34 @@ def _parse_args() -> argparse.Namespace:
         "--tile-shard-index",
         type=int,
         default=0,
-        help="Zero-based shard index for splitting tile work across CI jobs.",
+        help="Zero-based shard index for optional MRT/manual tile splitting.",
     )
     parser.add_argument(
         "--tile-shard-count",
         type=int,
         default=1,
-        help="Total number of tile shards across CI jobs.",
+        help="Total shard count for optional MRT/manual tile splitting.",
+    )
+    parser.add_argument(
+        "--weather-city-shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard index for splitting weather work across cities.",
+    )
+    parser.add_argument(
+        "--weather-city-shard-count",
+        type=int,
+        default=1,
+        help=(
+            "Total weather city shards. The selected city set must divide evenly "
+            "across this shard count."
+        ),
     )
     parser.add_argument(
         "--max-workers",
         type=int,
         default=4,
-        help="Maximum number of concurrent tile workers for weather and MRT pulls.",
+        help="Maximum number of concurrent workers for weather and MRT pulls.",
     )
     return parser.parse_args()
 
@@ -955,8 +1084,8 @@ def main() -> None:
                 args.year,
                 args.out_dir,
                 tile_ids=args.tile_ids,
-                tile_shard_index=args.tile_shard_index,
-                tile_shard_count=args.tile_shard_count,
+                city_shard_index=args.weather_city_shard_index,
+                city_shard_count=args.weather_city_shard_count,
                 max_workers=args.max_workers,
             )
 
