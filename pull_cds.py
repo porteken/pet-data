@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import importlib
 import logging
 import math
@@ -66,7 +67,7 @@ LOGGER = logging.getLogger(__name__)
 B = 17.625
 C = 243.04
 
-WEATHER_DATASET = "reanalysis-era5-land-timeseries"
+WEATHER_DATASET = "reanalysis-era5-single-levels-timeseries"
 WEATHER_VARIABLES = [
     "10m_u_component_of_wind",
     "10m_v_component_of_wind",
@@ -83,6 +84,12 @@ WEATHER_VARIABLE_ALIASES = {
     "d2m": "d2m",
     "t2m": "t2m",
 }
+WEATHER_CSV_ENCODINGS = (
+    "utf-8",
+    "utf-8-sig",
+    "utf-16",
+    "latin-1",
+)
 QUEUE_LIMIT_REJECTION_TEXT = (
     "Number queued requests for this dataset is temporarily limited."
 )
@@ -477,9 +484,38 @@ def _build_weather_request(
     return {
         "variable": WEATHER_VARIABLES,
         "location": {"longitude": lng, "latitude": lat},
-        "date": [f"{year}-01-01/{year}-12-31"],
-        "data_format": "csv",
+        "date": _build_weather_date_ranges(year),
     }
+
+
+def _build_weather_date_ranges(year: str) -> list[str]:
+    return [
+        (
+            f"{year}-{start_month:02d}-01/"
+            f"{year}-{end_month:02d}-{calendar.monthrange(int(year), end_month)[1]:02d}"
+        )
+        for start_month, end_month in _group_contiguous_months(SHARED_MONTHS)
+    ]
+
+
+def _group_contiguous_months(months: tuple[int, ...]) -> list[tuple[int, int]]:
+    if not months:
+        return []
+
+    grouped_months: list[tuple[int, int]] = []
+    range_start = months[0]
+    range_end = months[0]
+    for month_value in months[1:]:
+        if month_value == range_end + 1:
+            range_end = month_value
+            continue
+
+        grouped_months.append((range_start, range_end))
+        range_start = month_value
+        range_end = month_value
+
+    grouped_months.append((range_start, range_end))
+    return grouped_months
 
 
 def _load_weather_csv_frame(
@@ -488,10 +524,37 @@ def _load_weather_csv_frame(
     lat: float,
     lng: float,
 ) -> DataFrame:
-    frame = pd.read_csv(download_path)
+    frame = _read_weather_csv(download_path)
     frame["lat"] = lat
     frame["lng"] = lng
     return _normalize_weather_columns(frame)
+
+
+def _read_weather_csv(download_path: Path) -> DataFrame:
+    return _read_weather_csv_with_encoding(download_path, encoding_index=0)
+
+
+def _read_weather_csv_with_encoding(
+    download_path: Path,
+    *,
+    encoding_index: int,
+) -> DataFrame:
+    encoding = WEATHER_CSV_ENCODINGS[encoding_index]
+    try:
+        return pd.read_csv(download_path, encoding=encoding)
+    except UnicodeError as exc:
+        if encoding_index + 1 < len(WEATHER_CSV_ENCODINGS):
+            return _read_weather_csv_with_encoding(
+                download_path,
+                encoding_index=encoding_index + 1,
+            )
+
+        last_error = exc
+    msg = (
+        "Unable to decode weather CSV "
+        f"{download_path} using encodings: {', '.join(WEATHER_CSV_ENCODINGS)}"
+    )
+    raise ValueError(msg) from last_error
 
 
 def _write_weather_partition(
