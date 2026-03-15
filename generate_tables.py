@@ -135,7 +135,8 @@ def _materialize_pet_csv_if_needed() -> None:
     logger.info("Building pet.csv from %s PET shard CSV files...", len(shard_paths))
     shard_frames = [cast("Any", pd).read_csv(shard_path) for shard_path in shard_paths]
     cast("Any", pd).concat(shard_frames, ignore_index=True).to_csv(
-        pet_csv_path, index=False,
+        pet_csv_path,
+        index=False,
     )
 
 

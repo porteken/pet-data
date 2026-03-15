@@ -3,6 +3,7 @@ exclude = ["typings"]
 
 [lint]
 select = ["ALL"]
+disable = ["E501"]
 
 [lint.mccabe]
 max-complexity = 40

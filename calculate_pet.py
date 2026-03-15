@@ -93,7 +93,8 @@ def calculate_pet_frame(df: DataFrame) -> DataFrame:
         df_pet_unique["pet"] = pd.Series(dtype=float)
 
     LOGGER.info(
-        "PET core computation finished in %.2f seconds.", time.time() - start_time,
+        "PET core computation finished in %.2f seconds.",
+        time.time() - start_time,
     )
 
     df_joined: DataFrame = df.merge(

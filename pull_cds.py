@@ -210,41 +210,25 @@ def process_weather(
         LOGGER.warning("No weather tiles selected for processing.")
         return
 
-    worker_count = max(1, min(max_workers, len(tile_jobs)))
-    if worker_count == 1:
-        for tile_row, tile_cells in tile_jobs:
-            _process_weather_tile(
-                client=client,
-                year=year,
-                weather_root=weather_root,
-                tile_row=tile_row,
-                tile_cells=tile_cells,
-            )
-    else:
-        LOGGER.info(
-            "Processing %s weather tiles with %s worker threads.",
-            len(tile_jobs),
-            worker_count,
-        )
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            future_to_tile_id = {
-                executor.submit(
-                    _process_weather_tile_with_new_client,
-                    year=year,
-                    weather_root=weather_root,
-                    tile_row=tile_row,
-                    tile_cells=tile_cells,
-                ): int(tile_row["tile_id"])
-                for tile_row, tile_cells in tile_jobs
-            }
-            for future in as_completed(future_to_tile_id):
-                tile_id = future_to_tile_id[future]
-                future.result()
-                LOGGER.info(
-                    "Weather tile %s completed for %s.",
-                    tile_id,
-                    year,
-                )
+    _run_parallel_tile_jobs(
+        tile_jobs=tile_jobs,
+        max_workers=max_workers,
+        dataset_label="weather",
+        year=year,
+        process_tile=lambda tile_row, tile_cells: _process_weather_tile(
+            client=client,
+            year=year,
+            weather_root=weather_root,
+            tile_row=tile_row,
+            tile_cells=tile_cells,
+        ),
+        process_tile_with_new_client=lambda tile_row, tile_cells: _process_weather_tile_with_new_client(
+            year=year,
+            weather_root=weather_root,
+            tile_row=tile_row,
+            tile_cells=tile_cells,
+        ),
+    )
 
     LOGGER.info(
         "Weather processing complete for %s selected tiles.",
@@ -260,6 +244,7 @@ def process_mrt(
     tile_ids: list[int] | None = None,
     tile_shard_index: int = 0,
     tile_shard_count: int = 1,
+    max_workers: int = 4,
 ) -> None:
     """Download and process UTCI mean radiant temperature data grouped by tile."""
     mrt_root = f"{out_dir}/utci_data_parquet"
@@ -268,66 +253,38 @@ def process_mrt(
         tile_shard_index=tile_shard_index,
         tile_shard_count=tile_shard_count,
     )
-    filesystem, base_path = resolve_filesystem(mrt_root)
-
-    with tempfile.TemporaryDirectory() as tmpdir_name:
-        tmpdir = Path(tmpdir_name)
-        for tile in selected_tiles.itertuples(index=False):
-            partition_path = f"year={year}/tile_id={int(tile.tile_id)}"
-            if partition_exists(mrt_root, partition_path):
-                LOGGER.info(
-                    "MRT tile %s already exists for %s. Skipping.",
-                    tile.tile_id,
-                    year,
-                )
-                continue
-
-            tile_cells = selected_cells[selected_cells["tile_id"] == tile.tile_id][
+    tile_jobs = [
+        (
+            tile._asdict(),
+            selected_cells[selected_cells["tile_id"] == tile.tile_id][
                 ["grid_lat", "grid_lon"]
-            ].rename(columns={"grid_lat": "lat", "grid_lon": "lng"})
+            ].reset_index(drop=True),
+        )
+        for tile in selected_tiles.itertuples(index=False)
+    ]
+    if not tile_jobs:
+        LOGGER.warning("No MRT tiles selected for processing.")
+        return
 
-            zip_path = tmpdir / f"mrt_{year}_tile_{tile.tile_id}.zip"
-            LOGGER.info("Starting MRT tile %s for %s.", tile.tile_id, year)
-            retrieve_with_retry(
-                client,
-                "derived-utci-historical",
-                {
-                    "variable": ["mean_radiant_temperature"],
-                    "version": "1_1",
-                    "product_type": "consolidated_dataset",
-                    "year": year,
-                    "month": [f"{month_value:02d}" for month_value in SHARED_MONTHS],
-                    "day": [f"{day:02d}" for day in range(1, 32)],
-                    "area": [
-                        float(tile.north),
-                        float(tile.west),
-                        float(tile.south),
-                        float(tile.east),
-                    ],
-                },
-                str(zip_path),
-            )
-
-            mrt_df = _load_mrt_frame(zip_path)
-            mrt_df = mrt_df.merge(
-                tile_cells,
-                how="inner",
-                on=["lat", "lng"],
-                validate="many_to_one",
-            )
-            if mrt_df.empty:
-                LOGGER.warning(
-                    "No MRT rows remained after grid-cell filtering for tile %s.",
-                    tile.tile_id,
-                )
-                continue
-
-            partition_dir = f"{base_path}/{partition_path}"
-            filesystem.create_dir(partition_dir, recursive=True)
-            output_path = f"{partition_dir}/mrt.parquet"
-            table: Any = pa.Table.from_pandas(mrt_df, preserve_index=False)
-            with filesystem.open_output_stream(output_path) as output_stream:
-                pq.write_table(table, output_stream)
+    _run_parallel_tile_jobs(
+        tile_jobs=tile_jobs,
+        max_workers=max_workers,
+        dataset_label="MRT",
+        year=year,
+        process_tile=lambda tile_row, tile_cells: _process_mrt_tile(
+            client=client,
+            year=year,
+            mrt_root=mrt_root,
+            tile_row=tile_row,
+            tile_cells=tile_cells,
+        ),
+        process_tile_with_new_client=lambda tile_row, tile_cells: _process_mrt_tile_with_new_client(
+            year=year,
+            mrt_root=mrt_root,
+            tile_row=tile_row,
+            tile_cells=tile_cells,
+        ),
+    )
 
     LOGGER.info("MRT processing complete for %s selected tiles.", len(selected_tiles))
 
@@ -389,6 +346,45 @@ def _ensure_tile_outputs() -> None:
     generate_tile_outputs()
 
 
+def _run_parallel_tile_jobs(
+    *,
+    tile_jobs: list[tuple[dict[str, Any], DataFrame]],
+    max_workers: int,
+    dataset_label: str,
+    year: str,
+    process_tile: Callable[[dict[str, Any], DataFrame], None],
+    process_tile_with_new_client: Callable[[dict[str, Any], DataFrame], None],
+) -> None:
+    worker_count = max(1, min(max_workers, len(tile_jobs)))
+    if worker_count == 1:
+        for tile_row, tile_cells in tile_jobs:
+            process_tile(tile_row, tile_cells)
+        return
+
+    LOGGER.info(
+        "Processing %s %s tiles with %s worker threads.",
+        len(tile_jobs),
+        dataset_label,
+        worker_count,
+    )
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_tile_id = {
+            executor.submit(process_tile_with_new_client, tile_row, tile_cells): int(
+                tile_row["tile_id"],
+            )
+            for tile_row, tile_cells in tile_jobs
+        }
+        for future in as_completed(future_to_tile_id):
+            tile_id = future_to_tile_id[future]
+            future.result()
+            LOGGER.info(
+                "%s tile %s completed for %s.",
+                dataset_label,
+                tile_id,
+                year,
+            )
+
+
 def _process_weather_tile(
     *,
     client: CDSClient,
@@ -415,8 +411,7 @@ def _process_weather_tile(
             lat = float(cell.grid_lat)
             lng = float(cell.grid_lon)
             download_path = (
-                tmpdir
-                / f"weather_{year}_tile_{tile_id}_lat_{lat}_lng_{lng}.csv"
+                tmpdir / f"weather_{year}_tile_{tile_id}_lat_{lat}_lng_{lng}.csv"
             )
             retrieve_with_retry(
                 client,
@@ -469,11 +464,93 @@ def _process_weather_tile_with_new_client(
     )
 
 
+def _process_mrt_tile(
+    *,
+    client: CDSClient,
+    year: str,
+    mrt_root: str,
+    tile_row: dict[str, Any],
+    tile_cells: DataFrame,
+) -> None:
+    tile_id = int(tile_row["tile_id"])
+    partition_path = _mrt_partition_path(year, tile_id)
+    if partition_exists(mrt_root, partition_path):
+        LOGGER.info("MRT tile %s already exists for %s. Skipping.", tile_id, year)
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir_name:
+        tmpdir = Path(tmpdir_name)
+        zip_path = tmpdir / f"mrt_{year}_tile_{tile_id}.zip"
+        LOGGER.info("Starting MRT tile %s for %s.", tile_id, year)
+        retrieve_with_retry(
+            client,
+            "derived-utci-historical",
+            {
+                "variable": ["mean_radiant_temperature"],
+                "version": "1_1",
+                "product_type": "consolidated_dataset",
+                "year": year,
+                "month": [f"{month_value:02d}" for month_value in SHARED_MONTHS],
+                "day": [f"{day:02d}" for day in range(1, 32)],
+                "area": [
+                    float(tile_row["north"]),
+                    float(tile_row["west"]),
+                    float(tile_row["south"]),
+                    float(tile_row["east"]),
+                ],
+            },
+            str(zip_path),
+        )
+
+        normalized_tile_cells = tile_cells.rename(
+            columns={"grid_lat": "lat", "grid_lon": "lng"},
+        )
+        mrt_df = _load_mrt_frame(zip_path)
+        mrt_df = mrt_df.merge(
+            normalized_tile_cells,
+            how="inner",
+            on=["lat", "lng"],
+            validate="many_to_one",
+        )
+        if mrt_df.empty:
+            LOGGER.warning(
+                "No MRT rows remained after grid-cell filtering for tile %s.",
+                tile_id,
+            )
+            return
+
+        _write_mrt_partition(
+            mrt_root=mrt_root,
+            partition_path=partition_path,
+            mrt_df=mrt_df,
+        )
+
+
+def _process_mrt_tile_with_new_client(
+    *,
+    year: str,
+    mrt_root: str,
+    tile_row: dict[str, Any],
+    tile_cells: DataFrame,
+) -> None:
+    _process_mrt_tile(
+        client=create_cds_client(),
+        year=year,
+        mrt_root=mrt_root,
+        tile_row=tile_row,
+        tile_cells=tile_cells,
+    )
+
+
 def _weather_year_exists(base_uri: str, year: str, tile_id: int) -> bool:
     return partition_exists(base_uri, _weather_partition_path(year, tile_id))
 
 
 def _weather_partition_path(year: str, tile_id: int) -> str:
+    return f"year={year}/tile_id={tile_id}"
+
+
+def _mrt_partition_path(year: str, tile_id: int) -> str:
     return f"year={year}/tile_id={tile_id}"
 
 
@@ -616,6 +693,21 @@ def _write_weather_partition(
         weather_df.sort_values(["timestamp", "lat", "lng"]).reset_index(drop=True),
         preserve_index=False,
     )
+    with filesystem.open_output_stream(output_path) as output_stream:
+        pq.write_table(table, output_stream)
+
+
+def _write_mrt_partition(
+    *,
+    mrt_root: str,
+    partition_path: str,
+    mrt_df: DataFrame,
+) -> None:
+    filesystem, base_path = resolve_filesystem(mrt_root)
+    partition_dir = f"{base_path}/{partition_path}"
+    filesystem.create_dir(partition_dir, recursive=True)
+    output_path = f"{partition_dir}/mrt.parquet"
+    table: Any = pa.Table.from_pandas(mrt_df, preserve_index=False)
     with filesystem.open_output_stream(output_path) as output_stream:
         pq.write_table(table, output_stream)
 
@@ -807,7 +899,7 @@ def _parse_args() -> argparse.Namespace:
         "--max-workers",
         type=int,
         default=4,
-        help="Maximum number of concurrent weather tile workers.",
+        help="Maximum number of concurrent tile workers for weather and MRT pulls.",
     )
     return parser.parse_args()
 
@@ -844,6 +936,7 @@ def main() -> None:
                 tile_ids=args.tile_ids,
                 tile_shard_index=args.tile_shard_index,
                 tile_shard_count=args.tile_shard_count,
+                max_workers=args.max_workers,
             )
     except Exception as exc:
         LOGGER.exception("Pipeline failed for year=%s", args.year)
