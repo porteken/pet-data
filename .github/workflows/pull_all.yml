@@ -168,12 +168,11 @@ jobs:
     needs: [setup-locations, clear-era5-output, build-year-range]
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 10
+      max-parallel: 24
       fail-fast: false
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.era5_years) }}
-        city_shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    name: ERA5 ${{ matrix.year }} shard ${{ matrix.city_shard_index }}/10
+    name: ERA5 ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -193,9 +192,9 @@ jobs:
         run: |
           python google_era5.py \
             --year ${{ matrix.year }} \
-            --city-shard-index ${{ matrix.city_shard_index }} \
-            --city-shard-count 10 \
-            --max-workers 4
+            --city-shard-count 1 \
+            --max-workers 4 \
+            --batch-hours 72
       - name: Upload ERA5 Shards to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

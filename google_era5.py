@@ -75,7 +75,7 @@ _C = 243.04
 EXPECTED_LOCATION_COUNT = 500
 THREE_DIMENSIONAL_ARRAY_NDIMS = 3
 ERA5_TIME_ORIGIN = "1959-01-01"
-DEFAULT_BATCH_HOURS = 24 * 7
+DEFAULT_BATCH_HOURS = 24 * 3
 
 
 def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
