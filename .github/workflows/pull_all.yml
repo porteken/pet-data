@@ -194,7 +194,7 @@ jobs:
           python google_era5.py \
             --year ${{ matrix.year }} \
             --city-shard-index ${{ matrix.city_shard_index }} \
-            --city-shard-count 10 \
+            --city-shard-count 20 \
             --max-workers 4
       - name: Upload ERA5 Shards to S3
         env:
