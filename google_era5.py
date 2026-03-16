@@ -47,6 +47,14 @@ ERA5_VARIABLE_CANDIDATES: dict[str, list[str]] = {
         "strd",
         "surface_thermal_radiation_downwards",
     ],
+    "ssr": [
+        "ssr",
+        "surface_net_solar_radiation",
+    ],
+    "str": [
+        "str",
+        "surface_net_thermal_radiation",
+    ],
     "fdir": [
         "fdir",
         "total_sky_direct_solar_radiation_at_surface",
@@ -55,8 +63,8 @@ ERA5_VARIABLE_CANDIDATES: dict[str, list[str]] = {
 }
 
 ERA5_WEATHER_VARIABLES = ["10u", "10v", "2t", "2d"]
-ERA5_MRT_ARCO_VARIABLES = ["ssrd", "strd", "fdir"]
-ERA5_ALL_ARCO_VARIABLES = [*ERA5_WEATHER_VARIABLES, *ERA5_MRT_ARCO_VARIABLES]
+ERA5_RADIATION_VARIABLES = ["ssrd", "strd", "ssr", "str", "fdir"]
+ERA5_ALL_ARCO_VARIABLES = [*ERA5_WEATHER_VARIABLES, *ERA5_RADIATION_VARIABLES]
 
 
 RADIATION_SCALE = 1.0 / 3600.0
@@ -66,6 +74,8 @@ _C = 243.04
 
 EXPECTED_LOCATION_COUNT = 500
 THREE_DIMENSIONAL_ARRAY_NDIMS = 3
+ERA5_TIME_ORIGIN = "1959-01-01"
+DEFAULT_BATCH_HOURS = 24 * 7
 
 
 def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
@@ -130,10 +140,10 @@ def _warn_if_full_globe_chunks() -> None:
     )
     LOGGER.warning(
         "Google ARCO ERA5 variables are chunked as one full global "
-        "latitude/longitude field per hour (%s). This script now reads each "
-        "requested shard/year once and splits the in-memory result by tile to "
-        "avoid repeated full-globe fetches, but the initial shard read can "
-        "still be slow.",
+        "latitude/longitude field per hour (%s). This script now reads "
+        "resumable time batches for each requested shard and splits each "
+        "in-memory result by tile to avoid repeated full-globe fetches, but "
+        "each batch read can still be slow.",
         formatted_chunks,
     )
 
@@ -193,7 +203,7 @@ def _open_zarr_store(max_workers: int) -> Dataset:
 def _year_time_slice(year: int) -> tuple[int, int]:
     """Return (start_h, end_h_inclusive) as integer hours since 1959-01-01."""
     pd_module = cast("Any", importlib.import_module("pandas"))
-    epoch = pd_module.Timestamp("1959-01-01")
+    epoch = pd_module.Timestamp(ERA5_TIME_ORIGIN)
 
     start_h: int = int(
         (pd_module.Timestamp(f"{year}-01-01") - epoch).total_seconds() // 3600,
@@ -203,6 +213,28 @@ def _year_time_slice(year: int) -> tuple[int, int]:
         - 1
     )
     return start_h, end_h
+
+
+def _iter_time_batches(
+    year: int,
+    *,
+    batch_hours: int,
+) -> list[tuple[int, int, int]]:
+    """Return deterministic (batch_index, start_h, end_h) windows for one year."""
+    if batch_hours < 1:
+        msg = "batch_hours must be >= 1"
+        raise ValueError(msg)
+
+    start_h, end_h = _year_time_slice(year)
+    batches: list[tuple[int, int, int]] = []
+    batch_index = 0
+    batch_start = start_h
+    while batch_start <= end_h:
+        batch_end = min(batch_start + batch_hours - 1, end_h)
+        batches.append((batch_index, batch_start, batch_end))
+        batch_index += 1
+        batch_start = batch_end + 1
+    return batches
 
 
 def _ensure_tile_outputs() -> None:
@@ -283,14 +315,28 @@ def _load_era5_city_shard(
     return shard
 
 
-def _era5_partition_path(year: int, tile_id: int) -> str:
-    return f"year={year}/tile_id={tile_id}"
+def _era5_partition_path(
+    year: int,
+    tile_id: int,
+    *,
+    batch_index: int | None = None,
+) -> str:
+    base_path = f"year={year}/tile_id={tile_id}"
+    if batch_index is None:
+        return base_path
+    return f"{base_path}/batch_index={batch_index:04d}"
 
 
-def _era5_shard_exists(era5_root: str, year: int, tile_id: int) -> bool:
+def _era5_batch_exists(
+    era5_root: str,
+    year: int,
+    tile_id: int,
+    *,
+    batch_index: int,
+) -> bool:
     return partition_file_exists(
         era5_root,
-        _era5_partition_path(year, tile_id),
+        _era5_partition_path(year, tile_id, batch_index=batch_index),
         "era5.parquet",
     )
 
@@ -301,77 +347,52 @@ def _calc_cossza(
     lon: float,
     times: ArrayLike,
 ) -> ArrayLike:
-    """Return hourly cosine solar zenith angle for one city/time series.
-
-    Uses thermofeel helper functions instead of expecting cossza to exist
-    in the ARCO dataset.
-    """
+    """Return hourly cosine solar zenith angle for one city/time series."""
     np = cast("Any", importlib.import_module("numpy"))
-    tf = cast("Any", importlib.import_module("thermofeel"))
+    timestamps = pd.to_datetime(times)
 
-    integrated_fn = cast(
-        "Any",
-        getattr(tf, "calculate_cos_solar_zenith_angle_integrated", None),
+    day_of_year = timestamps.dayofyear.to_numpy(dtype="float64")
+    hour = (
+        timestamps.hour.to_numpy(dtype="float64")
+        + timestamps.minute.to_numpy(dtype="float64") / 60.0
+        + timestamps.second.to_numpy(dtype="float64") / 3600.0
     )
-    instant_fn = cast("Any", getattr(tf, "calculate_cos_solar_zenith_angle", None))
 
-    if integrated_fn is None and instant_fn is None:
-        msg = (
-            "thermofeel does not expose either "
-            "'calculate_cos_solar_zenith_angle_integrated' or "
-            "'calculate_cos_solar_zenith_angle'."
-        )
-        raise AttributeError(msg)
+    gamma = 2.0 * np.pi / 365.0 * (day_of_year - 1.0 + (hour - 12.0) / 24.0)
+    decl = (
+        0.006918
+        - 0.399912 * np.cos(gamma)
+        + 0.070257 * np.sin(gamma)
+        - 0.006758 * np.cos(2.0 * gamma)
+        + 0.000907 * np.sin(2.0 * gamma)
+        - 0.002697 * np.cos(3.0 * gamma)
+        + 0.00148 * np.sin(3.0 * gamma)
+    )
+    equation_of_time = 229.18 * (
+        0.000075
+        + 0.001868 * np.cos(gamma)
+        - 0.032077 * np.sin(gamma)
+        - 0.014615 * np.cos(2.0 * gamma)
+        - 0.040849 * np.sin(2.0 * gamma)
+    )
+    true_solar_time_minutes = hour * 60.0 + equation_of_time + 4.0 * lon
+    hour_angle = np.deg2rad(true_solar_time_minutes / 4.0 - 180.0)
+    lat_radians = np.deg2rad(lat)
 
-    out = np.empty(len(times), dtype="float64")
-
-    for i, raw_ts in enumerate(times):
-        timestamp = pd.Timestamp(raw_ts)
-
-        if integrated_fn is not None:
-            try:
-                val = integrated_fn(
-                    lat=lat,
-                    lon=lon,
-                    y=timestamp.year,
-                    m=timestamp.month,
-                    d=timestamp.day,
-                    h=timestamp.hour,
-                    base=0,
-                    step=1,
-                )
-            except TypeError:
-                val = integrated_fn(
-                    lat=lat,
-                    lon=lon,
-                    y=timestamp.year,
-                    m=timestamp.month,
-                    d=timestamp.day,
-                    h=timestamp.hour,
-                    tbegin=0,
-                    tend=1,
-                )
-        else:
-            val = instant_fn(
-                lat=lat,
-                lon=lon,
-                y=timestamp.year,
-                m=timestamp.month,
-                d=timestamp.day,
-                h=timestamp.hour,
-            )
-
-        out[i] = float(val)
-
-    return np.clip(out, 0.0, 1.0)
+    cossza = np.sin(lat_radians) * np.sin(decl) + np.cos(lat_radians) * np.cos(
+        decl,
+    ) * np.cos(hour_angle)
+    return np.clip(cossza, 0.0, 1.0)
 
 
 def _compute_location_frame(
     ds: Dataset,
-    year: int,
     selected_cities: DataFrame,
+    *,
+    start_h: int,
+    end_h: int,
 ) -> DataFrame:
-    """Fetch one year of ERA5 data for a set of city points.
+    """Fetch one batch of ERA5 data for a set of city points.
 
     Return a combined DataFrame with weather variables and MRT already in the
     final combined schema.
@@ -388,7 +409,6 @@ def _compute_location_frame(
     lats_da = xr.DataArray(lats, dims="location")
     lons_da = xr.DataArray(lons, dims="location")
 
-    start_h, end_h = _year_time_slice(year)
     year_slice: Any = ds[ERA5_ALL_ARCO_VARIABLES].sel(time=slice(start_h, end_h))
     city_selection: Any = year_slice.sel(
         latitude=lats_da,
@@ -399,10 +419,10 @@ def _compute_location_frame(
 
     n_time_steps: int = len(city_data.time)
     pd_module = cast("Any", importlib.import_module("pandas"))
-    proper_times: Any = pd_module.date_range(
-        f"{year}-01-01",
-        periods=n_time_steps,
-        freq="1h",
+    proper_times: Any = pd_module.to_datetime(
+        city_data.time.values,
+        unit="h",
+        origin=ERA5_TIME_ORIGIN,
     )
     city_data = city_data.assign_coords(time=proper_times)
 
@@ -413,6 +433,8 @@ def _compute_location_frame(
 
     ssrd: Any = city_data["ssrd"].values * RADIATION_SCALE
     strd: Any = city_data["strd"].values * RADIATION_SCALE
+    ssr: Any = city_data["ssr"].values * RADIATION_SCALE
+    strr: Any = city_data["str"].values * RADIATION_SCALE
     fdir: Any = city_data["fdir"].values * RADIATION_SCALE
 
     times: ArrayLike = city_data.time.values
@@ -432,16 +454,19 @@ def _compute_location_frame(
     try:
         mrt_k: Any = tf.calculate_mean_radiant_temperature(
             ssrd=ssrd.ravel(),
+            ssr=ssr.ravel(),
+            dsrp=fdir.ravel(),
             fdir=fdir.ravel(),
             strd=strd.ravel(),
+            strr=strr.ravel(),
             cossza=cossza.ravel(),
         )
     except TypeError:
-        mrt_k = tf.mrt.mean_radiant_temperature(
+        mrt_k = tf.calculate_mean_radiant_temperature(
             ssrd=ssrd.ravel(),
-            strd=strd.ravel(),
             fdir=fdir.ravel(),
-            cos_projection=cossza.ravel(),
+            strd=strd.ravel(),
+            cossza=cossza.ravel(),
         )
 
     mrt_c: Any = (mrt_k - 273.15).reshape(n_locations, n_time_steps)
@@ -477,9 +502,13 @@ def _write_era5_partition(
     year: int,
     tile_id: int,
     frame: DataFrame,
+    *,
+    batch_index: int,
 ) -> None:
     filesystem, base_path = resolve_filesystem(era5_root)
-    partition_dir = f"{base_path}/{_era5_partition_path(year, tile_id)}"
+    partition_dir = (
+        f"{base_path}/{_era5_partition_path(year, tile_id, batch_index=batch_index)}"
+    )
     filesystem.create_dir(partition_dir, recursive=True)
     output_path = f"{partition_dir}/era5.parquet"
 
@@ -488,29 +517,37 @@ def _write_era5_partition(
         pq.write_table(table, out_stream)
 
 
-def _pending_shard_tiles(
+def _pending_batch_tiles(
     shard_df: DataFrame,
     *,
     era5_root: str,
     year: int,
+    batch_index: int,
 ) -> DataFrame:
-    """Return only the cities for tiles that still need an output shard."""
+    """Return only the cities for tiles that still need this batch written."""
     pending_frames: list[DataFrame] = []
     tile_ids = sorted(int(raw_tile_id) for raw_tile_id in shard_df["tile_id"].unique())
     for tile_id in tile_ids:
         tile_cities = shard_df[shard_df["tile_id"] == tile_id].copy()
-        if _era5_shard_exists(era5_root, year, tile_id):
+        if _era5_batch_exists(
+            era5_root,
+            year,
+            tile_id,
+            batch_index=batch_index,
+        ):
             LOGGER.info(
-                "ERA5 tile %s year %s already exists. Skipping.",
+                "ERA5 tile %s year %s batch %s already exists. Skipping.",
                 tile_id,
                 year,
+                batch_index,
             )
             continue
 
         LOGGER.info(
-            "Queueing ERA5 tile %s year %s (%s cities).",
+            "Queueing ERA5 tile %s year %s batch %s (%s cities).",
             tile_id,
             year,
+            batch_index,
             len(tile_cities),
         )
         pending_frames.append(tile_cities)
@@ -525,20 +562,32 @@ def _write_shard_tiles(
     era5_root: str,
     year: int,
     frame: DataFrame,
+    batch_index: int,
 ) -> None:
     """Split a shard-wide frame by tile and write each partition."""
     if frame.empty:
-        LOGGER.warning("No ERA5 rows returned for year %s.", year)
+        LOGGER.warning(
+            "No ERA5 rows returned for year %s batch %s.",
+            year,
+            batch_index,
+        )
         return
 
     for tile_id, tile_frame in frame.groupby("tile_id", sort=True):
         output_frame = tile_frame.drop(columns=["tile_id"]).reset_index(drop=True)
-        _write_era5_partition(era5_root, year, int(tile_id), output_frame)
+        _write_era5_partition(
+            era5_root,
+            year,
+            int(tile_id),
+            output_frame,
+            batch_index=batch_index,
+        )
         LOGGER.info(
-            "Wrote %s ERA5 rows for tile %s year %s.",
+            "Wrote %s ERA5 rows for tile %s year %s batch %s.",
             len(output_frame),
             int(tile_id),
             year,
+            batch_index,
         )
 
 
@@ -549,6 +598,7 @@ def process_era5(
     city_shard_index: int = 0,
     city_shard_count: int = 1,
     max_workers: int = 4,
+    batch_hours: int = DEFAULT_BATCH_HOURS,
 ) -> None:
     """Download ERA5 weather + MRT for one year and one city shard."""
     if year < ERA5_START_YEAR or year > ERA5_END_YEAR:
@@ -568,28 +618,59 @@ def process_era5(
         LOGGER.warning("No ERA5 cities selected for shard %s.", city_shard_index)
         return
 
-    pending_shard_df = _pending_shard_tiles(shard_df, era5_root=era5_root, year=year)
-    if pending_shard_df.empty:
+    _warn_if_full_globe_chunks()
+    ds = _open_zarr_store(max_workers=max_workers)
+
+    wrote_any_batches = False
+    for batch_index, start_h, end_h in _iter_time_batches(
+        year,
+        batch_hours=batch_hours,
+    ):
+        pending_batch_df = _pending_batch_tiles(
+            shard_df,
+            era5_root=era5_root,
+            year=year,
+            batch_index=batch_index,
+        )
+        if pending_batch_df.empty:
+            continue
+
+        batch_start = pd.to_datetime(start_h, unit="h", origin=ERA5_TIME_ORIGIN)
+        batch_end = pd.to_datetime(end_h, unit="h", origin=ERA5_TIME_ORIGIN)
         LOGGER.info(
-            "ERA5 processing complete for year=%s shard %s/%s with no pending tiles.",
+            "Reading ERA5 shard %s/%s year %s batch %s covering %s to %s across "
+            "%s cities in %s pending tiles.",
+            city_shard_index + 1,
+            city_shard_count,
+            year,
+            batch_index,
+            batch_start.isoformat(),
+            batch_end.isoformat(),
+            len(pending_batch_df),
+            pending_batch_df["tile_id"].nunique(),
+        )
+        frame = _compute_location_frame(
+            ds,
+            pending_batch_df,
+            start_h=start_h,
+            end_h=end_h,
+        )
+        _write_shard_tiles(
+            era5_root=era5_root,
+            year=year,
+            frame=frame,
+            batch_index=batch_index,
+        )
+        wrote_any_batches = True
+
+    if not wrote_any_batches:
+        LOGGER.info(
+            "ERA5 processing complete for year=%s shard %s/%s with no pending batches.",
             year,
             city_shard_index + 1,
             city_shard_count,
         )
         return
-
-    _warn_if_full_globe_chunks()
-    ds = _open_zarr_store(max_workers=max_workers)
-    LOGGER.info(
-        "Reading ERA5 shard %s/%s for year %s across %s cities in %s pending tiles.",
-        city_shard_index + 1,
-        city_shard_count,
-        year,
-        len(pending_shard_df),
-        pending_shard_df["tile_id"].nunique(),
-    )
-    frame = _compute_location_frame(ds, year, pending_shard_df)
-    _write_shard_tiles(era5_root=era5_root, year=year, frame=frame)
 
     LOGGER.info(
         "ERA5 processing complete for year=%s shard %s/%s.",
@@ -633,6 +714,12 @@ def _parse_args() -> argparse.Namespace:
         default=4,
         help="Dask thread-pool size for parallel GCS reads.",
     )
+    parser.add_argument(
+        "--batch-hours",
+        type=int,
+        default=DEFAULT_BATCH_HOURS,
+        help="Hours to fetch per resumable batch (default: 168).",
+    )
     return parser.parse_args()
 
 
@@ -646,6 +733,7 @@ def main() -> None:
             city_shard_index=args.city_shard_index,
             city_shard_count=args.city_shard_count,
             max_workers=args.max_workers,
+            batch_hours=args.batch_hours,
         )
     except Exception as exc:
         LOGGER.exception("ERA5 pipeline failed for year=%s.", args.year)
