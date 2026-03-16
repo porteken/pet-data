@@ -44,7 +44,13 @@ EXPECTED_LOCATION_COUNT = 500
 
 
 def _open_zarr_store(max_workers: int) -> Dataset:
-    """Open the Google ARCO ERA5 Zarr store with dask-backed lazy loading."""
+    """Open the Google ARCO ERA5 Zarr store with dask-backed lazy loading.
+
+    The store's time axis is encoded as integer hours since 1959-01-01.  The
+    full 1959-2023 span overflows pandas Timedelta during dataset open, so we
+    pass ``decode_times=False`` and decode manually after subsetting to a
+    single year (see ``_year_time_slice`` / ``_compute_tile_frame``).
+    """
     gcsfs = cast("Any", importlib.import_module("gcsfs"))
     xr = cast("Any", importlib.import_module("xarray"))
     dask = cast("Any", importlib.import_module("dask"))
@@ -53,7 +59,21 @@ def _open_zarr_store(max_workers: int) -> Dataset:
 
     fs = gcsfs.GCSFileSystem()
     store = fs.get_mapper(ERA5_ARCO_STORE)
-    return xr.open_zarr(store, consolidated=True)
+    return xr.open_zarr(store, consolidated=True, decode_times=False)
+
+
+def _year_time_slice(year: int) -> tuple[int, int]:
+    """Return (start_h, end_h_inclusive) as integer hours since 1959-01-01."""
+    pd_module = cast("Any", importlib.import_module("pandas"))
+    epoch = pd_module.Timestamp("1959-01-01")
+    start_h: int = int(
+        (pd_module.Timestamp(f"{year}-01-01") - epoch).total_seconds() // 3600,
+    )
+    end_h: int = (
+        int((pd_module.Timestamp(f"{year + 1}-01-01") - epoch).total_seconds() // 3600)
+        - 1
+    )
+    return start_h, end_h
 
 
 def _ensure_tile_outputs() -> None:
@@ -165,13 +185,26 @@ def _compute_tile_frame(
     lats_da = xr.DataArray(lats, dims="location")
     lons_da = xr.DataArray(lons, dims="location")
 
+    # Time axis is integer hours since 1959-01-01 (decode_times=False on open).
+    # Slice by integer offsets to avoid overflow when decoding the full range.
+    start_h, end_h = _year_time_slice(year)
     city_selection: Any = ds[ERA5_ALL_VARIABLES].sel(
-        time=slice(f"{year}-01-01", f"{year}-12-31"),
+        time=slice(start_h, end_h),
         latitude=lats_da,
         longitude=lons_da,
         method="nearest",
     )
-    city_data = cast("Dataset", city_selection.compute())
+    city_data = city_selection.compute()
+
+    # Replace integer hour coordinate with proper naive datetimes.
+    n_time_steps: int = len(city_data.time)
+    pd_module = cast("Any", importlib.import_module("pandas"))
+    proper_times: Any = pd_module.date_range(
+        f"{year}-01-01",
+        periods=n_time_steps,
+        freq="1h",
+    )
+    city_data = city_data.assign_coords(time=proper_times)
 
     u10: Any = city_data["10m_u_component_of_wind"].values
     v10: Any = city_data["10m_v_component_of_wind"].values

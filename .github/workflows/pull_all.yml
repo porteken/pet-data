@@ -259,7 +259,8 @@ jobs:
       fail-fast: false
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.cds_years) }}
-    name: MRT ${{ matrix.year }}
+        month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    name: MRT ${{ matrix.year }}-${{ matrix.month }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -279,13 +280,21 @@ jobs:
         env:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: python pull_mrt.py --year ${{ matrix.year }} --max-workers 2
+        run: |
+          python pull_mrt.py \
+            --year ${{ matrix.year }} \
+            --month ${{ matrix.month }} \
+            --max-workers 2
       - name: Upload MRT Shards to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 sync ./utci_data_parquet/year=${{ matrix.year }}/ s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/
+        run: |
+          MONTH_PAD=$(printf '%02d' ${{ matrix.month }})
+          aws s3 sync \
+            ./utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_PAD}/ \
+            s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_PAD}/
 
   process-pet:
     needs: [setup-locations, process-weather, process-mrt, pull-google-era5, build-year-range]
