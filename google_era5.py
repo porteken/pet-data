@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -76,6 +79,7 @@ EXPECTED_LOCATION_COUNT = 500
 THREE_DIMENSIONAL_ARRAY_NDIMS = 3
 ERA5_TIME_ORIGIN = "1959-01-01"
 DEFAULT_BATCH_HOURS = 24 * 3
+ERA5_THREAD_LOCAL = threading.local()
 
 
 def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
@@ -173,15 +177,12 @@ def _resolve_store_variables(array_names: set[str]) -> dict[str, str]:
     return resolved
 
 
-def _open_zarr_store(max_workers: int) -> Dataset:
+def _open_zarr_store() -> Dataset:
     """Open a minimal dask-backed Dataset for only the required ERA5 arrays."""
     gcsfs = cast("Any", importlib.import_module("gcsfs"))
     xr = cast("Any", importlib.import_module("xarray"))
-    dask = cast("Any", importlib.import_module("dask"))
     dask_array = cast("Any", importlib.import_module("dask.array"))
     zarr = cast("Any", importlib.import_module("zarr"))
-
-    dask.config.set(scheduler="threads", num_workers=max_workers)
 
     fs = gcsfs.GCSFileSystem(token="anon")  # noqa: S106
     root = zarr.open_group(fs.get_mapper(ERA5_ARCO_STORE), mode="r")
@@ -200,6 +201,16 @@ def _open_zarr_store(max_workers: int) -> Dataset:
             "longitude": root["longitude"][:],
         },
     )
+
+
+def _resolve_era5_max_workers(requested_max_workers: int) -> int:
+    """Resolve the requested ERA5 worker count into a concrete thread count."""
+    if requested_max_workers == -1:
+        return max(1, os.cpu_count() or 1)
+    if requested_max_workers < 1:
+        msg = "max_workers must be >= 1 or exactly -1 to use all available cores"
+        raise ValueError(msg)
+    return requested_max_workers
 
 
 def _year_time_slice(year: int) -> tuple[int, int]:
@@ -412,6 +423,7 @@ def _compute_location_frame(
     *,
     start_h: int,
     end_h: int,
+    compute_workers: int,
 ) -> DataFrame:
     """Fetch one batch of ERA5 data for a set of city points.
 
@@ -419,6 +431,7 @@ def _compute_location_frame(
     final combined schema.
     """
     np = cast("Any", importlib.import_module("numpy"))
+    dask = cast("Any", importlib.import_module("dask"))
     xr = cast("Any", importlib.import_module("xarray"))
     tf = cast("Any", importlib.import_module("thermofeel"))
 
@@ -436,7 +449,8 @@ def _compute_location_frame(
         longitude=lons_da,
         method="nearest",
     )
-    city_data: Any = city_selection.compute()
+    with dask.config.set(scheduler="threads", num_workers=compute_workers):
+        city_data: Any = city_selection.compute()
 
     n_time_steps: int = len(city_data.time)
     pd_module = cast("Any", importlib.import_module("pandas"))
@@ -612,6 +626,178 @@ def _write_shard_tiles(
         )
 
 
+def _get_thread_dataset() -> Dataset:
+    """Return a thread-local ERA5 dataset handle."""
+    ds = getattr(ERA5_THREAD_LOCAL, "ds", None)
+    if ds is None:
+        ds = _open_zarr_store()
+        ERA5_THREAD_LOCAL.ds = ds
+    return ds
+
+
+def _process_era5_batch_job(
+    *,
+    ds: Dataset,
+    era5_root: str,
+    year: int,
+    batch_index: int,
+    start_h: int,
+    end_h: int,
+    pending_batch_df: DataFrame,
+    city_shard_index: int,
+    city_shard_count: int,
+    time_shard_index: int,
+    time_shard_count: int,
+    compute_workers: int,
+) -> int:
+    """Compute and write one ERA5 batch."""
+    batch_start = pd.to_datetime(start_h, unit="h", origin=ERA5_TIME_ORIGIN)
+    batch_end = pd.to_datetime(end_h, unit="h", origin=ERA5_TIME_ORIGIN)
+    LOGGER.info(
+        "Reading ERA5 city shard %s/%s time shard %s/%s year %s batch %s "
+        "covering %s to %s across %s cities in %s pending tiles.",
+        city_shard_index + 1,
+        city_shard_count,
+        time_shard_index + 1,
+        time_shard_count,
+        year,
+        batch_index,
+        batch_start.isoformat(),
+        batch_end.isoformat(),
+        len(pending_batch_df),
+        pending_batch_df["tile_id"].nunique(),
+    )
+    frame = _compute_location_frame(
+        ds,
+        pending_batch_df,
+        start_h=start_h,
+        end_h=end_h,
+        compute_workers=compute_workers,
+    )
+    _write_shard_tiles(
+        era5_root=era5_root,
+        year=year,
+        frame=frame,
+        batch_index=batch_index,
+    )
+    return batch_index
+
+
+def _process_era5_batch_with_thread_dataset(
+    *,
+    era5_root: str,
+    year: int,
+    batch_index: int,
+    start_h: int,
+    end_h: int,
+    pending_batch_df: DataFrame,
+    city_shard_index: int,
+    city_shard_count: int,
+    time_shard_index: int,
+    time_shard_count: int,
+) -> int:
+    """Process one ERA5 batch using a thread-local dataset."""
+    return _process_era5_batch_job(
+        ds=_get_thread_dataset(),
+        era5_root=era5_root,
+        year=year,
+        batch_index=batch_index,
+        start_h=start_h,
+        end_h=end_h,
+        pending_batch_df=pending_batch_df,
+        city_shard_index=city_shard_index,
+        city_shard_count=city_shard_count,
+        time_shard_index=time_shard_index,
+        time_shard_count=time_shard_count,
+        compute_workers=1,
+    )
+
+
+def _run_era5_batch_jobs(
+    *,
+    selected_batches: list[tuple[int, int, int]],
+    shard_df: DataFrame,
+    era5_root: str,
+    year: int,
+    city_shard_index: int,
+    city_shard_count: int,
+    time_shard_index: int,
+    time_shard_count: int,
+    max_workers: int,
+) -> bool:
+    """Run the pending ERA5 batch jobs, using worker threads when beneficial."""
+    batch_jobs: list[tuple[int, int, int, DataFrame]] = []
+    for batch_index, start_h, end_h in selected_batches:
+        pending_batch_df = _pending_batch_tiles(
+            shard_df,
+            era5_root=era5_root,
+            year=year,
+            batch_index=batch_index,
+        )
+        if pending_batch_df.empty:
+            continue
+        batch_jobs.append((batch_index, start_h, end_h, pending_batch_df))
+
+    if not batch_jobs:
+        return False
+
+    resolved_max_workers = _resolve_era5_max_workers(max_workers)
+    worker_count = max(
+        1,
+        min(
+            resolved_max_workers,
+            len(batch_jobs),
+            os.cpu_count() or 1,
+        ),
+    )
+    if worker_count == 1:
+        ds = _open_zarr_store()
+        for batch_index, start_h, end_h, pending_batch_df in batch_jobs:
+            _process_era5_batch_job(
+                ds=ds,
+                era5_root=era5_root,
+                year=year,
+                batch_index=batch_index,
+                start_h=start_h,
+                end_h=end_h,
+                pending_batch_df=pending_batch_df,
+                city_shard_index=city_shard_index,
+                city_shard_count=city_shard_count,
+                time_shard_index=time_shard_index,
+                time_shard_count=time_shard_count,
+                compute_workers=1,
+            )
+        return True
+
+    LOGGER.info(
+        "Processing %s ERA5 batches with %s worker threads.",
+        len(batch_jobs),
+        worker_count,
+    )
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_batch_index = {
+            executor.submit(
+                _process_era5_batch_with_thread_dataset,
+                era5_root=era5_root,
+                year=year,
+                batch_index=batch_index,
+                start_h=start_h,
+                end_h=end_h,
+                pending_batch_df=pending_batch_df,
+                city_shard_index=city_shard_index,
+                city_shard_count=city_shard_count,
+                time_shard_index=time_shard_index,
+                time_shard_count=time_shard_count,
+            ): batch_index
+            for batch_index, start_h, end_h, pending_batch_df in batch_jobs
+        }
+        for future in as_completed(future_to_batch_index):
+            batch_index = future_to_batch_index[future]
+            future.result()
+            LOGGER.info("ERA5 batch %s completed for %s.", batch_index, year)
+    return True
+
+
 def process_era5(
     year: int,
     out_dir: str,
@@ -642,7 +828,6 @@ def process_era5(
         return
 
     _warn_if_full_globe_chunks()
-    ds = _open_zarr_store(max_workers=max_workers)
 
     selected_batches = _select_time_shard_batches(
         _iter_time_batches(
@@ -660,46 +845,17 @@ def process_era5(
         time_shard_count,
     )
 
-    wrote_any_batches = False
-    for batch_index, start_h, end_h in selected_batches:
-        pending_batch_df = _pending_batch_tiles(
-            shard_df,
-            era5_root=era5_root,
-            year=year,
-            batch_index=batch_index,
-        )
-        if pending_batch_df.empty:
-            continue
-
-        batch_start = pd.to_datetime(start_h, unit="h", origin=ERA5_TIME_ORIGIN)
-        batch_end = pd.to_datetime(end_h, unit="h", origin=ERA5_TIME_ORIGIN)
-        LOGGER.info(
-            "Reading ERA5 city shard %s/%s time shard %s/%s year %s batch %s "
-            "covering %s to %s across %s cities in %s pending tiles.",
-            city_shard_index + 1,
-            city_shard_count,
-            time_shard_index + 1,
-            time_shard_count,
-            year,
-            batch_index,
-            batch_start.isoformat(),
-            batch_end.isoformat(),
-            len(pending_batch_df),
-            pending_batch_df["tile_id"].nunique(),
-        )
-        frame = _compute_location_frame(
-            ds,
-            pending_batch_df,
-            start_h=start_h,
-            end_h=end_h,
-        )
-        _write_shard_tiles(
-            era5_root=era5_root,
-            year=year,
-            frame=frame,
-            batch_index=batch_index,
-        )
-        wrote_any_batches = True
+    wrote_any_batches = _run_era5_batch_jobs(
+        selected_batches=selected_batches,
+        shard_df=shard_df,
+        era5_root=era5_root,
+        year=year,
+        city_shard_index=city_shard_index,
+        city_shard_count=city_shard_count,
+        time_shard_index=time_shard_index,
+        time_shard_count=time_shard_count,
+        max_workers=max_workers,
+    )
 
     if not wrote_any_batches:
         LOGGER.info(
@@ -755,7 +911,7 @@ def _parse_args() -> argparse.Namespace:
         "--max-workers",
         type=int,
         default=4,
-        help="Dask thread-pool size for parallel GCS reads.",
+        help="Maximum ERA5 batch worker threads; use -1 for all available cores.",
     )
     parser.add_argument(
         "--time-shard-index",
