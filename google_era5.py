@@ -15,24 +15,28 @@ if TYPE_CHECKING:
     from xarray import Dataset
 
 
-ERA5_ARCO_STORE = (
-    "gs://gcp-public-data-arco-era5/ar/1959-2023_01_10-full_37-1h-0p25deg-chunk-1.zarr"
-)
+# ARCO analysis-ready ERA5 store.
+ERA5_ARCO_STORE = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
+
 ERA5_START_YEAR = 2000
 ERA5_END_YEAR = 2023
 
+# ARCO short variable names, not CDS long names.
 ERA5_WEATHER_VARIABLES = [
-    "10m_u_component_of_wind",
-    "10m_v_component_of_wind",
-    "2m_temperature",
-    "2m_dewpoint_temperature",
+    "10u",  # 10m_u_component_of_wind
+    "10v",  # 10m_v_component_of_wind
+    "2t",  # 2m_temperature
+    "2d",  # 2m_dewpoint_temperature
 ]
+
+# MRT needs these thermofeel-style inputs.
 ERA5_MRT_VARIABLES = [
-    "surface_solar_radiation_downwards",
-    "surface_thermal_radiation_downwards",
-    "total_sky_direct_solar_radiation_at_surface",
-    "cosine_solar_zenith_angle",
+    "ssrd",  # surface_solar_radiation_downwards
+    "strd",  # surface_thermal_radiation_downwards
+    "fdir",  # total_sky_direct_solar_radiation_at_surface
+    "cossza",  # cosine_solar_zenith_angle
 ]
+
 ERA5_ALL_VARIABLES = ERA5_WEATHER_VARIABLES + ERA5_MRT_VARIABLES
 
 RADIATION_SCALE = 1.0 / 3600.0
@@ -46,10 +50,10 @@ EXPECTED_LOCATION_COUNT = 500
 def _open_zarr_store(max_workers: int) -> Dataset:
     """Open the Google ARCO ERA5 Zarr store with dask-backed lazy loading.
 
-    The store's time axis is encoded as integer hours since 1959-01-01.  The
+    The store's time axis is encoded as integer hours since 1959-01-01. The
     full 1959-2023 span overflows pandas Timedelta during dataset open, so we
-    pass ``decode_times=False`` and decode manually after subsetting to a
-    single year (see ``_year_time_slice`` / ``_compute_tile_frame``).
+    pass decode_times=False and decode manually after subsetting to a single
+    year.
     """
     gcsfs = cast("Any", importlib.import_module("gcsfs"))
     xr = cast("Any", importlib.import_module("xarray"))
@@ -59,7 +63,18 @@ def _open_zarr_store(max_workers: int) -> Dataset:
 
     fs = gcsfs.GCSFileSystem()
     store = fs.get_mapper(ERA5_ARCO_STORE)
-    return xr.open_zarr(store, consolidated=True, decode_times=False)
+    ds = xr.open_zarr(store, consolidated=True, decode_times=False)
+
+    missing = [name for name in ERA5_ALL_VARIABLES if name not in ds.data_vars]
+    if missing:
+        available_sample = sorted(ds.data_vars)[:50]
+        msg = (
+            "Required ARCO ERA5 variables are missing from the opened dataset: "
+            f"{missing}. Sample available variables: {available_sample}"
+        )
+        raise KeyError(msg)
+
+    return ds
 
 
 def _year_time_slice(year: int) -> tuple[int, int]:
@@ -171,8 +186,8 @@ def _compute_tile_frame(
 ) -> DataFrame:
     """Fetch one year of ERA5 data for a tile's city points.
 
-    Return a combined DataFrame with weather variables and MRT already in the final
-    combined schema.
+    Return a combined DataFrame with weather variables and MRT already in the
+    final combined schema.
     """
     xr = cast("Any", importlib.import_module("xarray"))
     np = cast("Any", importlib.import_module("numpy"))
@@ -206,19 +221,19 @@ def _compute_tile_frame(
     )
     city_data = city_data.assign_coords(time=proper_times)
 
-    u10: Any = city_data["10m_u_component_of_wind"].values
-    v10: Any = city_data["10m_v_component_of_wind"].values
-    t2m: Any = city_data["2m_temperature"].values
-    d2m: Any = city_data["2m_dewpoint_temperature"].values
-    ssrd: Any = city_data["surface_solar_radiation_downwards"].values * RADIATION_SCALE
-    strd: Any = (
-        city_data["surface_thermal_radiation_downwards"].values * RADIATION_SCALE
-    )
-    fdir: Any = (
-        city_data["total_sky_direct_solar_radiation_at_surface"].values
-        * RADIATION_SCALE
-    )
-    cos_sza: Any = city_data["cosine_solar_zenith_angle"].values
+    # Weather variables
+    u10: Any = city_data["10u"].values
+    v10: Any = city_data["10v"].values
+    t2m: Any = city_data["2t"].values
+    d2m: Any = city_data["2d"].values
+
+    # Radiation variables used by thermofeel MRT.
+    # ERA5 accumulated radiation fields are commonly converted from J/m^2
+    # per time step to W/m^2 by dividing by 3600 for hourly data.
+    ssrd: Any = city_data["ssrd"].values * RADIATION_SCALE
+    strd: Any = city_data["strd"].values * RADIATION_SCALE
+    fdir: Any = city_data["fdir"].values * RADIATION_SCALE
+    cossza: Any = city_data["cossza"].values
 
     wind_speed: Any = np.sqrt(u10**2 + v10**2)
     temperature_c: Any = t2m - 273.15
@@ -228,11 +243,13 @@ def _compute_tile_frame(
     relative_humidity: Any = np.exp(gamma_td - gamma_t) * 100.0
 
     n_locations, n_times = wind_speed.shape
+
+    # thermofeel returns MRT in Kelvin.
     mrt_k: Any = tf.mrt.mean_radiant_temperature(
         ssrd=ssrd.ravel(),
         strd=strd.ravel(),
         fdir=fdir.ravel(),
-        cos_projection=cos_sza.ravel(),
+        cos_projection=cossza.ravel(),
     )
     mrt_c: Any = (mrt_k - 273.15).reshape(n_locations, n_times)
 
