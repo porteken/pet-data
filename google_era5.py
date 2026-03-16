@@ -326,8 +326,8 @@ def _compute_tile_frame(
     # Time axis is integer hours since 1959-01-01 (decode_times=False on open).
     # Slice by integer offsets to avoid overflow when decoding the full range.
     start_h, end_h = _year_time_slice(year)
-    city_selection: Any = ds[ERA5_ALL_ARCO_VARIABLES].sel(
-        time=slice(start_h, end_h),
+    year_slice: Any = ds[ERA5_ALL_ARCO_VARIABLES].sel(time=slice(start_h, end_h))
+    city_selection: Any = year_slice.sel(
         latitude=lats_da,
         longitude=lons_da,
         method="nearest",
