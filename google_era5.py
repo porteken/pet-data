@@ -148,25 +148,25 @@ def _warn_if_full_globe_chunks() -> None:
     )
 
 
-def _resolve_dataset_variables(ds: Dataset) -> dict[str, str]:
-    """Map canonical ERA5 variable keys to actual dataset variable names."""
+def _resolve_store_variables(array_names: set[str]) -> dict[str, str]:
+    """Map canonical ERA5 variable keys to actual Zarr array names."""
     resolved: dict[str, str] = {}
     missing: list[str] = []
 
     for canonical_name, candidates in ERA5_VARIABLE_CANDIDATES.items():
-        actual_name = next((name for name in candidates if name in ds.data_vars), None)
+        actual_name = next((name for name in candidates if name in array_names), None)
         if actual_name is None:
             missing.append(canonical_name)
             continue
         resolved[canonical_name] = actual_name
 
     if missing:
-        available_sample = sorted(ds.data_vars)[:80]
+        available_sample = sorted(array_names)[:80]
         msg = (
             "Required ARCO ERA5 variables could not be resolved: "
             f"{missing}. Variable candidates: "
             f"{ {name: ERA5_VARIABLE_CANDIDATES[name] for name in missing} }. "
-            f"Sample available variables: {available_sample}"
+            f"Sample available arrays: {available_sample}"
         )
         raise KeyError(msg)
 
@@ -174,30 +174,32 @@ def _resolve_dataset_variables(ds: Dataset) -> dict[str, str]:
 
 
 def _open_zarr_store(max_workers: int) -> Dataset:
-    """Open the Google ARCO ERA5 Zarr store with dask-backed lazy loading.
-
-    The store's time axis is encoded as integer hours since 1959-01-01. The
-    full 1959-2023 span overflows pandas Timedelta during dataset open, so we
-    pass decode_times=False and decode manually after subsetting to a single
-    year.
-    """
+    """Open a minimal dask-backed Dataset for only the required ERA5 arrays."""
     gcsfs = cast("Any", importlib.import_module("gcsfs"))
     xr = cast("Any", importlib.import_module("xarray"))
     dask = cast("Any", importlib.import_module("dask"))
+    dask_array = cast("Any", importlib.import_module("dask.array"))
+    zarr = cast("Any", importlib.import_module("zarr"))
 
     dask.config.set(scheduler="threads", num_workers=max_workers)
 
     fs = gcsfs.GCSFileSystem(token="anon")  # noqa: S106
-    store = fs.get_mapper(ERA5_ARCO_STORE)
-    ds = xr.open_zarr(store, consolidated=True, decode_times=False)
-
-    resolved_names = _resolve_dataset_variables(ds)
-    rename_map = {
-        actual_name: canonical_name
-        for canonical_name, actual_name in resolved_names.items()
-        if actual_name != canonical_name
-    }
-    return ds.rename_vars(rename_map) if rename_map else ds
+    root = zarr.open_group(fs.get_mapper(ERA5_ARCO_STORE), mode="r")
+    resolved_names = _resolve_store_variables(set(root.array_keys()))
+    return xr.Dataset(
+        data_vars={
+            canonical_name: (
+                ("time", "latitude", "longitude"),
+                dask_array.from_zarr(root[actual_name]),
+            )
+            for canonical_name, actual_name in resolved_names.items()
+        },
+        coords={
+            "time": root["time"][:],
+            "latitude": root["latitude"][:],
+            "longitude": root["longitude"][:],
+        },
+    )
 
 
 def _year_time_slice(year: int) -> tuple[int, int]:
