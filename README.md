@@ -1,8 +1,8 @@
-# PET Data Pipeline
+
 
 This project pulls ERA5 weather data and UTCI mean radiant temperature (MRT) from CDS, matches them to US city grid points, computes PET (Physiological Equivalent Temperature), generates summary analytics, and loads the results into Supabase.
 
-## Pipeline
+#
 
 1. `cities.py` creates `cities.csv` for the US city grid points.
 2. `boxes.py` snaps cities to ERA5 grid cells, groups them into occupied 3x3 CDS tiles, and writes tile metadata to `output_tiles/`.

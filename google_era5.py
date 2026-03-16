@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -16,13 +17,13 @@ from shards import resolve_filesystem
 Dataset: TypeAlias = Any
 ArrayLike: TypeAlias = Any
 
-# Google Cloud ARCO analysis-ready ERA5 store.
+
 ERA5_ARCO_STORE = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
 
 ERA5_START_YEAR = 2000
 ERA5_END_YEAR = 2023
 
-# Only variables expected to exist in the ARCO dataset go here.
+
 ERA5_VARIABLE_CANDIDATES: dict[str, list[str]] = {
     "10u": [
         "10u",
@@ -51,8 +52,6 @@ ERA5_VARIABLE_CANDIDATES: dict[str, list[str]] = {
     "fdir": [
         "fdir",
         "total_sky_direct_solar_radiation_at_surface",
-        # Fallback in case the store exposes only clear-sky direct solar radiation.
-        # Prefer total-sky when available.
         "clear_sky_direct_solar_radiation_at_surface",
     ],
 }
@@ -61,13 +60,80 @@ ERA5_WEATHER_VARIABLES = ["10u", "10v", "2t", "2d"]
 ERA5_MRT_ARCO_VARIABLES = ["ssrd", "strd", "fdir"]
 ERA5_ALL_ARCO_VARIABLES = [*ERA5_WEATHER_VARIABLES, *ERA5_MRT_ARCO_VARIABLES]
 
-# Hourly accumulated radiation -> W/m^2
+
 RADIATION_SCALE = 1.0 / 3600.0
 
 _B = 17.625
 _C = 243.04
 
 EXPECTED_LOCATION_COUNT = 500
+THREE_DIMENSIONAL_ARRAY_NDIMS = 3
+
+
+def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
+    """Return an integer tuple when the metadata value is a list of integers."""
+    if not isinstance(raw_value, list):
+        return None
+    raw_dims = cast("list[object]", raw_value)
+    if not all(isinstance(dim, int) for dim in raw_dims):
+        return None
+    return tuple(cast("list[int]", raw_dims))
+
+
+def _load_arco_store_metadata() -> dict[str, object]:
+    """Return consolidated Zarr metadata for the public ARCO ERA5 store."""
+    gcsfs = cast("Any", importlib.import_module("gcsfs"))
+    fs = gcsfs.GCSFileSystem(token="anon")  # noqa: S106
+    metadata_path = ERA5_ARCO_STORE.removeprefix("gs://") + "/.zmetadata"
+    with fs.open(metadata_path, "r") as metadata_file:
+        return cast("dict[str, object]", json.load(metadata_file))
+
+
+def _ensure_point_extraction_is_tractable() -> None:
+    """Fail fast when the configured ARCO store uses full-globe hourly chunks."""
+    metadata = _load_arco_store_metadata()
+    metadata_entries = cast("dict[str, object]", metadata.get("metadata", {}))
+
+    problematic_chunks: dict[str, tuple[tuple[int, ...], tuple[int, ...]]] = {}
+    for canonical_name, candidates in ERA5_VARIABLE_CANDIDATES.items():
+        for candidate in candidates:
+            zarray_key = f"{candidate}/.zarray"
+            raw_entry = metadata_entries.get(zarray_key)
+            if not isinstance(raw_entry, dict):
+                continue
+
+            entry = cast("dict[str, object]", raw_entry)
+            chunks = _coerce_int_tuple(entry.get("chunks"))
+            shape = _coerce_int_tuple(entry.get("shape"))
+            if chunks is None or shape is None:
+                continue
+
+            if (
+                len(chunks) == THREE_DIMENSIONAL_ARRAY_NDIMS
+                and len(shape) == THREE_DIMENSIONAL_ARRAY_NDIMS
+                and chunks[0] == 1
+                and chunks[1:] == shape[1:]
+            ):
+                problematic_chunks[canonical_name] = (chunks, shape)
+            break
+
+    if not problematic_chunks:
+        return
+
+    formatted_chunks = ", ".join(
+        f"{name}: chunks={chunks} shape={shape}"
+        for name, (chunks, shape) in sorted(problematic_chunks.items())
+    )
+    msg = (
+        "The configured Google ARCO ERA5 store is chunked as one full global "
+        "latitude/longitude field per hour for the variables this script needs "
+        f"({formatted_chunks}). Point extraction for a handful of cities still "
+        "forces full-globe reads, which makes this pipeline impractical and was "
+        "the reason the run stalled before writing any tile output. Use the CDS "
+        "pull scripts instead (`pull_weather.py` and `pull_mrt.py`) or switch "
+        "this script to a different store with smaller spatial chunks."
+    )
+    raise RuntimeError(msg)
 
 
 def _resolve_dataset_variables(ds: Dataset) -> dict[str, str]:
@@ -109,7 +175,7 @@ def _open_zarr_store(max_workers: int) -> Dataset:
 
     dask.config.set(scheduler="threads", num_workers=max_workers)
 
-    fs = gcsfs.GCSFileSystem()
+    fs = gcsfs.GCSFileSystem(token="anon")  # noqa: S106
     store = fs.get_mapper(ERA5_ARCO_STORE)
     ds = xr.open_zarr(store, consolidated=True, decode_times=False)
 
@@ -241,7 +307,6 @@ def _calc_cossza(
     np = cast("Any", importlib.import_module("numpy"))
     tf = cast("Any", importlib.import_module("thermofeel"))
 
-    # Prefer integrated hourly cossza for consistency with MRT methodology.
     integrated_fn = cast(
         "Any",
         getattr(tf, "calculate_cos_solar_zenith_angle_integrated", None),
@@ -263,7 +328,6 @@ def _calc_cossza(
 
         if integrated_fn is not None:
             try:
-                # Common thermofeel signature seen in current examples/issues.
                 val = integrated_fn(
                     lat=lat,
                     lon=lon,
@@ -275,7 +339,6 @@ def _calc_cossza(
                     step=1,
                 )
             except TypeError:
-                # Fallback for older/newer parameter naming.
                 val = integrated_fn(
                     lat=lat,
                     lon=lon,
@@ -298,7 +361,6 @@ def _calc_cossza(
 
         out[i] = float(val)
 
-    # Guard against tiny negative numerical noise / >1 values.
     return np.clip(out, 0.0, 1.0)
 
 
@@ -323,8 +385,6 @@ def _compute_tile_frame(
     lats_da = xr.DataArray(lats, dims="location")
     lons_da = xr.DataArray(lons, dims="location")
 
-    # Time axis is integer hours since 1959-01-01 (decode_times=False on open).
-    # Slice by integer offsets to avoid overflow when decoding the full range.
     start_h, end_h = _year_time_slice(year)
     year_slice: Any = ds[ERA5_ALL_ARCO_VARIABLES].sel(time=slice(start_h, end_h))
     city_selection: Any = year_slice.sel(
@@ -334,7 +394,6 @@ def _compute_tile_frame(
     )
     city_data: Any = city_selection.compute()
 
-    # Replace integer hour coordinate with proper naive datetimes.
     n_time_steps: int = len(city_data.time)
     pd_module = cast("Any", importlib.import_module("pandas"))
     proper_times: Any = pd_module.date_range(
@@ -344,20 +403,15 @@ def _compute_tile_frame(
     )
     city_data = city_data.assign_coords(time=proper_times)
 
-    # Weather variables
     u10: Any = city_data["10u"].values
     v10: Any = city_data["10v"].values
     t2m: Any = city_data["2t"].values
     d2m: Any = city_data["2d"].values
 
-    # Radiation variables used by thermofeel MRT.
-    # ERA5 accumulated radiation fields are commonly converted from J/m^2
-    # per time step to W/m^2 by dividing by 3600 for hourly data.
     ssrd: Any = city_data["ssrd"].values * RADIATION_SCALE
     strd: Any = city_data["strd"].values * RADIATION_SCALE
     fdir: Any = city_data["fdir"].values * RADIATION_SCALE
 
-    # Compute cossza because it is not present in the ARCO store.
     times: ArrayLike = city_data.time.values
     n_locations = len(lats)
 
@@ -372,8 +426,6 @@ def _compute_tile_frame(
     gamma_td: Any = _B * dewpoint_c / (_C + dewpoint_c)
     relative_humidity: Any = np.exp(gamma_td - gamma_t) * 100.0
 
-    # thermofeel returns MRT in Kelvin.
-    # Preferred method uses ssrd, fdir, strd, and cossza.
     try:
         mrt_k: Any = tf.calculate_mean_radiant_temperature(
             ssrd=ssrd.ravel(),
@@ -382,7 +434,6 @@ def _compute_tile_frame(
             cossza=cossza.ravel(),
         )
     except TypeError:
-        # Compatibility with alternate thermofeel API naming.
         mrt_k = tf.mrt.mean_radiant_temperature(
             ssrd=ssrd.ravel(),
             strd=strd.ravel(),
@@ -498,6 +549,7 @@ def process_era5(
         LOGGER.warning("No ERA5 cities selected for shard %s.", city_shard_index)
         return
 
+    _ensure_point_extraction_is_tractable()
     ds = _open_zarr_store(max_workers=max_workers)
 
     for tile_id in tqdm(
