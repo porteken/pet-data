@@ -7,6 +7,8 @@ import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from tqdm.auto import tqdm
+
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import LOGGER, DataFrame, pa, partition_file_exists, pd, pq
 from shards import resolve_filesystem
@@ -361,7 +363,11 @@ def process_era5(
 
     ds = _open_zarr_store(max_workers=max_workers)
 
-    for tile_id in sorted(shard_df["tile_id"].unique()):
+    for tile_id in tqdm(
+        sorted(shard_df["tile_id"].unique()),
+        desc="ERA5 tiles",
+        unit="tile",
+    ):
         tile_cities = shard_df[shard_df["tile_id"] == tile_id].copy()
         _process_era5_tile(ds, year, era5_root, int(tile_id), tile_cities)
 

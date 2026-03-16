@@ -10,6 +10,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, cast
 
+from tqdm.auto import tqdm
+
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import (
     LOGGER,
@@ -143,12 +145,17 @@ def _run_mrt_tile_jobs(
     month: int | None,
     client: CDSClient,
 ) -> None:
+    progress_desc = "MRT tiles"
     worker_count = max(
         1,
         min(max_workers, len(tile_jobs), MRT_CDS_REQUEST_CONCURRENCY),
     )
     if worker_count == 1:
-        for tile_row, tile_cells in tile_jobs:
+        for tile_row, tile_cells in tqdm(
+            tile_jobs,
+            desc=progress_desc,
+            unit="tile",
+        ):
             _process_mrt_tile(
                 client=client,
                 year=year,
@@ -179,7 +186,12 @@ def _run_mrt_tile_jobs(
             ): int(tile_row["tile_id"])
             for tile_row, tile_cells in tile_jobs
         }
-        for future in as_completed(future_to_tile_id):
+        for future in tqdm(
+            as_completed(future_to_tile_id),
+            total=len(future_to_tile_id),
+            desc=progress_desc,
+            unit="tile",
+        ):
             tile_id = future_to_tile_id[future]
             future.result()
             LOGGER.info("MRT tile %s completed for %s.", tile_id, year)

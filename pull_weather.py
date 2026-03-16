@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from zipfile import is_zipfile
 
+from tqdm.auto import tqdm
+
 from pull_cds_shared import (
     LOGGER,
     CDSClient,
@@ -262,6 +264,7 @@ def _run_weather_city_jobs(
     date_range: str,
     max_workers: int,
 ) -> list[DataFrame]:
+    progress_desc = "Weather locations"
     worker_count = max(
         1,
         min(
@@ -283,7 +286,11 @@ def _run_weather_city_jobs(
                     date_range=date_range,
                     download_path=download_path,
                 )
-                for location_id, lat, lng, download_path in city_jobs
+                for location_id, lat, lng, download_path in tqdm(
+                    city_jobs,
+                    desc=progress_desc,
+                    unit="location",
+                )
             )
             if not weather_df.empty
         ]
@@ -306,7 +313,12 @@ def _run_weather_city_jobs(
             )
             for location_id, lat, lng, download_path in city_jobs
         ]
-        for future in as_completed(futures):
+        for future in tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc=progress_desc,
+            unit="location",
+        ):
             weather_df = future.result()
             if not weather_df.empty:
                 frames.append(weather_df)
