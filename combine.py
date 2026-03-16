@@ -8,7 +8,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from boxes import OUTPUT_DIR
 from shards import (
@@ -19,6 +19,9 @@ from shards import (
     resolve_filesystem,
     select_shards,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 DataFrame: TypeAlias = Any
 
@@ -341,6 +344,29 @@ def _weather_year_filter(year: int) -> object:
     return (timestamp_field >= range_start) & (timestamp_field < range_end)
 
 
+def _passthrough_era5_shard(
+    shard_key: ShardKey,
+    *,
+    era5_root: str,
+    era5_files: list[str],
+    out_dir: str,
+) -> None:
+    """Copy an era5 parquet directly to the combined output path."""
+    era5_df = read_parquet_files(era5_root, era5_files)
+    if era5_df.empty:
+        LOGGER.warning("Skipping empty era5 shard %s.", shard_key.label)
+        return
+
+    output_dir = Path(out_dir) / shard_key.partition_path
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "combined.parquet"
+    era5_df.sort_values(["location_id", "time"]).reset_index(drop=True).to_parquet(
+        output_path,
+        index=False,
+    )
+    LOGGER.info("Wrote %s era5 rows to %s.", len(era5_df), output_path)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -350,6 +376,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--weather-root", default="weather_data_parquet")
     parser.add_argument("--mrt-root", default="utci_data_parquet")
+    parser.add_argument(
+        "--era5-root",
+        default=None,
+        help=(
+            "Path to era5_data_parquet root. When era5 shards are found for the "
+            "requested year/tile range, they are passed through directly to the "
+            "combined output without merging weather and MRT."
+        ),
+    )
     parser.add_argument("--out-dir", default="combined_data_parquet")
     parser.add_argument("--year", type=int)
     parser.add_argument("--tile-id", dest="tile_ids", action="append", type=int)
@@ -358,53 +393,91 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    """Combine the selected weather and MRT parquet shards."""
-    args = _parse_args()
-    cities_df = pd.read_csv(
-        Path("cities.csv"),
-        usecols=["location_id", "lat", "lng"],
-    )
-    weather_shards = discover_parquet_shards(args.weather_root)
-    mrt_shards = discover_parquet_shards(args.mrt_root)
-    if weather_shards:
-        common_shards = discover_common_shards(args.weather_root, args.mrt_root)
-        selected_shards = select_shards(
-            common_shards,
-            year=args.year,
-            tile_ids=args.tile_ids,
-            shard_index=args.shard_index,
-            shard_count=args.shard_count,
-        )
-
-        if not selected_shards:
-            LOGGER.warning("No matching shards found for the requested filters.")
-            return
-
-        for shard_key in selected_shards:
-            combine_shard(
-                shard_key=shard_key,
-                weather_root=args.weather_root,
-                weather_files=weather_shards[shard_key],
-                mrt_root=args.mrt_root,
-                mrt_files=mrt_shards[shard_key],
-                cities_df=cities_df,
-                out_dir=args.out_dir,
-            )
-        return
-
-    weather_city_shards = _discover_weather_city_shards(args.weather_root)
-    if not weather_city_shards:
-        LOGGER.warning("No weather parquet shards found under %s.", args.weather_root)
-        return
-
-    selected_shards = select_shards(
-        mrt_shards.keys(),
+def _select_requested_shards(
+    shard_keys: Iterable[ShardKey],
+    args: argparse.Namespace,
+) -> list[ShardKey]:
+    return select_shards(
+        shard_keys,
         year=args.year,
         tile_ids=args.tile_ids,
         shard_index=args.shard_index,
         shard_count=args.shard_count,
     )
+
+
+def _process_era5_passthrough(args: argparse.Namespace) -> bool:
+    if not args.era5_root:
+        return False
+
+    era5_shards = discover_parquet_shards(args.era5_root)
+    if not era5_shards:
+        return False
+
+    selected_shards = _select_requested_shards(era5_shards.keys(), args)
+    if not selected_shards:
+        return False
+
+    for shard_key in selected_shards:
+        _passthrough_era5_shard(
+            shard_key,
+            era5_root=args.era5_root,
+            era5_files=era5_shards[shard_key],
+            out_dir=args.out_dir,
+        )
+    return True
+
+
+def _process_standard_weather_shards(
+    args: argparse.Namespace,
+    cities_df: DataFrame,
+    mrt_shards: dict[ShardKey, list[str]],
+) -> bool:
+    weather_shards = discover_parquet_shards(args.weather_root)
+    if not weather_shards:
+        return False
+
+    common_shards = discover_common_shards(args.weather_root, args.mrt_root)
+    selected_shards = _select_requested_shards(common_shards, args)
+
+    if not selected_shards:
+        LOGGER.warning("No matching shards found for the requested filters.")
+        return True
+
+    for shard_key in selected_shards:
+        combine_shard(
+            shard_key=shard_key,
+            weather_root=args.weather_root,
+            weather_files=weather_shards[shard_key],
+            mrt_root=args.mrt_root,
+            mrt_files=mrt_shards[shard_key],
+            cities_df=cities_df,
+            out_dir=args.out_dir,
+        )
+    return True
+
+
+def _weather_files_for_tile(
+    tile_cities_df: DataFrame,
+    weather_city_shards: dict[int, list[str]],
+) -> list[str]:
+    return sorted(
+        {
+            file_path
+            for shard_index in tile_cities_df["city_shard_index"].unique()
+            for file_path in weather_city_shards.get(int(shard_index), [])
+        },
+    )
+
+
+def _process_city_sharded_weather(args: argparse.Namespace) -> None:
+    mrt_shards = discover_parquet_shards(args.mrt_root)
+    weather_city_shards = _discover_weather_city_shards(args.weather_root)
+    if not weather_city_shards:
+        LOGGER.warning("No weather parquet shards found under %s.", args.weather_root)
+        return
+
+    selected_shards = _select_requested_shards(mrt_shards.keys(), args)
     if not selected_shards:
         LOGGER.warning("No MRT shards found for the requested filters.")
         return
@@ -418,13 +491,7 @@ def main() -> None:
             LOGGER.warning("No cities found for tile %s.", shard_key.tile_id)
             continue
 
-        weather_files = sorted(
-            {
-                file_path
-                for shard_index in tile_cities_df["city_shard_index"].unique()
-                for file_path in weather_city_shards.get(int(shard_index), [])
-            },
-        )
+        weather_files = _weather_files_for_tile(tile_cities_df, weather_city_shards)
         if not weather_files:
             LOGGER.warning(
                 "No weather shard files found for tile %s.",
@@ -443,6 +510,24 @@ def main() -> None:
             weather_columns=WEATHER_COLUMNS_WITH_LOCATION_ID,
             weather_filters=_weather_year_filter(shard_key.year),
         )
+
+
+def main() -> None:
+    """Combine the selected weather and MRT parquet shards."""
+    args = _parse_args()
+    cities_df = pd.read_csv(
+        Path("cities.csv"),
+        usecols=["location_id", "lat", "lng"],
+    )
+
+    if _process_era5_passthrough(args):
+        return
+
+    mrt_shards = discover_parquet_shards(args.mrt_root)
+    if _process_standard_weather_shards(args, cities_df, mrt_shards):
+        return
+
+    _process_city_sharded_weather(args)
 
 
 if __name__ == "__main__":

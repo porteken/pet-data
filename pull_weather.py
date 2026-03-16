@@ -68,13 +68,18 @@ def process_weather(
     *,
     year: int | None = None,
     month: int | None = None,
+    start_year: int | None = None,
     city_shard_index: int = 0,
     city_shard_count: int = 1,
     max_workers: int = 4,
 ) -> None:
     """Download and process ERA5 weather data grouped by city shards."""
     weather_root = f"{out_dir}/weather_data_parquet"
-    date_range = _build_weather_date_range(year=year, month=month)
+    date_range = _build_weather_date_range(
+        year=year,
+        month=month,
+        start_year=start_year,
+    )
 
     shard_city_cells = _load_weather_city_shard(
         city_shard_index=city_shard_index,
@@ -233,12 +238,20 @@ def _weather_partition_path(city_shard_index: int) -> str:
     return f"city_shard_index={city_shard_index}"
 
 
-def _build_weather_date_range(*, year: int | None, month: int | None) -> str:
+def _build_weather_date_range(
+    *,
+    year: int | None,
+    month: int | None,
+    start_year: int | None = None,
+) -> str:
     if month is not None and year is None:
         msg = "--month requires --year for weather pulls."
         raise ValueError(msg)
     if year is None:
-        return build_full_date_range()
+        full_range_kwargs: dict[str, int] = {}
+        if start_year is not None:
+            full_range_kwargs["start_year"] = start_year
+        return build_full_date_range(**full_range_kwargs)
     return build_year_date_range(year, month=month)
 
 
@@ -569,6 +582,15 @@ def _parse_args() -> argparse.Namespace:
         default=4,
         help="Maximum number of concurrent workers for weather pulls.",
     )
+    parser.add_argument(
+        "--start-year",
+        type=int,
+        default=None,
+        help=(
+            "Earliest year to include in a full-range pull. "
+            "Ignored when --year is specified."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -590,6 +612,7 @@ def main() -> None:
             args.out_dir,
             year=args.year,
             month=args.month,
+            start_year=args.start_year,
             city_shard_index=args.weather_city_shard_index,
             city_shard_count=args.weather_city_shard_count,
             max_workers=args.max_workers,

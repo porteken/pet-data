@@ -8,3 +8,7 @@ netCDF4
 tqdm
 psycopg2-binary
 requests
+gcsfs
+zarr
+dask
+thermofeel

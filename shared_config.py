@@ -75,10 +75,13 @@ def build_year_months(year: int, *, month: int | None = None) -> list[str]:
     ]
 
 
-def build_full_date_range() -> str:
-    """Return the full supported pull window."""
+def build_full_date_range(*, start_year: int | None = None) -> str:
+    """Return the full supported pull window, optionally clamped to a start year."""
     end_date = pull_end_date()
-    return f"{PULL_START_DATE.isoformat()}/{end_date.isoformat()}"
+    effective_start = PULL_START_DATE
+    if start_year is not None:
+        effective_start = max(PULL_START_DATE, date(start_year, 1, 1))
+    return f"{effective_start.isoformat()}/{end_date.isoformat()}"
 
 
 def shared_area() -> list[float]:

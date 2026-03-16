@@ -16,6 +16,8 @@ jobs:
       start_year: ${{ steps.compute.outputs.start_year }}
       end_year: ${{ steps.compute.outputs.end_year }}
       years: ${{ steps.compute.outputs.years }}
+      era5_years: ${{ steps.compute.outputs.era5_years }}
+      cds_years: ${{ steps.compute.outputs.cds_years }}
       end_date: ${{ steps.compute.outputs.end_date }}
     steps:
       - id: compute
@@ -24,14 +26,20 @@ jobs:
           import json
           from datetime import date, timedelta
 
-          start_year = 2000
+          ERA5_START = 2000
+          ERA5_END = 2023
+          CDS_START = 2024
           end_date = date.today().replace(day=1) - timedelta(days=1)
-          years = list(range(start_year, end_date.year + 1))
+          years = list(range(ERA5_START, end_date.year + 1))
+          era5_years = list(range(ERA5_START, min(ERA5_END, end_date.year) + 1))
+          cds_years = list(range(CDS_START, end_date.year + 1))
 
-          print(f"start_year={start_year}")
+          print(f"start_year={ERA5_START}")
           print(f"end_year={end_date.year}")
           print(f"end_date={end_date.isoformat()}")
           print(f"years={json.dumps(years)}")
+          print(f"era5_years={json.dumps(era5_years)}")
+          print(f"cds_years={json.dumps(cds_years)}")
           PY
 
   setup-locations:
@@ -127,6 +135,17 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: aws s3 rm s3://pet-parquet-files/utci_data_parquet/ --recursive
 
+  clear-era5-output:
+    needs: deploy-infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear ERA5 Prefix
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: aws s3 rm s3://pet-parquet-files/era5_data_parquet/ --recursive
+
   cancel-cds-jobs:
     runs-on: ubuntu-latest
     steps:
@@ -144,6 +163,48 @@ jobs:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: python cancel_cds_jobs.py
+
+  pull-google-era5:
+    needs: [setup-locations, clear-era5-output, build-year-range]
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 8
+      fail-fast: false
+      matrix:
+        year: ${{ fromJSON(needs.build-year-range.outputs.era5_years) }}
+        city_shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    name: ERA5 ${{ matrix.year }} shard ${{ matrix.city_shard_index }}/10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install All Dependencies
+        run: pip install -r requirements.txt
+      - name: Download Locations Data
+        uses: actions/download-artifact@v7
+        with:
+          name: locations-data
+          path: .
+      - name: Pull ERA5 from Google ARCO
+        run: |
+          python google_era5.py \
+            --year ${{ matrix.year }} \
+            --city-shard-index ${{ matrix.city_shard_index }} \
+            --city-shard-count 10 \
+            --max-workers 4
+      - name: Upload ERA5 Shards to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws s3 sync \
+            ./era5_data_parquet/year=${{ matrix.year }}/ \
+            s3://pet-parquet-files/era5_data_parquet/year=${{ matrix.year }}/
 
   process-weather:
     needs: [setup-locations, clear-weather-output, build-year-range, cancel-cds-jobs]
@@ -178,6 +239,7 @@ jobs:
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
           python pull_weather.py \
+            --start-year 2024 \
             --weather-city-shard-index ${{ matrix.city_shard_index }} \
             --weather-city-shard-count 10 \
             --max-workers 2
@@ -196,7 +258,7 @@ jobs:
       max-parallel: 4
       fail-fast: false
       matrix:
-        year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
+        year: ${{ fromJSON(needs.build-year-range.outputs.cds_years) }}
     name: MRT ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v6
@@ -226,7 +288,7 @@ jobs:
         run: aws s3 sync ./utci_data_parquet/year=${{ matrix.year }}/ s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/
 
   process-pet:
-    needs: [setup-locations, process-weather, process-mrt, build-year-range]
+    needs: [setup-locations, process-weather, process-mrt, pull-google-era5, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 8
@@ -250,18 +312,21 @@ jobs:
         with:
           name: locations-data
           path: .
-      - name: Download Weather and MRT Shards from S3
+      - name: Download ERA5, Weather and MRT Shards from S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: |
+          mkdir -p ./era5_data_parquet/year=${{ matrix.year }}
           mkdir -p ./utci_data_parquet/year=${{ matrix.year }}
+          aws s3 sync s3://pet-parquet-files/era5_data_parquet/year=${{ matrix.year }}/ ./era5_data_parquet/year=${{ matrix.year }}/
           aws s3 sync s3://pet-parquet-files/weather_data_parquet/ ./weather_data_parquet/
           aws s3 sync s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/ ./utci_data_parquet/year=${{ matrix.year }}/
       - name: Combine and Compute PET
         run: |
           python combine.py \
+            --era5-root ./era5_data_parquet \
             --year ${{ matrix.year }} \
             --shard-index ${{ matrix.pet_shard_index }} \
             --shard-count 4
