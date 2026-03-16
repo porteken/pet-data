@@ -8,8 +8,6 @@ import json
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
-from tqdm.auto import tqdm
-
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import LOGGER, DataFrame, pa, partition_file_exists, pd, pq
 from shards import resolve_filesystem
@@ -89,8 +87,8 @@ def _load_arco_store_metadata() -> dict[str, object]:
         return cast("dict[str, object]", json.load(metadata_file))
 
 
-def _ensure_point_extraction_is_tractable() -> None:
-    """Fail fast when the configured ARCO store uses full-globe hourly chunks."""
+def _problematic_arco_chunks() -> dict[str, tuple[tuple[int, ...], tuple[int, ...]]]:
+    """Return any variables chunked as one full global field per hour."""
     metadata = _load_arco_store_metadata()
     metadata_entries = cast("dict[str, object]", metadata.get("metadata", {}))
 
@@ -117,6 +115,12 @@ def _ensure_point_extraction_is_tractable() -> None:
                 problematic_chunks[canonical_name] = (chunks, shape)
             break
 
+    return problematic_chunks
+
+
+def _warn_if_full_globe_chunks() -> None:
+    """Warn when the configured ARCO store requires hourly full-globe reads."""
+    problematic_chunks = _problematic_arco_chunks()
     if not problematic_chunks:
         return
 
@@ -124,16 +128,14 @@ def _ensure_point_extraction_is_tractable() -> None:
         f"{name}: chunks={chunks} shape={shape}"
         for name, (chunks, shape) in sorted(problematic_chunks.items())
     )
-    msg = (
-        "The configured Google ARCO ERA5 store is chunked as one full global "
-        "latitude/longitude field per hour for the variables this script needs "
-        f"({formatted_chunks}). Point extraction for a handful of cities still "
-        "forces full-globe reads, which makes this pipeline impractical and was "
-        "the reason the run stalled before writing any tile output. Use the CDS "
-        "pull scripts instead (`pull_weather.py` and `pull_mrt.py`) or switch "
-        "this script to a different store with smaller spatial chunks."
+    LOGGER.warning(
+        "Google ARCO ERA5 variables are chunked as one full global "
+        "latitude/longitude field per hour (%s). This script now reads each "
+        "requested shard/year once and splits the in-memory result by tile to "
+        "avoid repeated full-globe fetches, but the initial shard read can "
+        "still be slow.",
+        formatted_chunks,
     )
-    raise RuntimeError(msg)
 
 
 def _resolve_dataset_variables(ds: Dataset) -> dict[str, str]:
@@ -364,12 +366,12 @@ def _calc_cossza(
     return np.clip(out, 0.0, 1.0)
 
 
-def _compute_tile_frame(
+def _compute_location_frame(
     ds: Dataset,
     year: int,
-    tile_cities: DataFrame,
+    selected_cities: DataFrame,
 ) -> DataFrame:
-    """Fetch one year of ERA5 data for a tile's city points.
+    """Fetch one year of ERA5 data for a set of city points.
 
     Return a combined DataFrame with weather variables and MRT already in the
     final combined schema.
@@ -378,9 +380,10 @@ def _compute_tile_frame(
     xr = cast("Any", importlib.import_module("xarray"))
     tf = cast("Any", importlib.import_module("thermofeel"))
 
-    lats = tile_cities["lat"].values.astype(float)
-    lons = tile_cities["lng"].values.astype(float)
-    location_ids = tile_cities["location_id"].values
+    lats = selected_cities["lat"].values.astype(float)
+    lons = selected_cities["lng"].values.astype(float)
+    location_ids = selected_cities["location_id"].values
+    tile_ids = selected_cities["tile_id"].values
 
     lats_da = xr.DataArray(lats, dims="location")
     lons_da = xr.DataArray(lons, dims="location")
@@ -445,12 +448,14 @@ def _compute_tile_frame(
 
     times_tiled: Any = np.tile(times, n_locations)
     loc_ids_rep: Any = np.repeat(location_ids, n_time_steps)
+    tile_ids_rep: Any = np.repeat(tile_ids, n_time_steps)
     lats_rep: Any = np.repeat(lats, n_time_steps)
     lons_rep: Any = np.repeat(lons, n_time_steps)
 
     frame = pd.DataFrame(
         {
             "location_id": loc_ids_rep,
+            "tile_id": tile_ids_rep,
             "lat": lats_rep,
             "lng": lons_rep,
             "time": times_tiled,
@@ -462,48 +467,8 @@ def _compute_tile_frame(
     )
     return (
         frame.dropna(subset=["t", "v", "rh", "mrt"])
-        .sort_values(["location_id", "time"])
+        .sort_values(["tile_id", "location_id", "time"])
         .reset_index(drop=True)
-    )
-
-
-def _process_era5_tile(
-    ds: Dataset,
-    year: int,
-    era5_root: str,
-    tile_id: int,
-    tile_cities: DataFrame,
-) -> None:
-    if _era5_shard_exists(era5_root, year, tile_id):
-        LOGGER.info(
-            "ERA5 tile %s year %s already exists. Skipping.",
-            tile_id,
-            year,
-        )
-        return
-
-    LOGGER.info(
-        "Processing ERA5 tile %s year %s (%s cities).",
-        tile_id,
-        year,
-        len(tile_cities),
-    )
-
-    frame = _compute_tile_frame(ds, year, tile_cities)
-    if frame.empty:
-        LOGGER.warning(
-            "No ERA5 rows returned for tile %s year %s.",
-            tile_id,
-            year,
-        )
-        return
-
-    _write_era5_partition(era5_root, year, tile_id, frame)
-    LOGGER.info(
-        "Wrote %s ERA5 rows for tile %s year %s.",
-        len(frame),
-        tile_id,
-        year,
     )
 
 
@@ -521,6 +486,60 @@ def _write_era5_partition(
     table: Any = pa.Table.from_pandas(frame, preserve_index=False)
     with filesystem.open_output_stream(output_path) as out_stream:
         pq.write_table(table, out_stream)
+
+
+def _pending_shard_tiles(
+    shard_df: DataFrame,
+    *,
+    era5_root: str,
+    year: int,
+) -> DataFrame:
+    """Return only the cities for tiles that still need an output shard."""
+    pending_frames: list[DataFrame] = []
+    tile_ids = sorted(int(raw_tile_id) for raw_tile_id in shard_df["tile_id"].unique())
+    for tile_id in tile_ids:
+        tile_cities = shard_df[shard_df["tile_id"] == tile_id].copy()
+        if _era5_shard_exists(era5_root, year, tile_id):
+            LOGGER.info(
+                "ERA5 tile %s year %s already exists. Skipping.",
+                tile_id,
+                year,
+            )
+            continue
+
+        LOGGER.info(
+            "Queueing ERA5 tile %s year %s (%s cities).",
+            tile_id,
+            year,
+            len(tile_cities),
+        )
+        pending_frames.append(tile_cities)
+
+    if not pending_frames:
+        return shard_df.iloc[0:0].copy()
+    return pd.concat(pending_frames, ignore_index=True)
+
+
+def _write_shard_tiles(
+    *,
+    era5_root: str,
+    year: int,
+    frame: DataFrame,
+) -> None:
+    """Split a shard-wide frame by tile and write each partition."""
+    if frame.empty:
+        LOGGER.warning("No ERA5 rows returned for year %s.", year)
+        return
+
+    for tile_id, tile_frame in frame.groupby("tile_id", sort=True):
+        output_frame = tile_frame.drop(columns=["tile_id"]).reset_index(drop=True)
+        _write_era5_partition(era5_root, year, int(tile_id), output_frame)
+        LOGGER.info(
+            "Wrote %s ERA5 rows for tile %s year %s.",
+            len(output_frame),
+            int(tile_id),
+            year,
+        )
 
 
 def process_era5(
@@ -549,16 +568,28 @@ def process_era5(
         LOGGER.warning("No ERA5 cities selected for shard %s.", city_shard_index)
         return
 
-    _ensure_point_extraction_is_tractable()
-    ds = _open_zarr_store(max_workers=max_workers)
+    pending_shard_df = _pending_shard_tiles(shard_df, era5_root=era5_root, year=year)
+    if pending_shard_df.empty:
+        LOGGER.info(
+            "ERA5 processing complete for year=%s shard %s/%s with no pending tiles.",
+            year,
+            city_shard_index + 1,
+            city_shard_count,
+        )
+        return
 
-    for tile_id in tqdm(
-        sorted(shard_df["tile_id"].unique()),
-        desc="ERA5 tiles",
-        unit="tile",
-    ):
-        tile_cities = shard_df[shard_df["tile_id"] == tile_id].copy()
-        _process_era5_tile(ds, year, era5_root, int(tile_id), tile_cities)
+    _warn_if_full_globe_chunks()
+    ds = _open_zarr_store(max_workers=max_workers)
+    LOGGER.info(
+        "Reading ERA5 shard %s/%s for year %s across %s cities in %s pending tiles.",
+        city_shard_index + 1,
+        city_shard_count,
+        year,
+        len(pending_shard_df),
+        pending_shard_df["tile_id"].nunique(),
+    )
+    frame = _compute_location_frame(ds, year, pending_shard_df)
+    _write_shard_tiles(era5_root=era5_root, year=year, frame=frame)
 
     LOGGER.info(
         "ERA5 processing complete for year=%s shard %s/%s.",
