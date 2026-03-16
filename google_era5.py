@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, TypeAlias, cast
 
 from tqdm.auto import tqdm
 
@@ -13,17 +13,17 @@ from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import LOGGER, DataFrame, pa, partition_file_exists, pd, pq
 from shards import resolve_filesystem
 
-if TYPE_CHECKING:
-    from xarray import Dataset
+Dataset: TypeAlias = Any
+ArrayLike: TypeAlias = Any
 
-
-# ARCO analysis-ready ERA5 store.
+# Google Cloud ARCO analysis-ready ERA5 store.
 ERA5_ARCO_STORE = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
 
 ERA5_START_YEAR = 2000
 ERA5_END_YEAR = 2023
 
-ERA5_VARIABLE_CANDIDATES = {
+# Only variables expected to exist in the ARCO dataset go here.
+ERA5_VARIABLE_CANDIDATES: dict[str, list[str]] = {
     "10u": [
         "10u",
         "10m_u_component_of_wind",
@@ -51,18 +51,17 @@ ERA5_VARIABLE_CANDIDATES = {
     "fdir": [
         "fdir",
         "total_sky_direct_solar_radiation_at_surface",
-    ],
-    "cossza": [
-        "cossza",
-        "cosine_of_solar_zenith_angle",
-        "cosine_solar_zenith_angle",
+        # Fallback in case the store exposes only clear-sky direct solar radiation.
+        # Prefer total-sky when available.
+        "clear_sky_direct_solar_radiation_at_surface",
     ],
 }
 
 ERA5_WEATHER_VARIABLES = ["10u", "10v", "2t", "2d"]
-ERA5_MRT_VARIABLES = ["ssrd", "strd", "fdir", "cossza"]
-ERA5_ALL_VARIABLES = [*ERA5_WEATHER_VARIABLES, *ERA5_MRT_VARIABLES]
+ERA5_MRT_ARCO_VARIABLES = ["ssrd", "strd", "fdir"]
+ERA5_ALL_ARCO_VARIABLES = [*ERA5_WEATHER_VARIABLES, *ERA5_MRT_ARCO_VARIABLES]
 
+# Hourly accumulated radiation -> W/m^2
 RADIATION_SCALE = 1.0 / 3600.0
 
 _B = 17.625
@@ -84,7 +83,7 @@ def _resolve_dataset_variables(ds: Dataset) -> dict[str, str]:
         resolved[canonical_name] = actual_name
 
     if missing:
-        available_sample = sorted(ds.data_vars)[:50]
+        available_sample = sorted(ds.data_vars)[:80]
         msg = (
             "Required ARCO ERA5 variables could not be resolved: "
             f"{missing}. Variable candidates: "
@@ -113,6 +112,7 @@ def _open_zarr_store(max_workers: int) -> Dataset:
     fs = gcsfs.GCSFileSystem()
     store = fs.get_mapper(ERA5_ARCO_STORE)
     ds = xr.open_zarr(store, consolidated=True, decode_times=False)
+
     resolved_names = _resolve_dataset_variables(ds)
     rename_map = {
         actual_name: canonical_name
@@ -126,6 +126,7 @@ def _year_time_slice(year: int) -> tuple[int, int]:
     """Return (start_h, end_h_inclusive) as integer hours since 1959-01-01."""
     pd_module = cast("Any", importlib.import_module("pandas"))
     epoch = pd_module.Timestamp("1959-01-01")
+
     start_h: int = int(
         (pd_module.Timestamp(f"{year}-01-01") - epoch).total_seconds() // 3600,
     )
@@ -143,6 +144,7 @@ def _ensure_tile_outputs() -> None:
     ]
     if all(p.exists() for p in required):
         return
+
     LOGGER.info("Tile metadata missing. Regenerating under %s.", OUTPUT_DIR)
     generate_tile_outputs()
 
@@ -156,6 +158,7 @@ def _load_era5_city_shard(
     if city_shard_count < 1:
         msg = "city_shard_count must be >= 1"
         raise ValueError(msg)
+
     if city_shard_index < 0 or city_shard_index >= city_shard_count:
         msg = f"city_shard_index must be between 0 and {city_shard_count - 1}"
         raise ValueError(msg)
@@ -224,6 +227,81 @@ def _era5_shard_exists(era5_root: str, year: int, tile_id: int) -> bool:
     )
 
 
+def _calc_cossza(
+    *,
+    lat: float,
+    lon: float,
+    times: ArrayLike,
+) -> ArrayLike:
+    """Return hourly cosine solar zenith angle for one city/time series.
+
+    Uses thermofeel helper functions instead of expecting cossza to exist
+    in the ARCO dataset.
+    """
+    np = cast("Any", importlib.import_module("numpy"))
+    tf = cast("Any", importlib.import_module("thermofeel"))
+
+    # Prefer integrated hourly cossza for consistency with MRT methodology.
+    integrated_fn = cast(
+        "Any",
+        getattr(tf, "calculate_cos_solar_zenith_angle_integrated", None),
+    )
+    instant_fn = cast("Any", getattr(tf, "calculate_cos_solar_zenith_angle", None))
+
+    if integrated_fn is None and instant_fn is None:
+        msg = (
+            "thermofeel does not expose either "
+            "'calculate_cos_solar_zenith_angle_integrated' or "
+            "'calculate_cos_solar_zenith_angle'."
+        )
+        raise AttributeError(msg)
+
+    out = np.empty(len(times), dtype="float64")
+
+    for i, raw_ts in enumerate(times):
+        timestamp = pd.Timestamp(raw_ts)
+
+        if integrated_fn is not None:
+            try:
+                # Common thermofeel signature seen in current examples/issues.
+                val = integrated_fn(
+                    lat=lat,
+                    lon=lon,
+                    y=timestamp.year,
+                    m=timestamp.month,
+                    d=timestamp.day,
+                    h=timestamp.hour,
+                    base=0,
+                    step=1,
+                )
+            except TypeError:
+                # Fallback for older/newer parameter naming.
+                val = integrated_fn(
+                    lat=lat,
+                    lon=lon,
+                    y=timestamp.year,
+                    m=timestamp.month,
+                    d=timestamp.day,
+                    h=timestamp.hour,
+                    tbegin=0,
+                    tend=1,
+                )
+        else:
+            val = instant_fn(
+                lat=lat,
+                lon=lon,
+                y=timestamp.year,
+                m=timestamp.month,
+                d=timestamp.day,
+                h=timestamp.hour,
+            )
+
+        out[i] = float(val)
+
+    # Guard against tiny negative numerical noise / >1 values.
+    return np.clip(out, 0.0, 1.0)
+
+
 def _compute_tile_frame(
     ds: Dataset,
     year: int,
@@ -234,8 +312,8 @@ def _compute_tile_frame(
     Return a combined DataFrame with weather variables and MRT already in the
     final combined schema.
     """
-    xr = cast("Any", importlib.import_module("xarray"))
     np = cast("Any", importlib.import_module("numpy"))
+    xr = cast("Any", importlib.import_module("xarray"))
     tf = cast("Any", importlib.import_module("thermofeel"))
 
     lats = tile_cities["lat"].values.astype(float)
@@ -248,13 +326,13 @@ def _compute_tile_frame(
     # Time axis is integer hours since 1959-01-01 (decode_times=False on open).
     # Slice by integer offsets to avoid overflow when decoding the full range.
     start_h, end_h = _year_time_slice(year)
-    city_selection: Any = ds[ERA5_ALL_VARIABLES].sel(
+    city_selection: Any = ds[ERA5_ALL_ARCO_VARIABLES].sel(
         time=slice(start_h, end_h),
         latitude=lats_da,
         longitude=lons_da,
         method="nearest",
     )
-    city_data = city_selection.compute()
+    city_data: Any = city_selection.compute()
 
     # Replace integer hour coordinate with proper naive datetimes.
     n_time_steps: int = len(city_data.time)
@@ -278,7 +356,14 @@ def _compute_tile_frame(
     ssrd: Any = city_data["ssrd"].values * RADIATION_SCALE
     strd: Any = city_data["strd"].values * RADIATION_SCALE
     fdir: Any = city_data["fdir"].values * RADIATION_SCALE
-    cossza: Any = city_data["cossza"].values
+
+    # Compute cossza because it is not present in the ARCO store.
+    times: ArrayLike = city_data.time.values
+    n_locations = len(lats)
+
+    cossza: ArrayLike = np.empty((n_locations, n_time_steps), dtype="float64")
+    for i, (lat, lon) in enumerate(zip(lats, lons, strict=False)):
+        cossza[i, :] = _calc_cossza(lat=float(lat), lon=float(lon), times=times)
 
     wind_speed: Any = np.sqrt(u10**2 + v10**2)
     temperature_c: Any = t2m - 273.15
@@ -287,22 +372,30 @@ def _compute_tile_frame(
     gamma_td: Any = _B * dewpoint_c / (_C + dewpoint_c)
     relative_humidity: Any = np.exp(gamma_td - gamma_t) * 100.0
 
-    n_locations, n_times = wind_speed.shape
-
     # thermofeel returns MRT in Kelvin.
-    mrt_k: Any = tf.mrt.mean_radiant_temperature(
-        ssrd=ssrd.ravel(),
-        strd=strd.ravel(),
-        fdir=fdir.ravel(),
-        cos_projection=cossza.ravel(),
-    )
-    mrt_c: Any = (mrt_k - 273.15).reshape(n_locations, n_times)
+    # Preferred method uses ssrd, fdir, strd, and cossza.
+    try:
+        mrt_k: Any = tf.calculate_mean_radiant_temperature(
+            ssrd=ssrd.ravel(),
+            fdir=fdir.ravel(),
+            strd=strd.ravel(),
+            cossza=cossza.ravel(),
+        )
+    except TypeError:
+        # Compatibility with alternate thermofeel API naming.
+        mrt_k = tf.mrt.mean_radiant_temperature(
+            ssrd=ssrd.ravel(),
+            strd=strd.ravel(),
+            fdir=fdir.ravel(),
+            cos_projection=cossza.ravel(),
+        )
 
-    times = city_data.time.values
+    mrt_c: Any = (mrt_k - 273.15).reshape(n_locations, n_time_steps)
+
     times_tiled: Any = np.tile(times, n_locations)
-    loc_ids_rep: Any = np.repeat(location_ids, n_times)
-    lats_rep: Any = np.repeat(lats, n_times)
-    lons_rep: Any = np.repeat(lons, n_times)
+    loc_ids_rep: Any = np.repeat(location_ids, n_time_steps)
+    lats_rep: Any = np.repeat(lats, n_time_steps)
+    lons_rep: Any = np.repeat(lons, n_time_steps)
 
     frame = pd.DataFrame(
         {
@@ -373,6 +466,7 @@ def _write_era5_partition(
     partition_dir = f"{base_path}/{_era5_partition_path(year, tile_id)}"
     filesystem.create_dir(partition_dir, recursive=True)
     output_path = f"{partition_dir}/era5.parquet"
+
     table: Any = pa.Table.from_pandas(frame, preserve_index=False)
     with filesystem.open_output_stream(output_path) as out_stream:
         pq.write_table(table, out_stream)
