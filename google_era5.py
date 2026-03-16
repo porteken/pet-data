@@ -23,23 +23,45 @@ ERA5_ARCO_STORE = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.
 ERA5_START_YEAR = 2000
 ERA5_END_YEAR = 2023
 
-# ARCO short variable names, not CDS long names.
-ERA5_WEATHER_VARIABLES = [
-    "10u",  # 10m_u_component_of_wind
-    "10v",  # 10m_v_component_of_wind
-    "2t",  # 2m_temperature
-    "2d",  # 2m_dewpoint_temperature
-]
+ERA5_VARIABLE_CANDIDATES = {
+    "10u": [
+        "10u",
+        "10m_u_component_of_wind",
+    ],
+    "10v": [
+        "10v",
+        "10m_v_component_of_wind",
+    ],
+    "2t": [
+        "2t",
+        "2m_temperature",
+    ],
+    "2d": [
+        "2d",
+        "2m_dewpoint_temperature",
+    ],
+    "ssrd": [
+        "ssrd",
+        "surface_solar_radiation_downwards",
+    ],
+    "strd": [
+        "strd",
+        "surface_thermal_radiation_downwards",
+    ],
+    "fdir": [
+        "fdir",
+        "total_sky_direct_solar_radiation_at_surface",
+    ],
+    "cossza": [
+        "cossza",
+        "cosine_of_solar_zenith_angle",
+        "cosine_solar_zenith_angle",
+    ],
+}
 
-# MRT needs these thermofeel-style inputs.
-ERA5_MRT_VARIABLES = [
-    "ssrd",  # surface_solar_radiation_downwards
-    "strd",  # surface_thermal_radiation_downwards
-    "fdir",  # total_sky_direct_solar_radiation_at_surface
-    "cossza",  # cosine_solar_zenith_angle
-]
-
-ERA5_ALL_VARIABLES = ERA5_WEATHER_VARIABLES + ERA5_MRT_VARIABLES
+ERA5_WEATHER_VARIABLES = ["10u", "10v", "2t", "2d"]
+ERA5_MRT_VARIABLES = ["ssrd", "strd", "fdir", "cossza"]
+ERA5_ALL_VARIABLES = [*ERA5_WEATHER_VARIABLES, *ERA5_MRT_VARIABLES]
 
 RADIATION_SCALE = 1.0 / 3600.0
 
@@ -47,6 +69,31 @@ _B = 17.625
 _C = 243.04
 
 EXPECTED_LOCATION_COUNT = 500
+
+
+def _resolve_dataset_variables(ds: Dataset) -> dict[str, str]:
+    """Map canonical ERA5 variable keys to actual dataset variable names."""
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
+
+    for canonical_name, candidates in ERA5_VARIABLE_CANDIDATES.items():
+        actual_name = next((name for name in candidates if name in ds.data_vars), None)
+        if actual_name is None:
+            missing.append(canonical_name)
+            continue
+        resolved[canonical_name] = actual_name
+
+    if missing:
+        available_sample = sorted(ds.data_vars)[:50]
+        msg = (
+            "Required ARCO ERA5 variables could not be resolved: "
+            f"{missing}. Variable candidates: "
+            f"{ {name: ERA5_VARIABLE_CANDIDATES[name] for name in missing} }. "
+            f"Sample available variables: {available_sample}"
+        )
+        raise KeyError(msg)
+
+    return resolved
 
 
 def _open_zarr_store(max_workers: int) -> Dataset:
@@ -66,17 +113,13 @@ def _open_zarr_store(max_workers: int) -> Dataset:
     fs = gcsfs.GCSFileSystem()
     store = fs.get_mapper(ERA5_ARCO_STORE)
     ds = xr.open_zarr(store, consolidated=True, decode_times=False)
-
-    missing = [name for name in ERA5_ALL_VARIABLES if name not in ds.data_vars]
-    if missing:
-        available_sample = sorted(ds.data_vars)[:50]
-        msg = (
-            "Required ARCO ERA5 variables are missing from the opened dataset: "
-            f"{missing}. Sample available variables: {available_sample}"
-        )
-        raise KeyError(msg)
-
-    return ds
+    resolved_names = _resolve_dataset_variables(ds)
+    rename_map = {
+        actual_name: canonical_name
+        for canonical_name, actual_name in resolved_names.items()
+        if actual_name != canonical_name
+    }
+    return ds.rename_vars(rename_map) if rename_map else ds
 
 
 def _year_time_slice(year: int) -> tuple[int, int]:
