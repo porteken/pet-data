@@ -239,6 +239,25 @@ def _iter_time_batches(
     return batches
 
 
+def _select_time_shard_batches(
+    batches: list[tuple[int, int, int]],
+    *,
+    time_shard_index: int,
+    time_shard_count: int,
+) -> list[tuple[int, int, int]]:
+    """Return only the batches assigned to one time shard."""
+    if time_shard_count < 1:
+        msg = "time_shard_count must be >= 1"
+        raise ValueError(msg)
+    if time_shard_index < 0 or time_shard_index >= time_shard_count:
+        msg = f"time_shard_index must be between 0 and {time_shard_count - 1}"
+        raise ValueError(msg)
+
+    return [
+        batch for batch in batches if batch[0] % time_shard_count == time_shard_index
+    ]
+
+
 def _ensure_tile_outputs() -> None:
     required = [
         Path(OUTPUT_DIR) / "city_to_tile.csv",
@@ -599,6 +618,8 @@ def process_era5(
     *,
     city_shard_index: int = 0,
     city_shard_count: int = 1,
+    time_shard_index: int = 0,
+    time_shard_count: int = 1,
     max_workers: int = 4,
     batch_hours: int = DEFAULT_BATCH_HOURS,
 ) -> None:
@@ -623,11 +644,24 @@ def process_era5(
     _warn_if_full_globe_chunks()
     ds = _open_zarr_store(max_workers=max_workers)
 
-    wrote_any_batches = False
-    for batch_index, start_h, end_h in _iter_time_batches(
+    selected_batches = _select_time_shard_batches(
+        _iter_time_batches(
+            year,
+            batch_hours=batch_hours,
+        ),
+        time_shard_index=time_shard_index,
+        time_shard_count=time_shard_count,
+    )
+    LOGGER.info(
+        "ERA5 year %s assigned %s batch(es) to time shard %s/%s.",
         year,
-        batch_hours=batch_hours,
-    ):
+        len(selected_batches),
+        time_shard_index + 1,
+        time_shard_count,
+    )
+
+    wrote_any_batches = False
+    for batch_index, start_h, end_h in selected_batches:
         pending_batch_df = _pending_batch_tiles(
             shard_df,
             era5_root=era5_root,
@@ -640,10 +674,12 @@ def process_era5(
         batch_start = pd.to_datetime(start_h, unit="h", origin=ERA5_TIME_ORIGIN)
         batch_end = pd.to_datetime(end_h, unit="h", origin=ERA5_TIME_ORIGIN)
         LOGGER.info(
-            "Reading ERA5 shard %s/%s year %s batch %s covering %s to %s across "
-            "%s cities in %s pending tiles.",
+            "Reading ERA5 city shard %s/%s time shard %s/%s year %s batch %s "
+            "covering %s to %s across %s cities in %s pending tiles.",
             city_shard_index + 1,
             city_shard_count,
+            time_shard_index + 1,
+            time_shard_count,
             year,
             batch_index,
             batch_start.isoformat(),
@@ -667,18 +703,23 @@ def process_era5(
 
     if not wrote_any_batches:
         LOGGER.info(
-            "ERA5 processing complete for year=%s shard %s/%s with no pending batches.",
+            "ERA5 processing complete for year=%s city shard %s/%s time shard "
+            "%s/%s with no pending batches.",
             year,
             city_shard_index + 1,
             city_shard_count,
+            time_shard_index + 1,
+            time_shard_count,
         )
         return
 
     LOGGER.info(
-        "ERA5 processing complete for year=%s shard %s/%s.",
+        "ERA5 processing complete for year=%s city shard %s/%s time shard %s/%s.",
         year,
         city_shard_index + 1,
         city_shard_count,
+        time_shard_index + 1,
+        time_shard_count,
     )
 
 
@@ -717,10 +758,22 @@ def _parse_args() -> argparse.Namespace:
         help="Dask thread-pool size for parallel GCS reads.",
     )
     parser.add_argument(
+        "--time-shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard index for splitting ERA5 time batches across jobs.",
+    )
+    parser.add_argument(
+        "--time-shard-count",
+        type=int,
+        default=1,
+        help="Total number of ERA5 time shards.",
+    )
+    parser.add_argument(
         "--batch-hours",
         type=int,
         default=DEFAULT_BATCH_HOURS,
-        help="Hours to fetch per resumable batch (default: 168).",
+        help=f"Hours to fetch per resumable batch (default: {DEFAULT_BATCH_HOURS}).",
     )
     return parser.parse_args()
 
@@ -734,6 +787,8 @@ def main() -> None:
             args.out_dir,
             city_shard_index=args.city_shard_index,
             city_shard_count=args.city_shard_count,
+            time_shard_index=args.time_shard_index,
+            time_shard_count=args.time_shard_count,
             max_workers=args.max_workers,
             batch_hours=args.batch_hours,
         )
