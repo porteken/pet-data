@@ -117,7 +117,7 @@ def _list_versioned_objects(bucket: str, prefix: str) -> list[dict[str, str]]:
         version_id_marker = response.get("NextVersionIdMarker")
 
 
-def _list_unversioned_objects(bucket: str, prefix: str) -> list[dict[str, str]]:
+def _list_current_objects(bucket: str, prefix: str) -> list[dict[str, str]]:
     objects: list[dict[str, str]] = []
     continuation_token: str | None = None
 
@@ -142,11 +142,6 @@ def _list_unversioned_objects(bucket: str, prefix: str) -> list[dict[str, str]]:
         continuation_token = response.get("NextContinuationToken")
 
 
-def _versioning_enabled(bucket: str) -> bool:
-    response = _run_aws_json(["s3api", "get-bucket-versioning", "--bucket", bucket])
-    return response.get("Status") in {"Enabled", "Suspended"}
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Delete all S3 objects under a prefix using batched delete-objects calls.",
@@ -158,6 +153,15 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_MAX_WORKERS,
         help="Maximum concurrent delete-objects calls.",
+    )
+    parser.add_argument(
+        "--include-versions",
+        action="store_true",
+        help=(
+            "Delete all object versions and delete markers under the prefix. "
+            "By default, only current objects are deleted, matching "
+            "`aws s3 rm --recursive` behavior on a versioned bucket."
+        ),
     )
     return parser.parse_args()
 
@@ -171,8 +175,8 @@ def main() -> None:
 
     objects = (
         _list_versioned_objects(args.bucket, args.prefix)
-        if _versioning_enabled(args.bucket)
-        else _list_unversioned_objects(args.bucket, args.prefix)
+        if args.include_versions
+        else _list_current_objects(args.bucket, args.prefix)
     )
     if not objects:
         LOGGER.info("No S3 objects found under s3://%s/%s", args.bucket, args.prefix)
