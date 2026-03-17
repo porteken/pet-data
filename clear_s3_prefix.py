@@ -51,7 +51,7 @@ def _delete_batch(bucket: str, objects: list[dict[str, str]]) -> int:
         payload_path = handle.name
 
     try:
-        subprocess.run(  # noqa: S603
+        completed = subprocess.run(  # noqa: S603
             [
                 _aws_executable(),
                 "s3api",
@@ -61,14 +61,131 @@ def _delete_batch(bucket: str, objects: list[dict[str, str]]) -> int:
                 "--delete",
                 f"file://{payload_path}",
             ],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
     finally:
         Path(payload_path).unlink()
 
-    return len(objects)
+    response = _load_json_output(completed.stdout)
+    failed_objects = _failed_batch_objects(objects, response)
+    if completed.returncode == 0 and not failed_objects:
+        return len(objects)
+
+    if len(objects) == 1:
+        return _delete_single_object(bucket, objects[0], completed, response)
+
+    if failed_objects:
+        successful_count = len(objects) - len(failed_objects)
+        return successful_count + _delete_in_subbatches(bucket, failed_objects)
+
+    return _delete_in_subbatches(bucket, objects)
+
+
+def _delete_in_subbatches(bucket: str, objects: list[dict[str, str]]) -> int:
+    midpoint = len(objects) // 2
+    return _delete_batch(bucket, objects[:midpoint]) + _delete_batch(
+        bucket,
+        objects[midpoint:],
+    )
+
+
+def _delete_single_object(
+    bucket: str,
+    object_info: dict[str, str],
+    batch_result: subprocess.CompletedProcess[str],
+    batch_response: dict[str, Any],
+) -> int:
+    args = [
+        _aws_executable(),
+        "s3api",
+        "delete-object",
+        "--bucket",
+        bucket,
+        "--key",
+        object_info["Key"],
+    ]
+    version_id = object_info.get("VersionId")
+    if version_id is not None:
+        args.extend(["--version-id", version_id])
+
+    completed = subprocess.run(  # noqa: S603
+        args,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode == 0:
+        return 1
+
+    error_details = _format_delete_error(
+        object_info,
+        completed.stdout,
+        completed.stderr,
+    )
+    if not error_details:
+        error_details = _format_delete_error(
+            object_info,
+            batch_result.stdout,
+            batch_result.stderr,
+            response=batch_response,
+        )
+    raise RuntimeError(error_details)
+
+
+def _load_json_output(raw_output: str) -> dict[str, Any]:
+    if not raw_output.strip():
+        return {}
+    try:
+        return json.loads(raw_output)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _failed_batch_objects(
+    requested_objects: list[dict[str, str]],
+    response: dict[str, Any],
+) -> list[dict[str, str]]:
+    error_entries = response.get("Errors", [])
+    if not error_entries:
+        return []
+
+    failed_lookup = {
+        (entry["Key"], entry.get("VersionId"))
+        for entry in error_entries
+        if "Key" in entry
+    }
+    return [
+        object_info
+        for object_info in requested_objects
+        if (object_info["Key"], object_info.get("VersionId")) in failed_lookup
+    ]
+
+
+def _format_delete_error(
+    object_info: dict[str, str],
+    stdout: str,
+    stderr: str,
+    *,
+    response: dict[str, Any] | None = None,
+) -> str:
+    response_payload = response if response is not None else _load_json_output(stdout)
+    error_entries = response_payload.get("Errors", [])
+    if error_entries:
+        first_error = error_entries[0]
+        return (
+            "Failed to delete "
+            f"s3://{object_info['Key']}: "
+            f"{first_error.get('Code', 'Unknown')} "
+            f"{first_error.get('Message', '').strip()}"
+        ).strip()
+
+    for text in (stderr.strip(), stdout.strip()):
+        if text:
+            return f"Failed to delete s3://{object_info['Key']}: {text}"
+
+    return ""
 
 
 def _chunked(items: list[dict[str, str]], size: int) -> list[list[dict[str, str]]]:
