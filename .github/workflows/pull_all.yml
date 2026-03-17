@@ -18,21 +18,34 @@ jobs:
       years: ${{ steps.compute.outputs.years }}
       era5_years: ${{ steps.compute.outputs.era5_years }}
       cds_years: ${{ steps.compute.outputs.cds_years }}
+      cds_year_months: ${{ steps.compute.outputs.cds_year_months }}
       end_date: ${{ steps.compute.outputs.end_date }}
     steps:
       - id: compute
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          from datetime import date, timedelta
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
 
           ERA5_START = 2000
           ERA5_END = 2023
           CDS_START = 2024
-          end_date = date.today().replace(day=1) - timedelta(days=1)
+          eastern_today = datetime.now(ZoneInfo("America/New_York")).date()
+          end_date = eastern_today.replace(day=1) - timedelta(days=1)
           years = list(range(ERA5_START, end_date.year + 1))
           era5_years = list(range(ERA5_START, min(ERA5_END, end_date.year) + 1))
           cds_years = list(range(CDS_START, end_date.year + 1))
+          cds_year_months = [
+              {
+                  "year": year,
+                  "month": month,
+                  "month_pad": f"{month:02d}",
+              }
+              for year in cds_years
+              for month in range(1, 13)
+              if (year, month) <= (end_date.year, end_date.month)
+          ]
 
           print(f"start_year={ERA5_START}")
           print(f"end_year={end_date.year}")
@@ -40,6 +53,7 @@ jobs:
           print(f"years={json.dumps(years)}")
           print(f"era5_years={json.dumps(era5_years)}")
           print(f"cds_years={json.dumps(cds_years)}")
+          print(f"cds_year_months={json.dumps(cds_year_months)}")
           PY
 
   setup-locations:
@@ -117,34 +131,37 @@ jobs:
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - name: Clear Weather Prefix
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 rm s3://pet-parquet-files/weather_data_parquet/ --recursive
+        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix weather_data_parquet/ --max-workers 8
 
   clear-mrt-output:
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - name: Clear MRT Prefix
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 rm s3://pet-parquet-files/utci_data_parquet/ --recursive
+        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix utci_data_parquet/ --max-workers 8
 
   clear-era5-output:
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - name: Clear ERA5 Prefix
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 rm s3://pet-parquet-files/era5_data_parquet/ --recursive
+        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix era5_data_parquet/ --max-workers 8
 
   cancel-cds-jobs:
     runs-on: ubuntu-latest
@@ -260,8 +277,7 @@ jobs:
       max-parallel: 4
       fail-fast: false
       matrix:
-        year: ${{ fromJSON(needs.build-year-range.outputs.cds_years) }}
-        month: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        include: ${{ fromJSON(needs.build-year-range.outputs.cds_year_months) }}
     name: MRT ${{ matrix.year }}-${{ matrix.month }}
     steps:
       - uses: actions/checkout@v6
@@ -293,10 +309,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          MONTH_PAD=$(printf '%02d' ${{ matrix.month }})
           aws s3 sync \
-            ./utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_PAD}/ \
-            s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${MONTH_PAD}/
+            ./utci_data_parquet/year=${{ matrix.year }}/month=${{ matrix.month_pad }}/ \
+            s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${{ matrix.month_pad }}/
 
   process-pet:
     needs: [setup-locations, process-weather, process-mrt, pull-google-era5, build-year-range]
