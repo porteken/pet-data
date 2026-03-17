@@ -22,12 +22,13 @@ from pull_cds_shared import (
     extract_files,
     pa,
     partition_exists,
+    partition_file_max_timestamp,
     pd,
     pq,
     retrieve_with_retry,
 )
 from shards import resolve_filesystem
-from shared_config import build_year_months
+from shared_config import build_year_date_bounds, build_year_months
 
 MRT_DATASET = "derived-utci-historical"
 MRT_CDS_REQUEST_CONCURRENCY = 2
@@ -208,7 +209,12 @@ def _process_mrt_tile(
 ) -> None:
     tile_id = int(tile_row["tile_id"])
     partition_path = _mrt_partition_path(year, tile_id, month=month)
-    if partition_exists(mrt_root, partition_path):
+    if partition_exists(mrt_root, partition_path) and _mrt_partition_is_current(
+        mrt_root,
+        partition_path,
+        year=int(year),
+        month=month,
+    ):
         LOGGER.info(
             "MRT tile %s already exists for %s%s. Skipping.",
             tile_id,
@@ -300,6 +306,34 @@ def _mrt_partition_path(
     if month is not None:
         return f"year={year}/month={month:02d}/tile_id={tile_id}"
     return f"year={year}/tile_id={tile_id}"
+
+
+def _mrt_partition_is_current(
+    base_uri: str,
+    partition_path: str,
+    *,
+    year: int,
+    month: int | None,
+) -> bool:
+    max_date = partition_file_max_timestamp(
+        base_uri,
+        partition_path,
+        "mrt.parquet",
+    )
+    if max_date is None:
+        return False
+
+    _, allowed_end_date = build_year_date_bounds(year, month=month)
+    is_current = max_date <= allowed_end_date
+    if not is_current:
+        LOGGER.info(
+            "MRT partition %s extends through %s but the supported end date is %s. "
+            "Refreshing partition.",
+            partition_path,
+            max_date.isoformat(),
+            allowed_end_date.isoformat(),
+        )
+    return is_current
 
 
 def _write_mrt_partition(

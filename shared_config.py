@@ -26,8 +26,8 @@ def _month_end(year: int, month: int) -> date:
     return date(year, month + 1, 1) - timedelta(days=1)
 
 
-def build_year_date_range(year: int, *, month: int | None = None) -> str:
-    """Return the supported pull window for a specific year or month."""
+def build_year_date_bounds(year: int, *, month: int | None = None) -> tuple[date, date]:
+    """Return the supported inclusive start/end dates for a year or month."""
     end_date = pull_end_date()
     range_start = max(PULL_START_DATE, date(year, 1, 1))
     range_end = min(end_date, date(year, 12, 31))
@@ -46,29 +46,18 @@ def build_year_date_range(year: int, *, month: int | None = None) -> str:
         )
         raise ValueError(msg)
 
+    return range_start, range_end
+
+
+def build_year_date_range(year: int, *, month: int | None = None) -> str:
+    """Return the supported pull window for a specific year or month."""
+    range_start, range_end = build_year_date_bounds(year, month=month)
     return f"{range_start.isoformat()}/{range_end.isoformat()}"
 
 
 def build_year_months(year: int, *, month: int | None = None) -> list[str]:
     """Return the supported month list for a specific year or month."""
-    end_date = pull_end_date()
-    range_start = max(PULL_START_DATE, date(year, 1, 1))
-    range_end = min(end_date, date(year, 12, 31))
-
-    if month is not None:
-        month_start = date(year, month, 1)
-        range_start = max(range_start, month_start)
-        range_end = min(range_end, _month_end(year, month))
-
-    if range_start > range_end:
-        msg = (
-            f"Requested window for year {year}"
-            f"{'' if month is None else f', month {month:02d}'} "
-            f"falls outside the supported pull window "
-            f"{PULL_START_DATE.isoformat()} to {end_date.isoformat()}."
-        )
-        raise ValueError(msg)
-
+    range_start, range_end = build_year_date_bounds(year, month=month)
     return [
         f"{month_value:02d}"
         for month_value in range(range_start.month, range_end.month + 1)

@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import timedelta
 from importlib import import_module
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
@@ -19,6 +20,7 @@ from shards import (
     resolve_filesystem,
     select_shards,
 )
+from shared_config import build_year_date_bounds
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -338,8 +340,9 @@ def _load_city_lookup(weather_shard_count: int) -> DataFrame:
 
 
 def _weather_year_filter(year: int) -> object:
-    range_start = pd.Timestamp(year=year, month=1, day=1)
-    range_end = pd.Timestamp(year=year + 1, month=1, day=1)
+    range_start_date, range_end_date = build_year_date_bounds(year)
+    range_start = pd.Timestamp(range_start_date)
+    range_end = pd.Timestamp(range_end_date + timedelta(days=1))
     timestamp_field = dataset_module.field("timestamp")
     return (timestamp_field >= range_start) & (timestamp_field < range_end)
 

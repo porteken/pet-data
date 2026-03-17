@@ -23,12 +23,13 @@ from pull_cds_shared import (
     extract_files,
     pa,
     partition_file_exists,
+    partition_file_max_timestamp,
     pd,
     pq,
     retrieve_with_retry,
 )
 from shards import resolve_filesystem
-from shared_config import build_full_date_range, build_year_date_range
+from shared_config import build_full_date_range, build_year_date_range, pull_end_date
 
 B = 17.625
 C = 243.04
@@ -183,6 +184,32 @@ def _weather_shard_exists(
     )
 
 
+def _weather_shard_is_current(
+    base_uri: str,
+    city_shard_index: int,
+) -> bool:
+    partition_path = _weather_partition_path(city_shard_index)
+    max_date = partition_file_max_timestamp(
+        base_uri,
+        partition_path,
+        "weather.parquet",
+    )
+    if max_date is None:
+        return False
+
+    allowed_end_date = pull_end_date()
+    is_current = max_date <= allowed_end_date
+    if not is_current:
+        LOGGER.info(
+            "Weather shard %s extends through %s but the supported end date is %s. "
+            "Refreshing shard.",
+            city_shard_index,
+            max_date.isoformat(),
+            allowed_end_date.isoformat(),
+        )
+    return is_current
+
+
 def _process_weather_shard(
     *,
     client: CDSClient,
@@ -192,7 +219,13 @@ def _process_weather_shard(
     date_range: str,
     max_workers: int,
 ) -> None:
-    if _weather_shard_exists(weather_root, city_shard_index):
+    if _weather_shard_exists(
+        weather_root,
+        city_shard_index,
+    ) and _weather_shard_is_current(
+        weather_root,
+        city_shard_index,
+    ):
         LOGGER.info("Weather shard %s already exists. Skipping.", city_shard_index)
         return
 

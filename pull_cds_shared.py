@@ -6,6 +6,7 @@ import importlib
 import logging
 import tempfile
 import time
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 from zipfile import ZipFile, is_zipfile
@@ -257,6 +258,88 @@ def partition_file_exists(base_uri: str, partition_path: str, file_name: str) ->
         return False
 
     return bool(file_info.type != pa.fs.FileType.NotFound)
+
+
+def partition_file_max_timestamp(
+    base_uri: str,
+    partition_path: str,
+    file_name: str,
+    *,
+    column_name: str = "timestamp",
+) -> date | None:
+    """Return the latest date stored in a parquet partition file."""
+    filesystem, base_path = resolve_filesystem(base_uri)
+    file_path = f"{base_path}/{partition_path}/{file_name}"
+    max_timestamp: date | None = None
+
+    try:
+        with filesystem.open_input_file(file_path) as input_file:
+            parquet_file = pq.ParquetFile(input_file)
+            field_index = parquet_file.schema_arrow.get_field_index(column_name)
+            if field_index != -1:
+                max_value: object | None = None
+                missing_stats = False
+                for row_group_index in range(parquet_file.metadata.num_row_groups):
+                    row_group = parquet_file.metadata.row_group(row_group_index)
+                    statistics = row_group.column(field_index).statistics
+                    if statistics is None or not statistics.has_min_max:
+                        missing_stats = True
+                        break
+
+                    candidate = statistics.max
+                    if max_value is None or candidate > max_value:
+                        max_value = candidate
+
+                if max_value is not None and not missing_stats:
+                    max_timestamp = _coerce_partition_date(max_value)
+    except (OSError, pa.ArrowException) as exc:
+        LOGGER.warning(
+            "Could not inspect max timestamp for %s/%s: %s",
+            partition_path,
+            file_name,
+            exc,
+        )
+    else:
+        if max_timestamp is not None:
+            return max_timestamp
+
+        try:
+            table = pq.read_table(
+                file_path,
+                columns=[column_name],
+                filesystem=filesystem,
+            )
+        except (OSError, pa.ArrowException) as exc:
+            LOGGER.warning(
+                "Could not read timestamps for %s/%s: %s",
+                partition_path,
+                file_name,
+                exc,
+            )
+        else:
+            if table.num_rows > 0 and column_name in table.column_names:
+                values = table[column_name].to_pandas()
+                if not values.empty:
+                    max_timestamp = _coerce_partition_date(values.max())
+
+    return max_timestamp
+
+
+def _coerce_partition_date(value: object) -> date | None:
+    """Convert parquet timestamp-like values into a concrete date."""
+    converted = pd.to_datetime(value)
+    if isinstance(converted, datetime):
+        return converted.date()
+    if isinstance(converted, date):
+        return converted
+
+    date_method = getattr(converted, "date", None)
+    if callable(date_method):
+        maybe_date = cast("Any", date_method())
+        if isinstance(maybe_date, date):
+            return maybe_date
+
+    return None
 
 
 def extract_files(download_path: Path, *, suffix: str) -> list[Path]:
