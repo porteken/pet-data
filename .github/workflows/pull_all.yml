@@ -21,18 +21,17 @@ jobs:
       cds_year_months: ${{ steps.compute.outputs.cds_year_months }}
       end_date: ${{ steps.compute.outputs.end_date }}
     steps:
+      - uses: actions/checkout@v6
       - id: compute
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          from datetime import datetime, timedelta
-          from zoneinfo import ZoneInfo
+          from shared_config import mrt_available_end_date
 
           ERA5_START = 2000
           ERA5_END = 2023
           CDS_START = 2024
-          eastern_today = datetime.now(ZoneInfo("America/New_York")).date()
-          end_date = eastern_today.replace(day=1) - timedelta(days=1)
+          end_date = mrt_available_end_date()
           years = list(range(ERA5_START, end_date.year + 1))
           era5_years = list(range(ERA5_START, min(ERA5_END, end_date.year) + 1))
           cds_years = list(range(CDS_START, end_date.year + 1))

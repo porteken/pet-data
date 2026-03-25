@@ -25,16 +25,16 @@ jobs:
       window_start: ${{ steps.compute.outputs.window_start }}
       window_end: ${{ steps.compute.outputs.window_end }}
     steps:
+      - uses: actions/checkout@v6
       - id: compute
         env:
           INPUT_TARGET_YEAR: ${{ github.event.inputs.target_year || '' }}
           INPUT_TARGET_MONTH: ${{ github.event.inputs.target_month || '' }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import calendar
           import os
-          from datetime import date, datetime, timedelta
-          from zoneinfo import ZoneInfo
+
+          from shared_config import build_mrt_date_bounds, mrt_available_end_date
 
           input_year = os.environ.get("INPUT_TARGET_YEAR", "").strip()
           input_month = os.environ.get("INPUT_TARGET_MONTH", "").strip()
@@ -48,17 +48,17 @@ jobs:
               target_year = int(input_year)
               target_month = int(input_month)
           else:
-              eastern_today = datetime.now(ZoneInfo("America/New_York")).date()
-              previous_month = eastern_today.replace(day=1) - timedelta(days=1)
-              target_year = previous_month.year
-              target_month = previous_month.month
+              target_end = mrt_available_end_date()
+              target_year = target_end.year
+              target_month = target_end.month
 
           if target_month < 1 or target_month > 12:
               raise SystemExit("target_month must be between 1 and 12.")
 
-          last_day = calendar.monthrange(target_year, target_month)[1]
-          window_start = date(target_year, target_month, 1)
-          window_end = date(target_year, target_month, last_day)
+          window_start, window_end = build_mrt_date_bounds(
+              target_year,
+              month=target_month,
+          )
 
           print(f"target_year={target_year}")
           print(f"target_month={target_month:02d}")

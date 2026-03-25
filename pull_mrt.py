@@ -28,7 +28,12 @@ from pull_cds_shared import (
     retrieve_with_retry,
 )
 from shards import resolve_filesystem
-from shared_config import build_year_date_bounds, build_year_months
+from shared_config import (
+    build_mrt_date_bounds,
+    build_mrt_days,
+    build_mrt_months,
+    mrt_product_type,
+)
 
 MRT_DATASET = "derived-utci-historical"
 MRT_CDS_REQUEST_CONCURRENCY = 2
@@ -46,6 +51,7 @@ def process_mrt(
     max_workers: int = 4,
 ) -> None:
     """Download and process UTCI mean radiant temperature data grouped by tile."""
+    build_mrt_date_bounds(int(year), month=month)
     mrt_root = f"{out_dir}/utci_data_parquet"
     selected_tiles, selected_cells = _load_selected_tiles(
         tile_ids=tile_ids,
@@ -241,10 +247,14 @@ def _process_mrt_tile(
             {
                 "variable": ["mean_radiant_temperature"],
                 "version": "1_1",
-                "product_type": "consolidated_dataset",
+                "product_type": mrt_product_type(int(year), month=month),
                 "year": year,
-                "month": build_year_months(int(year), month=month),
-                "day": [f"{day:02d}" for day in range(1, 32)],
+                "month": build_mrt_months(int(year), month=month),
+                "day": (
+                    build_mrt_days(int(year), month=month)
+                    if month is not None
+                    else [f"{day:02d}" for day in range(1, 32)]
+                ),
                 "area": [
                     float(tile_row["north"]),
                     float(tile_row["west"]),
@@ -323,7 +333,7 @@ def _mrt_partition_is_current(
     if max_date is None:
         return False
 
-    _, allowed_end_date = build_year_date_bounds(year, month=month)
+    _, allowed_end_date = build_mrt_date_bounds(year, month=month)
     is_current = max_date <= allowed_end_date
     if not is_current:
         LOGGER.info(
