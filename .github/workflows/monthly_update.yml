@@ -295,6 +295,8 @@ jobs:
     name: Analytics shard ${{ matrix.analytics_shard_index }}/20
     steps:
       - uses: actions/checkout@v4
+      - name: Enable IPv6 support
+        uses: fscarmen/warp-on-actions@v1.2
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -399,6 +401,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Enable IPv6 support
+        uses: fscarmen/warp-on-actions@v1.2
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -506,6 +510,8 @@ jobs:
     name: Load shard ${{ matrix.load_shard_index }}/20
     steps:
       - uses: actions/checkout@v4
+      - name: Enable IPv6 support
+        uses: fscarmen/warp-on-actions@v1.2
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -544,6 +550,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Enable IPv6 support
+        uses: fscarmen/warp-on-actions@v1.2
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
