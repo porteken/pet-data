@@ -317,6 +317,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import sys
           from pathlib import Path
 
           import psycopg2
@@ -325,12 +326,17 @@ jobs:
           output_path = Path("existing_pet.csv")
           output_path.write_text("location_id,date,pet\n", encoding="utf-8")
 
-          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          db_uri = os.environ.get("SUPABASE_DB_URI")
+          if not db_uri:
+              print("SUPABASE_DB_URI not set, skipping database export.")
+              sys.exit(0)
+
+          conn = psycopg2.connect(db_uri)
           try:
               with conn.cursor() as cur:
                   cur.execute("SELECT to_regclass('public.pet')")
                   if cur.fetchone()[0] is None:
-                      raise SystemExit(0)
+                      sys.exit(0)
 
                   copy_query = sql.SQL(
                       """
@@ -391,6 +397,7 @@ jobs:
   prepare-db-load:
     needs: [process-pet, generate-analytics, build-target-window]
     runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -409,11 +416,17 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import sys
           from pathlib import Path
 
           import psycopg2
 
-          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          db_uri = os.environ.get("SUPABASE_DB_URI")
+          if not db_uri:
+              print("SUPABASE_DB_URI not set, skipping database cleanup.")
+              sys.exit(0)
+
+          conn = psycopg2.connect(db_uri)
           conn.autocommit = True
           try:
               with conn.cursor() as cur:
@@ -446,6 +459,7 @@ jobs:
   load-to-db:
     needs: prepare-db-load
     runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     strategy:
       max-parallel: 10
       fail-fast: false
@@ -530,6 +544,7 @@ jobs:
   finalize-db-load:
     needs: load-to-db
     runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python

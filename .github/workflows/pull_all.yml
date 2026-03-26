@@ -444,6 +444,7 @@ jobs:
   prepare-db-load:
     needs: [setup-locations, generate-analytics]
     runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
@@ -465,11 +466,17 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import sys
           from pathlib import Path
 
           import psycopg2
 
-          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          db_uri = os.environ.get("SUPABASE_DB_URI")
+          if not db_uri:
+              print("SUPABASE_DB_URI not set, skipping database cleanup.")
+              sys.exit(0)
+
+          conn = psycopg2.connect(db_uri)
           conn.autocommit = True
           try:
               with conn.cursor() as cur:
@@ -504,6 +511,7 @@ jobs:
   load-to-db:
     needs: [prepare-db-load, generate-analytics]
     runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     strategy:
       max-parallel: 10
       fail-fast: false
@@ -588,6 +596,7 @@ jobs:
   finalize-db-load:
     needs: load-to-db
     runs-on: ubuntu-latest
+    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
