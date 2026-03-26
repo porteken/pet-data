@@ -187,7 +187,13 @@ def _weather_shard_exists(
 def _weather_shard_is_current(
     base_uri: str,
     city_shard_index: int,
+    *,
+    year: int | None = None,
+    month: int | None = None,
 ) -> bool:
+    if year is not None or month is not None:
+        return False
+
     partition_path = _weather_partition_path(city_shard_index)
     max_date = partition_file_max_timestamp(
         base_uri,
@@ -219,21 +225,41 @@ def _process_weather_shard(
     date_range: str,
     max_workers: int,
 ) -> None:
-    if _weather_shard_exists(
+    is_exists = _weather_shard_exists(weather_root, city_shard_index)
+
+    # Extract year/month from date_range if possible
+    req_year = None
+    req_month = None
+    if "/" in date_range:
+        try:
+            first_date = date_range.split("/", maxsplit=1)[0]
+            dt = pd.to_datetime(first_date)
+            req_year = dt.year
+            req_month = dt.month
+        except (ValueError, TypeError):
+            LOGGER.debug("Could not extract year/month from date_range: %s", date_range)
+
+    is_current = _weather_shard_is_current(
         weather_root,
         city_shard_index,
-    ) and _weather_shard_is_current(
-        weather_root,
-        city_shard_index,
-    ):
-        LOGGER.info("Weather shard %s already exists. Skipping.", city_shard_index)
+        year=req_year,
+        month=req_month,
+    )
+
+    if is_exists and is_current:
+        LOGGER.info(
+            "Weather shard %s already exists and is current. Skipping.",
+            city_shard_index,
+        )
         return
 
     LOGGER.info(
-        "Starting weather shard %s for %s cities over %s.",
+        "Starting weather shard %s for %s cities over %s. (exists=%s, current=%s)",
         city_shard_index,
         len(city_cells),
         date_range,
+        is_exists,
+        is_current,
     )
     with tempfile.TemporaryDirectory() as tmpdir_name:
         tmpdir = Path(tmpdir_name)
@@ -516,6 +542,22 @@ def _write_weather_partition(
     partition_dir = f"{base_path}/{partition_path}"
     filesystem.create_dir(partition_dir, recursive=True)
     output_path = f"{partition_dir}/weather.parquet"
+
+    if partition_file_exists(weather_root, partition_path, "weather.parquet"):
+        try:
+            with filesystem.open_input_file(output_path) as input_file:
+                existing_df = pq.read_table(input_file).to_pandas()
+            weather_df = pd.concat([existing_df, weather_df], ignore_index=True)
+            weather_df = weather_df.drop_duplicates(
+                subset=["location_id", "timestamp"],
+            )
+        except (OSError, pa.ArrowException) as exc:
+            LOGGER.warning(
+                "Could not read existing weather shard %s: %s. Overwriting.",
+                city_shard_index,
+                exc,
+            )
+
     table: Any = pa.Table.from_pandas(
         weather_df.sort_values(["location_id", "timestamp"]).reset_index(drop=True),
         preserve_index=False,
