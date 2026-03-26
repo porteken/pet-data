@@ -429,7 +429,7 @@ def _parse_args() -> argparse.Namespace:
         "--year",
         required=True,
         type=str,
-        help="Year to download (e.g., 2023).",
+        help="Year to download (e.g., 2025).",
     )
     parser.add_argument(
         "--month",

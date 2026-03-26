@@ -1,4 +1,4 @@
-"""Download ERA5 weather + MRT data (2000-2023) from the Google ARCO Zarr store."""
+"""Download ERA5 weather + MRT data (2000-2025) from the Google ARCO Zarr store."""
 
 from __future__ import annotations
 
@@ -16,24 +16,21 @@ from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import LOGGER, DataFrame, pa, partition_file_exists, pd, pq
 from shards import resolve_filesystem
 
+SAFE_STABLE_DATA_MONTH = 4
+
 
 def _arco_stable_end_year() -> int:
     """Return the latest year whose full data is available in the ARCO store.
 
     Google ARCO ERA5 publishes stable (final) data on a ~3-month rolling lag.
     ERA5T (near-real-time) has a ~5-day lag but is subject to revision.
-    We use the stable lag here to stay on safe, finalised data.
+    A full year is only safe once its December has cleared the lag
+    (i.e., March of the following year). We use April as a safe threshold.
     """
-    stable_lag_months = 3
     now = datetime.now(tz=timezone.utc)
-    # Subtract lag months to get the latest safely available month
-    available_month = now.month - stable_lag_months
-    available_year = now.year if available_month > 0 else now.year - 1
-    # A full year is only safe once December of that year has cleared the lag
-    # i.e., December + 3 months = March of the following year
-    if available_year == now.year:
-        available_year -= 1
-    return available_year
+    if now.month < SAFE_STABLE_DATA_MONTH:
+        return now.year - 2
+    return now.year - 1
 
 
 Dataset: TypeAlias = Any

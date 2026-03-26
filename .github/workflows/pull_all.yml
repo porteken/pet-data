@@ -33,11 +33,12 @@ jobs:
           ERA5_START = 2000
           # ARCO ERA5 stable data has a ~3-month lag; a full year is safe once
           # its December has cleared that lag (i.e. March of the following year).
-          stable_lag_months = 3
+          # We use April as a safe threshold for the previous year's stability.
           _now = datetime.now(tz=timezone.utc)
-          _avail_month = _now.month - stable_lag_months
-          _avail_year = _now.year if _avail_month > 0 else _now.year - 1
-          ERA5_END = _avail_year - 1 if _avail_year == _now.year else _avail_year
+          if _now.month < 4:
+              ERA5_END = _now.year - 2
+          else:
+              ERA5_END = _now.year - 1
           CDS_START = ERA5_END + 1  # Only the current active year(s) use CDS
           end_date = mrt_available_end_date()
           years = list(range(ERA5_START, end_date.year + 1))
