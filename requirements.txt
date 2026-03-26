@@ -1,14 +1,6 @@
 numpy
 pandas
-cdsapi
 pyarrow
-xarray
-cfgrib
-netCDF4
 tqdm
 psycopg2-binary
 requests
-gcsfs
-zarr
-dask
-thermofeel

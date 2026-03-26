@@ -18,6 +18,7 @@ jobs:
       era5_years: ${{ steps.compute.outputs.era5_years }}
       cds_years: ${{ steps.compute.outputs.cds_years }}
       cds_year_months: ${{ steps.compute.outputs.cds_year_months }}
+      analytics_shards: ${{ steps.compute.outputs.analytics_shards }}
       end_date: ${{ steps.compute.outputs.end_date }}
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +61,7 @@ jobs:
           print(f"era5_years={json.dumps(era5_years)}")
           print(f"cds_years={json.dumps(cds_years)}")
           print(f"cds_year_months={json.dumps(cds_year_months)}")
+          print(f"analytics_shards={json.dumps(list(range(20)))}")
           PY
 
   setup-locations:
@@ -180,7 +182,7 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements.txt
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-cds.txt
       - name: Cancel Active CDS Jobs
         env:
           CDSAPI_URL: https://cds.climate.copernicus.eu/api
@@ -206,7 +208,7 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements.txt
       - name: Install All Dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-gcs.txt
       - name: Download Locations Data
         uses: actions/download-artifact@v4
         with:
@@ -251,7 +253,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install All Dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-cds.txt
 
       - name: Download Locations Data
         uses: actions/download-artifact@v4
@@ -302,7 +304,7 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements.txt
       - name: Install All Dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-cds.txt
       - name: Download Locations Data
         uses: actions/download-artifact@v4
         with:
@@ -368,7 +370,9 @@ jobs:
           mkdir -p ./era5_data_parquet/year=${{ matrix.year }}
           mkdir -p ./utci_data_parquet/year=${{ matrix.year }}
           aws s3 sync s3://pet-parquet-files/era5_data_parquet/year=${{ matrix.year }}/ ./era5_data_parquet/year=${{ matrix.year }}/
-          aws s3 sync s3://pet-parquet-files/weather_data_parquet/ ./weather_data_parquet/
+          if [ "${{ contains(fromJSON(needs.build-year-range.outputs.cds_years), matrix.year) }}" = "true" ]; then
+            aws s3 sync s3://pet-parquet-files/weather_data_parquet/ ./weather_data_parquet/
+          fi
           aws s3 sync s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/ ./utci_data_parquet/year=${{ matrix.year }}/
       - name: Combine and Compute PET
         run: |
@@ -389,53 +393,13 @@ jobs:
           if-no-files-found: ignore
 
   generate-analytics:
-    needs: process-pet
+    needs: [process-pet, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 10
       fail-fast: false
       matrix:
-        include:
-          - analytics_shard_index: 0
-            analytics_shard_dir: "00000"
-          - analytics_shard_index: 1
-            analytics_shard_dir: "00001"
-          - analytics_shard_index: 2
-            analytics_shard_dir: "00002"
-          - analytics_shard_index: 3
-            analytics_shard_dir: "00003"
-          - analytics_shard_index: 4
-            analytics_shard_dir: "00004"
-          - analytics_shard_index: 5
-            analytics_shard_dir: "00005"
-          - analytics_shard_index: 6
-            analytics_shard_dir: "00006"
-          - analytics_shard_index: 7
-            analytics_shard_dir: "00007"
-          - analytics_shard_index: 8
-            analytics_shard_dir: "00008"
-          - analytics_shard_index: 9
-            analytics_shard_dir: "00009"
-          - analytics_shard_index: 10
-            analytics_shard_dir: "00010"
-          - analytics_shard_index: 11
-            analytics_shard_dir: "00011"
-          - analytics_shard_index: 12
-            analytics_shard_dir: "00012"
-          - analytics_shard_index: 13
-            analytics_shard_dir: "00013"
-          - analytics_shard_index: 14
-            analytics_shard_dir: "00014"
-          - analytics_shard_index: 15
-            analytics_shard_dir: "00015"
-          - analytics_shard_index: 16
-            analytics_shard_dir: "00016"
-          - analytics_shard_index: 17
-            analytics_shard_dir: "00017"
-          - analytics_shard_index: 18
-            analytics_shard_dir: "00018"
-          - analytics_shard_index: 19
-            analytics_shard_dir: "00019"
+        analytics_shard_index: ${{ fromJSON(needs.build-year-range.outputs.analytics_shards) }}
     name: Analytics shard ${{ matrix.analytics_shard_index }}/20
     steps:
       - uses: actions/checkout@v4
@@ -447,10 +411,17 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install Dependencies
         run: pip install -r requirements.txt
-      - name: Download All PET Shards
+      - name: Compute Shard Paths
+        id: calc
+        run: |
+          pet_idx=$((${{ matrix.analytics_shard_index }} % 4))
+          echo "pet_idx=$pet_idx" >> "$GITHUB_OUTPUT"
+          shard_dir=$(printf "%05d" ${{ matrix.analytics_shard_index }})
+          echo "shard_dir=$shard_dir" >> "$GITHUB_OUTPUT"
+      - name: Download Corresponding PET Shards
         uses: actions/download-artifact@v4
         with:
-          pattern: pet-shard-*
+          pattern: pet-shard-*-${{ steps.calc.outputs.pet_idx }}
           merge-multiple: true
       - name: Generate Analytics
         run: |
@@ -461,7 +432,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: analytics-shard-${{ matrix.analytics_shard_index }}
-          path: analytics_data_csv/shard_count=00020/shard_index=${{ matrix.analytics_shard_dir }}/
+          path: analytics_data_csv/shard_count=00020/shard_index=${{ steps.calc.outputs.shard_dir }}/
 
   prepare-db-load:
     needs: [setup-locations, generate-analytics]
@@ -530,53 +501,13 @@ jobs:
             --skip-table pet_change
 
   load-to-db:
-    needs: [prepare-db-load, generate-analytics]
+    needs: [prepare-db-load, generate-analytics, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 10
       fail-fast: false
       matrix:
-        include:
-          - load_shard_index: 0
-            load_shard_dir: "00000"
-          - load_shard_index: 1
-            load_shard_dir: "00001"
-          - load_shard_index: 2
-            load_shard_dir: "00002"
-          - load_shard_index: 3
-            load_shard_dir: "00003"
-          - load_shard_index: 4
-            load_shard_dir: "00004"
-          - load_shard_index: 5
-            load_shard_dir: "00005"
-          - load_shard_index: 6
-            load_shard_dir: "00006"
-          - load_shard_index: 7
-            load_shard_dir: "00007"
-          - load_shard_index: 8
-            load_shard_dir: "00008"
-          - load_shard_index: 9
-            load_shard_dir: "00009"
-          - load_shard_index: 10
-            load_shard_dir: "00010"
-          - load_shard_index: 11
-            load_shard_dir: "00011"
-          - load_shard_index: 12
-            load_shard_dir: "00012"
-          - load_shard_index: 13
-            load_shard_dir: "00013"
-          - load_shard_index: 14
-            load_shard_dir: "00014"
-          - load_shard_index: 15
-            load_shard_dir: "00015"
-          - load_shard_index: 16
-            load_shard_dir: "00016"
-          - load_shard_index: 17
-            load_shard_dir: "00017"
-          - load_shard_index: 18
-            load_shard_dir: "00018"
-          - load_shard_index: 19
-            load_shard_dir: "00019"
+        load_shard_index: ${{ fromJSON(needs.build-year-range.outputs.analytics_shards) }}
     name: Load shard ${{ matrix.load_shard_index }}/20
     steps:
       - uses: actions/checkout@v4
@@ -588,16 +519,21 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install Database Dependencies
         run: pip install -r requirements.txt
+      - name: Compute Shard Paths
+        id: calc
+        run: |
+          pet_idx=$((${{ matrix.load_shard_index }} % 4))
+          echo "pet_idx=$pet_idx" >> "$GITHUB_OUTPUT"
       - name: Download PET Shards
         uses: actions/download-artifact@v4
         with:
-          pattern: pet-shard-*
+          pattern: pet-shard-*-${{ steps.calc.outputs.pet_idx }}
           merge-multiple: true
           path: .
       - name: Download analytics shards
         uses: actions/download-artifact@v4
         with:
-          pattern: analytics-shard-*
+          pattern: analytics-shard-${{ matrix.load_shard_index }}
           merge-multiple: true
           path: .
       - name: Load shard to Supabase

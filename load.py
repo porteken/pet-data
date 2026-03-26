@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -255,12 +254,11 @@ def _copy_csv_file_in_batches(
     table_name: str,
     csv_path: Path,
     *,
-    batch_size: int,
+    batch_size: int,  # noqa: ARG001
 ) -> int:
     copy_statement = sql.SQL("COPY {} FROM STDIN WITH CSV").format(
         sql.Identifier(table_name),
     )
-    rows_loaded = 0
 
     with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
         header = next(f, None)
@@ -268,27 +266,11 @@ def _copy_csv_file_in_batches(
             LOGGER.warning("CSV file %s is empty. Skipping.", csv_path)
             return 0
 
-        batch_rows: list[str] = []
-        for row in f:
-            batch_rows.append(row)
-            if len(batch_rows) < batch_size:
-                continue
-
-            cur.copy_expert(
-                copy_statement.as_string(conn),
-                StringIO("".join(batch_rows)),
-            )
-            rows_loaded += len(batch_rows)
-            batch_rows.clear()
-
-        if batch_rows:
-            cur.copy_expert(
-                copy_statement.as_string(conn),
-                StringIO("".join(batch_rows)),
-            )
-            rows_loaded += len(batch_rows)
-
-    return rows_loaded
+        cur.copy_expert(
+            copy_statement.as_string(conn),
+            f,
+        )
+        return cur.rowcount
 
 
 def bulk_insert_csv_files(
@@ -323,7 +305,7 @@ def bulk_insert_csv_files(
             table_name,
         )
 
-    total_rows = 0
+    total_rows: int = 0
     for csv_path in csv_paths:
         LOGGER.info("Loading %s into %s...", csv_path, table_name)
         total_rows += _copy_csv_file_in_batches(
@@ -333,7 +315,11 @@ def bulk_insert_csv_files(
             batch_size=batch_size,
         )
 
-    LOGGER.info("Successfully loaded %s rows into %s.", total_rows, table_name)
+    LOGGER.info(
+        "Successfully loaded %d rows into %s.",
+        int(total_rows),
+        str(table_name),
+    )
 
 
 def _discover_locations_csv_paths(args: argparse.Namespace) -> list[Path]:

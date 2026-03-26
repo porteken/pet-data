@@ -14,7 +14,7 @@ from shards import discover_parquet_shards, read_parquet_files, select_shards
 
 DataFrame: TypeAlias = Any
 LOGGER = logging.getLogger(__name__)
-CHUNK_SIZE = 10000
+CHUNK_SIZE = 50000
 PET_ROUNDING_FACTOR = 2.0
 
 
@@ -83,8 +83,13 @@ def calculate_pet_frame(df: DataFrame) -> DataFrame:
     start_time = time.time()
     n_cores = max(1, multiprocessing.cpu_count() - 1)
 
-    with multiprocessing.Pool(processes=n_cores) as pool:
-        results: list[DataFrame] = list(pool.imap_unordered(compute_pet_chunk, chunks))
+    if n_cores <= 1:
+        results: list[DataFrame] = list(map(compute_pet_chunk, chunks))
+    else:
+        with multiprocessing.Pool(processes=n_cores) as pool:
+            results: list[DataFrame] = list(
+                pool.imap_unordered(compute_pet_chunk, chunks),
+            )
 
     if results:
         df_pet_unique: DataFrame = pd.concat(results, ignore_index=True)
