@@ -334,10 +334,10 @@ def _mrt_partition_is_current(
         return False
 
     _, allowed_end_date = build_mrt_date_bounds(year, month=month)
-    is_current = max_date <= allowed_end_date
+    is_current = max_date >= allowed_end_date
     if not is_current:
         LOGGER.info(
-            "MRT partition %s extends through %s but the supported end date is %s. "
+            "MRT partition %s only extends through %s but the supported end date is %s. "
             "Refreshing partition.",
             partition_path,
             max_date.isoformat(),

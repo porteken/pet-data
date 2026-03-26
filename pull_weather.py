@@ -198,10 +198,10 @@ def _weather_shard_is_current(
         return False
 
     allowed_end_date = pull_end_date()
-    is_current = max_date <= allowed_end_date
+    is_current = max_date >= allowed_end_date
     if not is_current:
         LOGGER.info(
-            "Weather shard %s extends through %s but the supported end date is %s. "
+            "Weather shard %s only extends through %s but the supported end date is %s. "
             "Refreshing shard.",
             city_shard_index,
             max_date.isoformat(),
