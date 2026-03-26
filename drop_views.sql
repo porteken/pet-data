@@ -1,6 +1,12 @@
 DROP INDEX IF EXISTS pet_year_location_date_uidx;
 DROP INDEX IF EXISTS pet_year_location_year_idx;
 DROP INDEX IF EXISTS pet_year_year_idx;
-DROP MATERIALIZED VIEW IF EXISTS public.pet_year_avg;
+DROP INDEX IF EXISTS pet_year_avg_location_year_season_uidx;
+DROP INDEX IF EXISTS pet_year_avg_year_idx;
+DROP INDEX IF EXISTS pet_year_avg_season_idx;
+DROP INDEX IF EXISTS pet_year_max_location_year_season_uidx;
+DROP INDEX IF EXISTS pet_year_max_year_idx;
+DROP INDEX IF EXISTS pet_year_max_season_idx;
+DROP MATERIALIZED VIEW IF EXISTS public.pet_year_avg CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year_max;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year;
