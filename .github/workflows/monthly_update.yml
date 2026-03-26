@@ -25,7 +25,7 @@ jobs:
       window_start: ${{ steps.compute.outputs.window_start }}
       window_end: ${{ steps.compute.outputs.window_end }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - id: compute
         env:
           INPUT_TARGET_YEAR: ${{ github.event.inputs.target_year || '' }}
@@ -70,9 +70,9 @@ jobs:
   setup-locations:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -84,7 +84,7 @@ jobs:
       - name: Run boxes.py
         run: python boxes.py
       - name: Upload locations data
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@v4
         with:
           name: locations-data
           path: |
@@ -94,9 +94,9 @@ jobs:
   cancel-cds-jobs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -119,9 +119,9 @@ jobs:
         city_shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     name: Weather shard ${{ matrix.city_shard_index }}/10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -129,7 +129,7 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Download Locations Data
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           name: locations-data
           path: .
@@ -145,24 +145,24 @@ jobs:
             --weather-city-shard-count 10 \
             --max-workers 2
       - name: Upload Weather Shards
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: monthly-weather-shard-${{ matrix.city_shard_index }}
           path: weather_data_parquet/city_shard_index=${{ matrix.city_shard_index }}/
 
   process-mrt:
-    needs: [setup-locations, build-target-window, cancel-cds-jobs]
+    needs: [setup-locations, build-target-window, cancel-cds-jobs, process-weather]
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 4
+      max-parallel: 4  # safe: process-weather is done, so full CDS quota is available
       fail-fast: false
       matrix:
         tile_shard_index: [0, 1, 2, 3]
     name: MRT shard ${{ matrix.tile_shard_index }}/4
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -170,7 +170,7 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Download Locations Data
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           name: locations-data
           path: .
@@ -186,7 +186,7 @@ jobs:
             --tile-shard-count 4 \
             --max-workers 2
       - name: Upload MRT Shards
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: monthly-mrt-shard-${{ matrix.tile_shard_index }}
           path: utci_data_parquet/year=${{ needs.build-target-window.outputs.target_year }}/month=${{ needs.build-target-window.outputs.target_month }}/
@@ -201,9 +201,9 @@ jobs:
         pet_shard_index: [0, 1, 2, 3]
     name: PET shard ${{ matrix.pet_shard_index }}/4 for ${{ needs.build-target-window.outputs.target_label }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -211,18 +211,18 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Download Locations Data
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           name: locations-data
           path: .
       - name: Download Weather Shards
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           pattern: monthly-weather-shard-*
           merge-multiple: true
           path: .
       - name: Download MRT Shards
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           pattern: monthly-mrt-shard-*
           merge-multiple: true
@@ -238,7 +238,7 @@ jobs:
             --shard-index ${{ matrix.pet_shard_index }} \
             --shard-count 4
       - name: Upload PET Shards
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: monthly-pet-shard-${{ matrix.pet_shard_index }}
           path: pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/
@@ -294,9 +294,9 @@ jobs:
             analytics_shard_dir: '00019'
     name: Analytics shard ${{ matrix.analytics_shard_index }}/20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -304,7 +304,7 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Download PET Shards
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           pattern: monthly-pet-shard-*
           merge-multiple: true
@@ -389,7 +389,7 @@ jobs:
             --shard-index ${{ matrix.analytics_shard_index }} \
             --shard-count 20
       - name: Upload Analytics Shard
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: monthly-analytics-shard-${{ matrix.analytics_shard_index }}
           path: analytics_data_csv/shard_count=00020/shard_index=${{ matrix.analytics_shard_dir }}/
@@ -397,11 +397,10 @@ jobs:
   prepare-db-load:
     needs: [process-pet, generate-analytics, build-target-window]
     runs-on: ubuntu-latest
-    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -459,7 +458,6 @@ jobs:
   load-to-db:
     needs: prepare-db-load
     runs-on: ubuntu-latest
-    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     strategy:
       max-parallel: 10
       fail-fast: false
@@ -507,9 +505,9 @@ jobs:
             load_shard_dir: '00019'
     name: Load shard ${{ matrix.load_shard_index }}/20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -517,13 +515,13 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Download PET Shards
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           pattern: monthly-pet-shard-*
           merge-multiple: true
           path: .
       - name: Download Analytics Shards
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           pattern: monthly-analytics-shard-*
           merge-multiple: true
@@ -544,11 +542,10 @@ jobs:
   finalize-db-load:
     needs: load-to-db
     runs-on: ubuntu-latest
-    if: ${{ secrets.SUPABASE_DB_URI != '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'

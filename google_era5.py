@@ -8,12 +8,33 @@ import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import LOGGER, DataFrame, pa, partition_file_exists, pd, pq
 from shards import resolve_filesystem
+
+
+def _arco_stable_end_year() -> int:
+    """Return the latest year whose full data is available in the ARCO store.
+
+    Google ARCO ERA5 publishes stable (final) data on a ~3-month rolling lag.
+    ERA5T (near-real-time) has a ~5-day lag but is subject to revision.
+    We use the stable lag here to stay on safe, finalised data.
+    """
+    stable_lag_months = 3
+    now = datetime.now(tz=timezone.utc)
+    # Subtract lag months to get the latest safely available month
+    available_month = now.month - stable_lag_months
+    available_year = now.year if available_month > 0 else now.year - 1
+    # A full year is only safe once December of that year has cleared the lag
+    # i.e., December + 3 months = March of the following year
+    if available_year == now.year:
+        available_year -= 1
+    return available_year
+
 
 Dataset: TypeAlias = Any
 ArrayLike: TypeAlias = Any
@@ -22,7 +43,9 @@ ArrayLike: TypeAlias = Any
 ERA5_ARCO_STORE = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
 
 ERA5_START_YEAR = 2000
-ERA5_END_YEAR = 2023
+ERA5_END_YEAR = (
+    _arco_stable_end_year()
+)  # Dynamic: all fully-complete years available in ARCO
 
 
 ERA5_VARIABLE_CANDIDATES: dict[str, list[str]] = {
@@ -812,7 +835,8 @@ def process_era5(
     """Download ERA5 weather + MRT for one year and one city shard."""
     if year < ERA5_START_YEAR or year > ERA5_END_YEAR:
         msg = (
-            f"ERA5 ARCO store covers {ERA5_START_YEAR}-{ERA5_END_YEAR}. "
+            f"ERA5 ARCO store covers {ERA5_START_YEAR}-{ERA5_END_YEAR} "
+            f"(dynamically computed from today's date minus the stable-data lag). "
             f"Requested year {year} is outside this range."
         )
         raise ValueError(msg)
@@ -887,7 +911,7 @@ def _parse_args() -> argparse.Namespace:
         "--year",
         required=True,
         type=int,
-        help=f"Year to download ({ERA5_START_YEAR}-{ERA5_END_YEAR}).",
+        help=f"Year to download ({ERA5_START_YEAR}-{ERA5_END_YEAR}; upper bound is dynamic).",
     )
     parser.add_argument(
         "--out-dir",

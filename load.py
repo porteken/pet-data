@@ -435,8 +435,10 @@ def main() -> None:
     skip_tables: set[str] = set(args.skip_tables or [])
 
     if not DB_URI:
-        msg = "SUPABASE_DB_URI environment variable is not set"
-        raise RuntimeError(msg)
+        LOGGER.warning(
+            "SUPABASE_DB_URI environment variable is not set. Skipping database operations.",
+        )
+        return
 
     LOGGER.info("Connecting to the database...")
     conn: connection = psycopg2.connect(DB_URI)
