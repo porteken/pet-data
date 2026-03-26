@@ -191,6 +191,7 @@ jobs:
 
   pull-google-era5:
     needs: [setup-locations, clear-era5-output, build-year-range]
+    if: ${{ needs.build-year-range.outputs.era5_years != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 4
@@ -236,6 +237,7 @@ jobs:
   process-weather:
     needs:
       [setup-locations, clear-weather-output, build-year-range, cancel-cds-jobs]
+    if: ${{ needs.build-year-range.outputs.cds_years != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 2
@@ -288,6 +290,7 @@ jobs:
         cancel-cds-jobs,
         process-weather,
       ]
+    if: ${{ needs.build-year-range.outputs.cds_year_months != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 4 # safe: process-weather is done, so full CDS quota is available
@@ -338,6 +341,7 @@ jobs:
         pull-google-era5,
         build-year-range,
       ]
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 8
