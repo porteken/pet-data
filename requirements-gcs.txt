@@ -3,3 +3,4 @@ gcsfs
 zarr
 dask
 xarray
+thermofeel
