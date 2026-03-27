@@ -46,15 +46,19 @@ def process_cities(df: DataFrame) -> DataFrame:
     """Keep highest population city per .25' and return top 500 cities."""
     df = df.copy()
 
-    df[["real_lat", "real_lng"]] = df[["lat", "lng"]].round(2)
-    df[["lat", "lng"]] = np.round(df[["lat", "lng"]] * 4) / 4
+    # Create snapped coordinates for grouping only (not for output)
+    df["snapped_lat"] = np.round(df["lat"] * 4) / 4
+    df["snapped_lng"] = np.round(df["lng"] * 4) / 4
 
-    idx = df.groupby(["lat", "lng"])["population"].idxmax()
+    # Keep the highest population city per grid cell
+    idx = df.groupby(["snapped_lat", "snapped_lng"])["population"].idxmax()
     df = df.loc[idx]
 
+    # Select top 500 cities by population
     df = df.nlargest(500, "population").sort_values("population", ascending=False)
     df = df.reset_index(drop=True).reset_index(names="location_id")
 
+    # Output only the 6 standard columns with real coordinates
     return df[
         [
             "location_id",
@@ -63,8 +67,6 @@ def process_cities(df: DataFrame) -> DataFrame:
             "population",
             "lat",
             "lng",
-            "real_lat",
-            "real_lng",
         ]
     ]
 
