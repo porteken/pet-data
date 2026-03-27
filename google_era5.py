@@ -242,9 +242,13 @@ def _configure_concurrency(profile: str) -> None:
         "aggressive": {"zarr_concurrency": 128, "dask_workers": 8},
     }
     profile_cfg = configs.get(profile, configs["balanced"])
+    zarr_io_limit: int | str = profile_cfg["zarr_concurrency"]
 
-    # Zarr async concurrency (default is 10)
-    zarr.config.set({"async.concurrency": profile_cfg["zarr_concurrency"]})
+    # Zarr async concurrency (default is 10, only available in V3+)
+    if hasattr(zarr, "config"):
+        zarr.config.set({"async.concurrency": profile_cfg["zarr_concurrency"]})
+    else:
+        zarr_io_limit = "default (v2)"
 
     # Dask global settings
     dask.config.set(
@@ -256,7 +260,7 @@ def _configure_concurrency(profile: str) -> None:
     LOGGER.info(
         "Concurrency profile %r: Zarr I/O limit=%s, Dask workers/batch=%s",
         profile,
-        profile_cfg["zarr_concurrency"],
+        zarr_io_limit,
         profile_cfg["dask_workers"],
     )
 
