@@ -6,3 +6,5 @@ utci_*/
 weather_*/
 __pycache__/
 venv
+*.md
+!README.md

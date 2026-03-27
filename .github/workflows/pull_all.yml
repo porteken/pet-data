@@ -195,12 +195,12 @@ jobs:
     if: ${{ needs.build-year-range.outputs.era5_years != '[]' }}
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 4
+      max-parallel: 10
       fail-fast: false
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.era5_years) }}
-        time_shard_index: [0, 1, 2, 3]
-    name: ERA5 ${{ matrix.year }} time ${{ matrix.time_shard_index }}/4
+        time_shard_index: [0, 1]
+    name: ERA5 ${{ matrix.year }} time ${{ matrix.time_shard_index }}/2
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -222,9 +222,8 @@ jobs:
             --year ${{ matrix.year }} \
             --city-shard-count 1 \
             --time-shard-index ${{ matrix.time_shard_index }} \
-            --time-shard-count 4 \
-            --max-workers 2 \
-            --batch-hours 72
+            --time-shard-count 2 \
+            --concurrency-profile balanced
       - name: Upload ERA5 Shards to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

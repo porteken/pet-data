@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -98,8 +99,11 @@ _C = 243.04
 EXPECTED_LOCATION_COUNT = 500
 THREE_DIMENSIONAL_ARRAY_NDIMS = 3
 ERA5_TIME_ORIGIN = "1959-01-01"
-DEFAULT_BATCH_HOURS = 24 * 3
+DEFAULT_BATCH_HOURS = 24 * 7  # 168 hours (1 week)
 ERA5_THREAD_LOCAL = threading.local()
+
+GCS_BATCH_MAX_RETRIES = 3
+GCS_BATCH_RETRY_DELAY_SECONDS = 10
 
 
 def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
@@ -204,7 +208,11 @@ def _open_zarr_store() -> Dataset:
     dask_array = cast("Any", importlib.import_module("dask.array"))
     zarr = cast("Any", importlib.import_module("zarr"))
 
-    fs = gcsfs.GCSFileSystem(token="anon")  # noqa: S106
+    # Create GCS filesystem with tuned connection/block settings
+    fs = gcsfs.GCSFileSystem(
+        token="anon",  # noqa: S106
+        default_block_size=8 * 1024 * 1024,  # 8MB blocks
+    )
     root = zarr.open_group(fs.get_mapper(ERA5_ARCO_STORE), mode="r")
     resolved_names = _resolve_store_variables(set(root.array_keys()))
     return xr.Dataset(
@@ -220,6 +228,36 @@ def _open_zarr_store() -> Dataset:
             "latitude": root["latitude"][:],
             "longitude": root["longitude"][:],
         },
+    )
+
+
+def _configure_concurrency(profile: str) -> None:
+    """Tune Zarr and Dask concurrency based on the selected profile."""
+    zarr = cast("Any", importlib.import_module("zarr"))
+    dask = cast("Any", importlib.import_module("dask"))
+
+    configs = {
+        "conservative": {"zarr_concurrency": 16, "dask_workers": 2},
+        "balanced": {"zarr_concurrency": 64, "dask_workers": 4},
+        "aggressive": {"zarr_concurrency": 128, "dask_workers": 8},
+    }
+    profile_cfg = configs.get(profile, configs["balanced"])
+
+    # Zarr async concurrency (default is 10)
+    zarr.config.set({"async.concurrency": profile_cfg["zarr_concurrency"]})
+
+    # Dask global settings
+    dask.config.set(
+        {
+            "array.slicing.split_large_chunks": False,
+        },
+    )
+
+    LOGGER.info(
+        "Concurrency profile %r: Zarr I/O limit=%s, Dask workers/batch=%s",
+        profile,
+        profile_cfg["zarr_concurrency"],
+        profile_cfg["dask_workers"],
     )
 
 
@@ -470,7 +508,20 @@ def _compute_location_frame(
         method="nearest",
     )
     with dask.config.set(scheduler="threads", num_workers=compute_workers):
+        fetch_start = time.time()
         city_data: Any = city_selection.compute()
+        fetch_elapsed = time.time() - fetch_start
+
+    n_hours = len(city_data.time)
+    n_chunks = n_hours * len(ERA5_ALL_ARCO_VARIABLES)
+    LOGGER.info(
+        "Fetched %s chunks (%s hours x %s vars) in %.1f seconds (%.1f chunks/sec).",
+        n_chunks,
+        n_hours,
+        len(ERA5_ALL_ARCO_VARIABLES),
+        fetch_elapsed,
+        n_chunks / max(fetch_elapsed, 0.001),
+    )
 
     n_time_steps: int = len(city_data.time)
     pd_module = cast("Any", importlib.import_module("pandas"))
@@ -715,22 +766,40 @@ def _process_era5_batch_with_thread_dataset(
     city_shard_count: int,
     time_shard_index: int,
     time_shard_count: int,
+    compute_workers: int,
 ) -> int:
     """Process one ERA5 batch using a thread-local dataset."""
-    return _process_era5_batch_job(
-        ds=_get_thread_dataset(),
-        era5_root=era5_root,
-        year=year,
-        batch_index=batch_index,
-        start_h=start_h,
-        end_h=end_h,
-        pending_batch_df=pending_batch_df,
-        city_shard_index=city_shard_index,
-        city_shard_count=city_shard_count,
-        time_shard_index=time_shard_index,
-        time_shard_count=time_shard_count,
-        compute_workers=1,
-    )
+    for attempt in range(1, GCS_BATCH_MAX_RETRIES + 1):
+        try:
+            return _process_era5_batch_job(
+                ds=_get_thread_dataset(),
+                era5_root=era5_root,
+                year=year,
+                batch_index=batch_index,
+                start_h=start_h,
+                end_h=end_h,
+                pending_batch_df=pending_batch_df,
+                city_shard_index=city_shard_index,
+                city_shard_count=city_shard_count,
+                time_shard_index=time_shard_index,
+                time_shard_count=time_shard_count,
+                compute_workers=compute_workers,
+            )
+        except Exception as exc:  # noqa: PERF203
+            if attempt == GCS_BATCH_MAX_RETRIES:
+                raise
+            delay = GCS_BATCH_RETRY_DELAY_SECONDS * attempt
+            LOGGER.warning(
+                "ERA5 batch %s attempt %s/%s failed: %s. Retrying in %s seconds.",
+                batch_index,
+                attempt,
+                GCS_BATCH_MAX_RETRIES,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+
+    return batch_index
 
 
 def _run_era5_batch_jobs(
@@ -762,6 +831,16 @@ def _run_era5_batch_jobs(
         return False
 
     resolved_max_workers = _resolve_era5_max_workers(max_workers)
+
+    # Map profile to dask internal workers
+    # aggressive = 8, balanced = 4, conservative = 2
+    # This is passed into _compute_location_frame
+    dask_workers = 4
+    if os.environ.get("ERA5_CONCURRENCY_PROFILE") == "aggressive":
+        dask_workers = 8
+    elif os.environ.get("ERA5_CONCURRENCY_PROFILE") == "conservative":
+        dask_workers = 2
+
     worker_count = max(
         1,
         min(
@@ -785,14 +864,15 @@ def _run_era5_batch_jobs(
                 city_shard_count=city_shard_count,
                 time_shard_index=time_shard_index,
                 time_shard_count=time_shard_count,
-                compute_workers=1,
+                compute_workers=dask_workers,
             )
         return True
 
     LOGGER.info(
-        "Processing %s ERA5 batches with %s worker threads.",
+        "Processing %s ERA5 batches with %s worker threads (%s Dask workers/batch).",
         len(batch_jobs),
         worker_count,
+        dask_workers,
     )
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_batch_index = {
@@ -808,6 +888,7 @@ def _run_era5_batch_jobs(
                 city_shard_count=city_shard_count,
                 time_shard_index=time_shard_index,
                 time_shard_count=time_shard_count,
+                compute_workers=dask_workers,
             ): batch_index
             for batch_index, start_h, end_h, pending_batch_df in batch_jobs
         }
@@ -828,8 +909,12 @@ def process_era5(
     time_shard_count: int = 1,
     max_workers: int = 4,
     batch_hours: int = DEFAULT_BATCH_HOURS,
+    concurrency_profile: str = "aggressive",
 ) -> None:
     """Download ERA5 weather + MRT for one year and one city shard."""
+    _configure_concurrency(concurrency_profile)
+    os.environ["ERA5_CONCURRENCY_PROFILE"] = concurrency_profile
+
     if year < ERA5_START_YEAR or year > ERA5_END_YEAR:
         msg = (
             f"ERA5 ARCO store covers {ERA5_START_YEAR}-{ERA5_END_YEAR} "
@@ -952,6 +1037,16 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_BATCH_HOURS,
         help=f"Hours to fetch per resumable batch (default: {DEFAULT_BATCH_HOURS}).",
     )
+    parser.add_argument(
+        "--concurrency-profile",
+        choices=["conservative", "balanced", "aggressive"],
+        default="aggressive",
+        help=(
+            "I/O concurrency profile. 'aggressive' maximizes GCS throughput "
+            "(128 concurrent chunk reads, 8 dask workers). 'balanced' uses "
+            "moderate settings (64/4). 'conservative' uses minimal settings (16/2)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -968,6 +1063,7 @@ def main() -> None:
             time_shard_count=args.time_shard_count,
             max_workers=args.max_workers,
             batch_hours=args.batch_hours,
+            concurrency_profile=args.concurrency_profile,
         )
     except Exception as exc:
         LOGGER.exception("ERA5 pipeline failed for year=%s.", args.year)
