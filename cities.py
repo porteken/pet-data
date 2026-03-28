@@ -58,13 +58,12 @@ def process_cities(df: DataFrame) -> DataFrame:
     df = df.nlargest(500, "population").sort_values("population", ascending=False)
     df = df.reset_index(drop=True).reset_index(names="location_id")
 
-    # Output only the 6 standard columns with real coordinates
+    # Output only the 5 standard columns with real coordinates
     return df[
         [
             "location_id",
             "city",
             "state",
-            "population",
             "lat",
             "lng",
         ]
