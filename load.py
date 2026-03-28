@@ -256,15 +256,17 @@ def _copy_csv_file_in_batches(
     *,
     batch_size: int,  # noqa: ARG001
 ) -> int:
-    copy_statement = sql.SQL("COPY {} FROM STDIN WITH CSV").format(
-        sql.Identifier(table_name),
-    )
-
     with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
         header = next(f, None)
         if header is None:
             LOGGER.warning("CSV file %s is empty. Skipping.", csv_path)
             return 0
+
+        column_names = [col.strip() for col in header.split(",")]
+        copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
+            sql.Identifier(table_name),
+            sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
+        )
 
         cur.copy_expert(
             copy_statement.as_string(conn),
