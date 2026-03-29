@@ -24,8 +24,8 @@ class ForecastRecord(TypedDict):
     """A single PET forecast row."""
 
     location_id: object
-    forecast_year: int
-    forecast_pet: float
+    year: int
+    pet: float
 
 
 def _parse_args() -> argparse.Namespace:
@@ -92,14 +92,14 @@ def generate_forecast(df: DataFrame, output_dir: Path) -> Path:
             forecast_records.append(
                 {
                     "location_id": loc_id,
-                    "forecast_year": future_year,
-                    "forecast_pet": round(projected_pet, 2),
+                    "year": future_year,
+                    "pet": round(projected_pet, 2),
                 },
             )
 
     forecast_df = pd.DataFrame(
         forecast_records,
-        columns=["location_id", "forecast_year", "forecast_pet"],
+        columns=["location_id", "year", "pet"],
     )
     forecast_df.to_csv(output_path, index=False)
     return output_path
@@ -125,7 +125,7 @@ def generate_change_per_decade(df: DataFrame, output_dir: Path) -> Path:
     final_df = pd.DataFrame(
         decade_avg[["location_id", "decade", "change_value"]].round(2),
         columns=["location_id", "decade", "change_value"],
-    )
+    ).rename(columns={"change_value": "change"})
     final_df.to_csv(output_path, index=False)
     return output_path
 

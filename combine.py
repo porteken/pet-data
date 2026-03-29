@@ -99,6 +99,13 @@ def combine_shard(
         shard_key=shard_key,
     )
 
+    if combined_df.empty:
+        LOGGER.warning(
+            "Combined shard %s produced no matching city rows.",
+            shard_key.label,
+        )
+        return None
+
     combined_df = combined_df.rename(
         columns={
             "timestamp": "time",
