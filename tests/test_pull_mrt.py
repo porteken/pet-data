@@ -12,6 +12,7 @@ import pytest
 from pull_mrt import (
     MRT_CDS_REQUEST_CONCURRENCY,
     MRT_CDS_REQUEST_SEMAPHORE,
+    MRT_NETCDF_READ_LOCK,
     MRT_THREAD_LOCAL,
     _mrt_partition_is_current,
     _mrt_partition_path,
@@ -27,6 +28,9 @@ class TestMrtConcurrency:
 
     def test_semaphore_exists(self) -> None:
         assert isinstance(MRT_CDS_REQUEST_SEMAPHORE, threading.BoundedSemaphore)
+
+    def test_netcdf_read_lock_exists(self) -> None:
+        assert isinstance(MRT_NETCDF_READ_LOCK, type(threading.Lock()))
 
     def test_thread_local_exists(self) -> None:
         assert isinstance(MRT_THREAD_LOCAL, threading.local)

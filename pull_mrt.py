@@ -40,6 +40,7 @@ MRT_CDS_REQUEST_CONCURRENCY = 4
 
 MRT_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(MRT_CDS_REQUEST_CONCURRENCY)
 MRT_THREAD_LOCAL = threading.local()
+MRT_NETCDF_READ_LOCK = threading.Lock()
 
 
 def process_mrt(
@@ -266,7 +267,10 @@ def _process_mrt_tile(
         normalized_tile_cells = tile_cells.rename(
             columns={"grid_lat": "lat", "grid_lon": "lng"},
         )
-        mrt_df = _load_mrt_frame(zip_path)
+        # netCDF4-backed xarray decoding is not reliably thread-safe here and
+        # can segfault when multiple MRT tiles are decoded concurrently.
+        with MRT_NETCDF_READ_LOCK:
+            mrt_df = _load_mrt_frame(zip_path)
         mrt_df = mrt_df.merge(
             normalized_tile_cells,
             how="inner",

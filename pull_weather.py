@@ -57,6 +57,7 @@ WEATHER_CSV_ENCODINGS = (
     "utf-16",
     "latin-1",
 )
+WEATHER_PARQUET_NAME = "weather.parquet"
 WEATHER_CDS_REQUEST_CONCURRENCY = 2
 
 WEATHER_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(
@@ -75,6 +76,7 @@ def process_weather(
     city_shard_index: int = 0,
     city_shard_count: int = 1,
     max_workers: int = 4,
+    expected_location_count: int | None = EXPECTED_WEATHER_LOCATION_COUNT,
 ) -> None:
     """Download and process ERA5 weather data grouped by city shards."""
     weather_root = f"{out_dir}/weather_data_parquet"
@@ -87,6 +89,7 @@ def process_weather(
     shard_city_cells = _load_weather_city_shard(
         city_shard_index=city_shard_index,
         city_shard_count=city_shard_count,
+        expected_location_count=expected_location_count,
     )
     if shard_city_cells.empty:
         LOGGER.warning("No weather cities selected for processing.")
@@ -114,6 +117,7 @@ def _load_weather_city_shard(
     *,
     city_shard_index: int,
     city_shard_count: int,
+    expected_location_count: int | None,
 ) -> DataFrame:
     """Return the city rows assigned to the requested weather shard."""
     if city_shard_count < 1:
@@ -143,10 +147,13 @@ def _load_weather_city_shard(
         .sort_values("location_id")
         .reset_index(drop=True)
     )
-    if len(city_cells) != EXPECTED_WEATHER_LOCATION_COUNT:
+    if (
+        expected_location_count is not None
+        and len(city_cells) != expected_location_count
+    ):
         msg = (
             "Expected weather sharding to cover exactly "
-            f"{EXPECTED_WEATHER_LOCATION_COUNT} locations, found {len(city_cells)}."
+            f"{expected_location_count} locations, found {len(city_cells)}."
         )
         raise ValueError(msg)
 
@@ -180,7 +187,7 @@ def _weather_shard_exists(
     return partition_file_exists(
         base_uri,
         _weather_partition_path(city_shard_index),
-        "weather.parquet",
+        WEATHER_PARQUET_NAME,
     )
 
 
@@ -198,7 +205,7 @@ def _weather_shard_is_current(
     max_date = partition_file_max_timestamp(
         base_uri,
         partition_path,
-        "weather.parquet",
+        WEATHER_PARQUET_NAME,
     )
     if max_date is None:
         return False
@@ -541,9 +548,9 @@ def _write_weather_partition(
     partition_path = _weather_partition_path(city_shard_index)
     partition_dir = f"{base_path}/{partition_path}"
     filesystem.create_dir(partition_dir, recursive=True)
-    output_path = f"{partition_dir}/weather.parquet"
+    output_path = f"{partition_dir}/{WEATHER_PARQUET_NAME}"
 
-    if partition_file_exists(weather_root, partition_path, "weather.parquet"):
+    if partition_file_exists(weather_root, partition_path, WEATHER_PARQUET_NAME):
         try:
             with filesystem.open_input_file(output_path) as input_file:
                 existing_df = pq.read_table(input_file).to_pandas()
@@ -678,6 +685,15 @@ def _parse_args() -> argparse.Namespace:
             "Ignored when --year is specified."
         ),
     )
+    parser.add_argument(
+        "--expected-location-count",
+        type=int,
+        default=EXPECTED_WEATHER_LOCATION_COUNT,
+        help=(
+            "Expected number of rows in cities.csv for validation. "
+            "Set this to a smaller value for local smoke tests."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -703,6 +719,7 @@ def main() -> None:
             city_shard_index=args.weather_city_shard_index,
             city_shard_count=args.weather_city_shard_count,
             max_workers=args.max_workers,
+            expected_location_count=args.expected_location_count,
         )
     except Exception as exc:
         LOGGER.exception("Weather pipeline failed.")

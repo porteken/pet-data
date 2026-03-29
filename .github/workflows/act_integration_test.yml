@@ -1,11 +1,16 @@
-name: Local Integration Test (act)
+name: Local Full Workflow Test (act)
 
 on:
   workflow_dispatch:
 
 jobs:
-  integration-test:
+  local-full-pipeline:
     runs-on: ubuntu-latest
+    env:
+      ACT_PG_PASS: local-postgres-pass
+      RUN_DIR: /tmp/pet-data-local-act
+      CDSAPI_URL: https://cds.climate.copernicus.eu/api
+      TEST_CITY_COUNT: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -14,122 +19,277 @@ jobs:
         with:
           python-version: "3.10"
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements-cds.txt
 
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      # ── Step 1: Setup locations ──
-      - name: Run cities.py
-        run: python cities.py
-
-      - name: Run boxes.py
-        run: python boxes.py
-
-      - name: Verify Location Outputs
+      - name: Prepare isolated run directory
         run: |
           set -euo pipefail
+          rm -rf "$RUN_DIR"
+          mkdir -p "$RUN_DIR"
+          tar \
+            -C "$GITHUB_WORKSPACE" \
+            --exclude=.git \
+            --exclude=__pycache__ \
+            --exclude=.pytest_cache \
+            --exclude=.ruff_cache \
+            --exclude=.mypy_cache \
+            --exclude=.venv \
+            --exclude=analytics_data_csv \
+            --exclude=combined_data_parquet \
+            --exclude=output_tiles \
+            --exclude=pet_data_csv \
+            --exclude=raw_weather_grib \
+            --exclude=utci_data_parquet \
+            --exclude=weather_data_parquet \
+            -cf - . | tar -xf - -C "$RUN_DIR"
+
+      - name: Install Dependencies
+        run: pip install -r "$RUN_DIR/requirements-cds.txt"
+
+      - name: Start disposable Postgres
+        run: |
+          set -euo pipefail
+          echo "SUPABASE_DB_URI=postgresql://postgres:$ACT_PG_PASS@127.0.0.1:54329/pet_test" >> "$GITHUB_ENV"
+          docker rm -f act-local-pg >/dev/null 2>&1 || true
+          docker run -d \
+            --name act-local-pg \
+            -e POSTGRES_DB=pet_test \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD="$ACT_PG_PASS" \
+            -p 54329:5432 \
+            postgres:16
+
+          for attempt in $(seq 1 30); do
+            if docker exec act-local-pg pg_isready -U postgres -d pet_test >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs act-local-pg
+          exit 1
+
+      - name: Compute 2-month test window
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python - <<'PY' >> "$GITHUB_ENV"
+          from datetime import date
+
+          from shared_config import mrt_available_end_date
+
+
+          def shift_month(value: date, delta: int) -> date:
+              month_index = value.year * 12 + (value.month - 1) + delta
+              year, month_index = divmod(month_index, 12)
+              return date(year, month_index + 1, 1)
+
+
+          end_month = mrt_available_end_date().replace(day=1)
+          start_month = shift_month(end_month, -1)
+          month_specs = [
+              f"{start_month.year}-{start_month.month:02d}",
+              f"{end_month.year}-{end_month.month:02d}",
+          ]
+          target_years = sorted({start_month.year, end_month.year})
+
+          print(f"MONTH_SPECS={' '.join(month_specs)}")
+          print(f"TARGET_YEARS={' '.join(str(year) for year in target_years)}")
+          print(f"WINDOW_START={start_month.isoformat()}")
+          print(f"WINDOW_END={mrt_available_end_date().isoformat()}")
+          PY
+
+      - name: Build location metadata
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python cities.py
+          python boxes.py
+
+      - name: Limit local test cities
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python - <<'PY'
+          import pandas as pd
+          cities_df = (
+              pd.read_csv("cities.csv")
+              .sort_values("location_id")
+              .head(1)
+              .reset_index(drop=True)
+          )
+          cities_df.to_csv("cities.csv", index=False)
+          PY
+          python boxes.py
+
+      - name: Verify location outputs
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
           test -f cities.csv
           test -f output_tiles/city_to_tile.csv
           test -f output_tiles/tile_boxes.csv
           test -f output_tiles/snapped_cities.csv
           test -f output_tiles/unique_grid_cells.csv
-          echo "✓ Location outputs verified."
+          CITY_COUNT=$(python - <<'PY'
+          import pandas as pd
+          print(len(pd.read_csv('cities.csv')))
+          PY
+          )
+          [ "$CITY_COUNT" -eq "$TEST_CITY_COUNT" ]
 
-      # ── Step 2: Generate synthetic ERA5-style combined data for 1 year, 2 tiles ──
-      - name: Generate Synthetic Test Data
-        run: python tests/generate_test_fixtures.py
-
-      - name: Verify Synthetic Data
+      - name: Pull weather for 2 months
+        env:
+          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
           set -euo pipefail
-          test -d test_era5_parquet
-          ERA5_COUNT=$(find test_era5_parquet -name '*.parquet' | wc -l)
-          echo "ERA5 parquet files: $ERA5_COUNT"
-          [ "$ERA5_COUNT" -ge 1 ]
-          echo "✓ Synthetic test data verified."
+          cd "$RUN_DIR"
+          for spec in $MONTH_SPECS; do
+            year=${spec%-*}
+            month=${spec#*-}
+            python pull_weather.py \
+              --year "$year" \
+              --month "$month" \
+              --weather-city-shard-index 0 \
+              --weather-city-shard-count 1 \
+              --expected-location-count "$TEST_CITY_COUNT" \
+              --max-workers 2
+          done
 
-      # ── Step 3: Combine (ERA5 passthrough) ──
-      - name: Run combine.py (ERA5 passthrough)
-        run: |
-          python combine.py \
-            --era5-root test_era5_parquet \
-            --out-dir test_combined_parquet \
-            --year 2000
-
-      - name: Verify Combined Output
+      - name: Pull MRT for 2 months
+        env:
+          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
           set -euo pipefail
-          COMBINED_COUNT=$(find test_combined_parquet -name '*.parquet' | wc -l)
+          cd "$RUN_DIR"
+          for spec in $MONTH_SPECS; do
+            year=${spec%-*}
+            month=${spec#*-}
+            python pull_mrt.py \
+              --year "$year" \
+              --month "$month" \
+              --max-workers 2
+          done
+
+      - name: Verify pulled parquet outputs
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          WEATHER_COUNT=$(find weather_data_parquet -name '*.parquet' | wc -l)
+          MRT_COUNT=$(find utci_data_parquet -name '*.parquet' | wc -l)
+          echo "Weather parquet files: $WEATHER_COUNT"
+          echo "MRT parquet files: $MRT_COUNT"
+          [ "$WEATHER_COUNT" -ge 1 ]
+          [ "$MRT_COUNT" -ge 1 ]
+
+      - name: Combine and compute PET
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          for year in $TARGET_YEARS; do
+            python combine.py \
+              --year "$year" \
+              --shard-index 0 \
+              --shard-count 1
+            python calculate_pet.py \
+              --year "$year" \
+              --shard-index 0 \
+              --shard-count 1
+          done
+
+      - name: Verify combined and PET outputs
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          COMBINED_COUNT=$(find combined_data_parquet -name '*.parquet' | wc -l)
+          PET_COUNT=$(find pet_data_csv -name 'pet.csv' | wc -l)
           echo "Combined parquet files: $COMBINED_COUNT"
+          echo "PET CSV files: $PET_COUNT"
           [ "$COMBINED_COUNT" -ge 1 ]
-          echo "✓ Combined output verified."
+          [ "$PET_COUNT" -ge 1 ]
 
-      # ── Step 4: Calculate PET ──
-      - name: Run calculate_pet.py
-        run: |
-          python calculate_pet.py \
-            --combined-root test_combined_parquet \
-            --out-dir test_pet_csv \
-            --year 2000
-
-      - name: Verify PET Output
+      - name: Generate analytics
         run: |
           set -euo pipefail
-          PET_COUNT=$(find test_pet_csv -name 'pet.csv' | wc -l)
-          echo "PET shard CSV files: $PET_COUNT"
-          [ "$PET_COUNT" -ge 1 ]
-          # Check CSV has expected columns
-          head -1 "$(find test_pet_csv -name 'pet.csv' | head -1)" | grep -q 'location_id'
-          head -1 "$(find test_pet_csv -name 'pet.csv' | head -1)" | grep -q 'date'
-          head -1 "$(find test_pet_csv -name 'pet.csv' | head -1)" | grep -q 'pet'
-          echo "✓ PET output verified."
-
-      # ── Step 5: Generate analytics ──
-      - name: Run generate_analytics.py
-        run: |
+          cd "$RUN_DIR"
           python generate_analytics.py \
-            --pet-root test_pet_csv \
             --shard-index 0 \
             --shard-count 1
 
-      - name: Verify Analytics Output
+      - name: Verify analytics outputs
         run: |
           set -euo pipefail
+          cd "$RUN_DIR"
           test -f analytics_data_csv/shard_count=00001/shard_index=00000/percentiles.csv
           test -f analytics_data_csv/shard_count=00001/shard_index=00000/forecast.csv
           test -f analytics_data_csv/shard_count=00001/shard_index=00000/change_per_decade.csv
-          echo "✓ Analytics outputs verified."
 
-      # ── Step 6: Validate load.py can discover files (dry-run) ──
-      - name: Validate load.py Discovery (dry-run)
+      - name: Bootstrap disposable Postgres schema
         run: |
-          python -c "
-          from load import _discover_csv_inputs, _discover_shard_csv_inputs
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python - <<'PY'
+          import os
           from pathlib import Path
 
-          # Check PET discovery
-          pet_files = _discover_csv_inputs(
-              'pet.csv',
-              shard_root='test_pet_csv',
-              shard_file_name='pet.csv',
-          )
-          assert pet_files, 'load.py could not discover any PET CSV files'
-          print(f'load.py discovered {len(pet_files)} PET CSV files')
+          import psycopg2
 
-          # Check analytics discovery
-          for name in ['percentiles.csv', 'forecast.csv', 'change_per_decade.csv']:
-              files = _discover_shard_csv_inputs(
-                  shard_root='analytics_data_csv',
-                  shard_file_name=name,
-                  shard_count=1,
-                  shard_partition_key='shard_count',
-              )
-              assert files, f'load.py could not discover {name}'
-              print(f'load.py discovered {len(files)} {name} files')
+          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          conn.autocommit = True
+          try:
+              with conn.cursor() as cur:
+                  cur.execute(
+                      Path(".github/sql/local_test_schema.sql").read_text(
+                          encoding="utf-8",
+                      )
+                  )
+          finally:
+              conn.close()
+          PY
 
-          print('✓ load.py file discovery verified.')
-          "
+      - name: Load outputs into disposable Postgres
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python load.py --analytics-shard-count 1
 
-      - name: Pipeline Integration Test PASSED
-        run: echo "✅ Full compute pipeline passed all validation checks."
+      - name: Verify loaded row counts and views
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python - <<'PY'
+          import os
+
+          import psycopg2
+
+          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          try:
+              with conn.cursor() as cur:
+                  expectations = {
+                      "locations": 1,
+                      "pet": 1,
+                      "pet_percentiles": 1,
+                  }
+                  for table_name, minimum in expectations.items():
+                      cur.execute(f"SELECT COUNT(*) FROM public.{table_name}")
+                      row_count = int(cur.fetchone()[0])
+                      print(f"{table_name}: {row_count}")
+                      if row_count < minimum:
+                          raise SystemExit(
+                              f"Expected at least {minimum} rows in {table_name}, found {row_count}.",
+                          )
+
+                  for object_name in ["pet_year", "pet_year_avg", "pet_year_max"]:
+                      cur.execute("SELECT to_regclass(%s)", (f"public.{object_name}",))
+                      if cur.fetchone()[0] is None:
+                          raise SystemExit(f"Expected view {object_name} to exist.")
+          finally:
+              conn.close()
+          PY
+
+      - name: Pipeline integration test passed
+        run: echo "Full local pull, transform, analytics, and load workflow passed."
+
+      - name: Stop disposable Postgres
+        if: always()
+        run: docker rm -f act-local-pg >/dev/null 2>&1 || true
