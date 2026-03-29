@@ -148,8 +148,8 @@ def main() -> None:
             columns=["location_id", "time", "v", "t", "rh", "mrt"],
         )
         if combined_df.empty:
-            LOGGER.warning("Shard %s is empty. Skipping.", shard_key.label)
-            continue
+            msg = f"Shard {shard_key.label}: combined parquet is empty."
+            raise RuntimeError(msg)
 
         pet_df = calculate_pet_frame(combined_df)
         output_dir = Path(args.out_dir) / shard_key.partition_path

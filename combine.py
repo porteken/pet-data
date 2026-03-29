@@ -88,9 +88,12 @@ def combine_shard(
         columns=MRT_COLUMNS,
     )
 
-    if weather_df.empty or mrt_df.empty:
-        LOGGER.warning("Skipping empty shard %s.", shard_key.label)
-        return None
+    if weather_df.empty:
+        msg = f"Shard {shard_key.label}: weather data is empty."
+        raise RuntimeError(msg)
+    if mrt_df.empty:
+        msg = f"Shard {shard_key.label}: MRT data is empty."
+        raise RuntimeError(msg)
 
     combined_df = _merge_frames_in_parallel(
         weather_df=weather_df,
@@ -100,11 +103,8 @@ def combine_shard(
     )
 
     if combined_df.empty:
-        LOGGER.warning(
-            "Combined shard %s produced no matching city rows.",
-            shard_key.label,
-        )
-        return None
+        msg = f"Shard {shard_key.label}: no rows after merging weather and MRT."
+        raise RuntimeError(msg)
 
     combined_df = combined_df.rename(
         columns={
@@ -118,13 +118,6 @@ def combine_shard(
     combined_df = combined_df[
         ["location_id", "lat", "lng", "time", "t", "v", "rh", "mrt"]
     ].sort_values(["location_id", "time"])
-
-    if combined_df.empty:
-        LOGGER.warning(
-            "Combined shard %s produced no matching city rows.",
-            shard_key.label,
-        )
-        return None
 
     output_dir = Path(out_dir) / shard_key.partition_path
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -498,16 +491,13 @@ def _process_city_sharded_weather(args: argparse.Namespace) -> None:
             ["location_id", "lat", "lng", "city_shard_index"]
         ].copy()
         if tile_cities_df.empty:
-            LOGGER.warning("No cities found for tile %s.", shard_key.tile_id)
-            continue
+            msg = f"No cities found for tile {shard_key.tile_id}."
+            raise RuntimeError(msg)
 
         weather_files = _weather_files_for_tile(tile_cities_df, weather_city_shards)
         if not weather_files:
-            LOGGER.warning(
-                "No weather shard files found for tile %s.",
-                shard_key.tile_id,
-            )
-            continue
+            msg = f"No weather shard files found for tile {shard_key.tile_id}."
+            raise RuntimeError(msg)
 
         combine_shard(
             shard_key=shard_key,
