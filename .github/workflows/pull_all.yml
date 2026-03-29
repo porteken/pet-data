@@ -341,7 +341,12 @@ jobs:
         pull-google-era5,
         build-year-range,
       ]
-    if: ${{ !failure() && !cancelled() }}
+    if: >-
+      ${{
+        !cancelled() &&
+        (needs.pull-google-era5.result == 'success' ||
+         (needs.process-weather.result == 'success' && needs.process-mrt.result == 'success'))
+      }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 8

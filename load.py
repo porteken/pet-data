@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ import psycopg2
 from psycopg2 import sql
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from psycopg2.extensions import connection
 
 LOGGER = logging.getLogger(__name__)
@@ -249,12 +252,21 @@ def _filter_paths_by_partition_value(
     return filtered_paths
 
 
+def _take_lines(f: io.TextIOBase, n: int) -> Iterator[str]:
+    """Yield up to *n* lines from an open text file."""
+    for _ in range(n):
+        line = f.readline()
+        if not line:
+            return
+        yield line
+
+
 def _copy_csv_file_in_batches(
     conn: connection,
     table_name: str,
     csv_path: Path,
     *,
-    batch_size: int,  # noqa: ARG001
+    batch_size: int,
 ) -> int:
     with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
         header = next(f, None)
@@ -268,11 +280,18 @@ def _copy_csv_file_in_batches(
             sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
         )
 
-        cur.copy_expert(
-            copy_statement.as_string(conn),
-            f,
-        )
-        return cur.rowcount
+        total_rows = 0
+        while True:
+            lines = list(_take_lines(f, batch_size))
+            if not lines:
+                break
+            batch_buffer = io.StringIO("".join(lines))
+            cur.copy_expert(
+                copy_statement.as_string(conn),
+                batch_buffer,
+            )
+            total_rows += cur.rowcount
+        return total_rows
 
 
 def bulk_insert_csv_files(

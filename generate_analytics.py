@@ -292,15 +292,11 @@ def main() -> None:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        df = _load_pet_frame(args)
-    except FileNotFoundError:
-        logger.exception("PET inputs not found. Ensure calculate_pet.py has run.")
-        return
+    df = _load_pet_frame(args)
 
     if df.empty:
-        logger.warning("No PET rows matched the requested analytics shard.")
-        return
+        msg = "No PET rows matched the requested analytics shard."
+        raise RuntimeError(msg)
 
     generate_percentiles(df, output_dir)
     generate_forecast(df, output_dir)

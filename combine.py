@@ -357,8 +357,8 @@ def _passthrough_era5_shard(
     """Copy an era5 parquet directly to the combined output path."""
     era5_df = read_parquet_files(era5_root, era5_files)
     if era5_df.empty:
-        LOGGER.warning("Skipping empty era5 shard %s.", shard_key.label)
-        return
+        msg = f"Shard {shard_key.label}: era5 data is empty."
+        raise RuntimeError(msg)
 
     output_dir = Path(out_dir) / shard_key.partition_path
     output_dir.mkdir(parents=True, exist_ok=True)
