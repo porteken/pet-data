@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import multiprocessing
 import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, cast
 
@@ -36,7 +36,10 @@ from shared_config import (
 )
 
 MRT_DATASET = "derived-utci-historical"
-MRT_CDS_REQUEST_CONCURRENCY = 2
+MRT_CDS_REQUEST_CONCURRENCY = 4
+
+MRT_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(MRT_CDS_REQUEST_CONCURRENCY)
+MRT_THREAD_LOCAL = threading.local()
 
 
 def process_mrt(
@@ -153,10 +156,7 @@ def _run_mrt_tile_jobs(
     client: CDSClient,
 ) -> None:
     progress_desc = "MRT tiles"
-    worker_count = max(
-        1,
-        min(max_workers, len(tile_jobs), MRT_CDS_REQUEST_CONCURRENCY),
-    )
+    worker_count = max(1, min(max_workers, len(tile_jobs)))
     if worker_count == 1:
         for tile_row, tile_cells in tqdm(
             tile_jobs,
@@ -174,17 +174,14 @@ def _run_mrt_tile_jobs(
         return
 
     LOGGER.info(
-        "Processing %s MRT tiles with %s worker processes.",
+        "Processing %s MRT tiles with %s worker threads.",
         len(tile_jobs),
         worker_count,
     )
-    with ProcessPoolExecutor(
-        max_workers=worker_count,
-        mp_context=multiprocessing.get_context("spawn"),
-    ) as executor:
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_tile_id = {
             executor.submit(
-                _process_mrt_tile_with_new_client,
+                _process_mrt_tile_with_thread_client,
                 year=year,
                 month=month,
                 mrt_root=mrt_root,
@@ -241,29 +238,30 @@ def _process_mrt_tile(
             year,
             "" if month is None else f"-{month:02d}",
         )
-        retrieve_with_retry(
-            client,
-            MRT_DATASET,
-            {
-                "variable": ["mean_radiant_temperature"],
-                "version": "1_1",
-                "product_type": mrt_product_type(int(year), month=month),
-                "year": year,
-                "month": build_mrt_months(int(year), month=month),
-                "day": (
-                    build_mrt_days(int(year), month=month)
-                    if month is not None
-                    else [f"{day:02d}" for day in range(1, 32)]
-                ),
-                "area": [
-                    float(tile_row["north"]),
-                    float(tile_row["west"]),
-                    float(tile_row["south"]),
-                    float(tile_row["east"]),
-                ],
-            },
-            str(zip_path),
-        )
+        with MRT_CDS_REQUEST_SEMAPHORE:
+            retrieve_with_retry(
+                client,
+                MRT_DATASET,
+                {
+                    "variable": ["mean_radiant_temperature"],
+                    "version": "1_1",
+                    "product_type": mrt_product_type(int(year), month=month),
+                    "year": year,
+                    "month": build_mrt_months(int(year), month=month),
+                    "day": (
+                        build_mrt_days(int(year), month=month)
+                        if month is not None
+                        else [f"{day:02d}" for day in range(1, 32)]
+                    ),
+                    "area": [
+                        float(tile_row["north"]),
+                        float(tile_row["west"]),
+                        float(tile_row["south"]),
+                        float(tile_row["east"]),
+                    ],
+                },
+                str(zip_path),
+            )
 
         normalized_tile_cells = tile_cells.rename(
             columns={"grid_lat": "lat", "grid_lon": "lng"},
@@ -289,7 +287,7 @@ def _process_mrt_tile(
         )
 
 
-def _process_mrt_tile_with_new_client(
+def _process_mrt_tile_with_thread_client(
     *,
     year: str,
     month: int | None,
@@ -297,8 +295,12 @@ def _process_mrt_tile_with_new_client(
     tile_row: dict[str, Any],
     tile_cells: DataFrame,
 ) -> None:
+    client = getattr(MRT_THREAD_LOCAL, "client", None)
+    if client is None:
+        client = create_cds_client()
+        MRT_THREAD_LOCAL.client = client
     _process_mrt_tile(
-        client=create_cds_client(),
+        client=client,
         year=year,
         month=month,
         mrt_root=mrt_root,

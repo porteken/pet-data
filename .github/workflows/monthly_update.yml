@@ -151,7 +151,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: monthly-weather-shard-${{ matrix.city_shard_index }}
-          path: weather_data_parquet/city_shard_index=${{ matrix.city_shard_index }}/
+          path: weather_data_parquet/
 
   process-mrt:
     needs: [setup-locations, build-target-window, cancel-cds-jobs, process-weather]
@@ -192,7 +192,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: monthly-mrt-shard-${{ matrix.tile_shard_index }}
-          path: utci_data_parquet/year=${{ needs.build-target-window.outputs.target_year }}/month=${{ needs.build-target-window.outputs.target_month }}/
+          path: utci_data_parquet/
 
   process-pet:
     needs: [setup-locations, process-weather, process-mrt, build-target-window]
@@ -223,13 +223,13 @@ jobs:
         with:
           pattern: monthly-weather-shard-*
           merge-multiple: true
-          path: .
+          path: weather_data_parquet
       - name: Download MRT Shards
         uses: actions/download-artifact@v4
         with:
           pattern: monthly-mrt-shard-*
           merge-multiple: true
-          path: .
+          path: utci_data_parquet
       - name: Combine And Compute PET
         run: |
           python combine.py \
@@ -244,7 +244,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: monthly-pet-shard-${{ matrix.pet_shard_index }}
-          path: pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/
+          path: pet_data_csv/
           if-no-files-found: ignore
 
   generate-analytics:
@@ -273,7 +273,7 @@ jobs:
         with:
           pattern: monthly-pet-shard-*
           merge-multiple: true
-          path: .
+          path: pet_data_csv
       - name: Compute Shard Paths
         id: calc
         run: |
@@ -362,7 +362,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: monthly-analytics-shard-${{ matrix.analytics_shard_index }}
-          path: analytics_data_csv/shard_count=00020/shard_index=${{ steps.calc.outputs.shard_dir }}/
+          path: analytics_data_csv/
 
   prepare-db-load:
     needs: [process-pet, generate-analytics, build-target-window]
@@ -453,13 +453,13 @@ jobs:
         with:
           pattern: monthly-pet-shard-*
           merge-multiple: true
-          path: .
+          path: pet_data_csv
       - name: Download Analytics Shards
         uses: actions/download-artifact@v4
         with:
           pattern: monthly-analytics-shard-*
           merge-multiple: true
-          path: .
+          path: analytics_data_csv
       - name: Load Monthly Update Shard To Supabase
         env:
           SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}

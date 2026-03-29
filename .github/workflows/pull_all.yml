@@ -398,7 +398,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pet-shard-${{ matrix.year }}-${{ matrix.pet_shard_index }}
-          path: pet_data_csv/year=${{ matrix.year }}/
+          path: pet_data_csv/
           if-no-files-found: ignore
 
   generate-analytics:
@@ -432,6 +432,7 @@ jobs:
         with:
           pattern: pet-shard-*-${{ steps.calc.outputs.pet_idx }}
           merge-multiple: true
+          path: pet_data_csv
       - name: Generate Analytics
         run: |
           python generate_analytics.py \
@@ -441,7 +442,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: analytics-shard-${{ matrix.analytics_shard_index }}
-          path: analytics_data_csv/shard_count=00020/shard_index=${{ steps.calc.outputs.shard_dir }}/
+          path: analytics_data_csv/
 
   prepare-db-load:
     needs: [setup-locations, generate-analytics]
@@ -542,13 +543,13 @@ jobs:
         with:
           pattern: pet-shard-*-${{ steps.calc.outputs.pet_idx }}
           merge-multiple: true
-          path: .
+          path: pet_data_csv
       - name: Download analytics shards
         uses: actions/download-artifact@v4
         with:
           pattern: analytics-shard-${{ matrix.load_shard_index }}
           merge-multiple: true
-          path: .
+          path: analytics_data_csv
       - name: Load shard to Supabase
         env:
           SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}

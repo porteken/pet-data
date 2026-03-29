@@ -1,0 +1,135 @@
+name: Local Integration Test (act)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      # ── Step 1: Setup locations ──
+      - name: Run cities.py
+        run: python cities.py
+
+      - name: Run boxes.py
+        run: python boxes.py
+
+      - name: Verify Location Outputs
+        run: |
+          set -euo pipefail
+          test -f cities.csv
+          test -f output_tiles/city_to_tile.csv
+          test -f output_tiles/tile_boxes.csv
+          test -f output_tiles/snapped_cities.csv
+          test -f output_tiles/unique_grid_cells.csv
+          echo "✓ Location outputs verified."
+
+      # ── Step 2: Generate synthetic ERA5-style combined data for 1 year, 2 tiles ──
+      - name: Generate Synthetic Test Data
+        run: python tests/generate_test_fixtures.py
+
+      - name: Verify Synthetic Data
+        run: |
+          set -euo pipefail
+          test -d test_era5_parquet
+          ERA5_COUNT=$(find test_era5_parquet -name '*.parquet' | wc -l)
+          echo "ERA5 parquet files: $ERA5_COUNT"
+          [ "$ERA5_COUNT" -ge 1 ]
+          echo "✓ Synthetic test data verified."
+
+      # ── Step 3: Combine (ERA5 passthrough) ──
+      - name: Run combine.py (ERA5 passthrough)
+        run: |
+          python combine.py \
+            --era5-root test_era5_parquet \
+            --out-dir test_combined_parquet \
+            --year 2000
+
+      - name: Verify Combined Output
+        run: |
+          set -euo pipefail
+          COMBINED_COUNT=$(find test_combined_parquet -name '*.parquet' | wc -l)
+          echo "Combined parquet files: $COMBINED_COUNT"
+          [ "$COMBINED_COUNT" -ge 1 ]
+          echo "✓ Combined output verified."
+
+      # ── Step 4: Calculate PET ──
+      - name: Run calculate_pet.py
+        run: |
+          python calculate_pet.py \
+            --combined-root test_combined_parquet \
+            --out-dir test_pet_csv \
+            --year 2000
+
+      - name: Verify PET Output
+        run: |
+          set -euo pipefail
+          PET_COUNT=$(find test_pet_csv -name 'pet.csv' | wc -l)
+          echo "PET shard CSV files: $PET_COUNT"
+          [ "$PET_COUNT" -ge 1 ]
+          # Check CSV has expected columns
+          head -1 "$(find test_pet_csv -name 'pet.csv' | head -1)" | grep -q 'location_id'
+          head -1 "$(find test_pet_csv -name 'pet.csv' | head -1)" | grep -q 'date'
+          head -1 "$(find test_pet_csv -name 'pet.csv' | head -1)" | grep -q 'pet'
+          echo "✓ PET output verified."
+
+      # ── Step 5: Generate analytics ──
+      - name: Run generate_analytics.py
+        run: |
+          python generate_analytics.py \
+            --pet-root test_pet_csv \
+            --shard-index 0 \
+            --shard-count 1
+
+      - name: Verify Analytics Output
+        run: |
+          set -euo pipefail
+          test -f analytics_data_csv/shard_count=00001/shard_index=00000/percentiles.csv
+          test -f analytics_data_csv/shard_count=00001/shard_index=00000/forecast.csv
+          test -f analytics_data_csv/shard_count=00001/shard_index=00000/change_per_decade.csv
+          echo "✓ Analytics outputs verified."
+
+      # ── Step 6: Validate load.py can discover files (dry-run) ──
+      - name: Validate load.py Discovery (dry-run)
+        run: |
+          python -c "
+          from load import _discover_csv_inputs, _discover_shard_csv_inputs
+          from pathlib import Path
+
+          # Check PET discovery
+          pet_files = _discover_csv_inputs(
+              'pet.csv',
+              shard_root='test_pet_csv',
+              shard_file_name='pet.csv',
+          )
+          assert pet_files, 'load.py could not discover any PET CSV files'
+          print(f'load.py discovered {len(pet_files)} PET CSV files')
+
+          # Check analytics discovery
+          for name in ['percentiles.csv', 'forecast.csv', 'change_per_decade.csv']:
+              files = _discover_shard_csv_inputs(
+                  shard_root='analytics_data_csv',
+                  shard_file_name=name,
+                  shard_count=1,
+                  shard_partition_key='shard_count',
+              )
+              assert files, f'load.py could not discover {name}'
+              print(f'load.py discovered {len(files)} {name} files')
+
+          print('✓ load.py file discovery verified.')
+          "
+
+      - name: Pipeline Integration Test PASSED
+        run: echo "✅ Full compute pipeline passed all validation checks."

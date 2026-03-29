@@ -4,6 +4,8 @@
 raw_*/
 utci_*/
 weather_*/
+test_*_parquet/
+test_*_csv/
 __pycache__/
 venv
 *.md

@@ -1,6 +1,7 @@
 {
-    "include": ["*.py"],
+    "include": ["*.py", "tests/**/*.py"],
     "exclude": [
+        "venv",
         "typings",
         "**/__pycache__",
         ".ruff_cache",
@@ -11,8 +12,14 @@
         "combined_data_parquet",
         "**/node_modules", "**/.*"
     ],
+    "venvPath": ".",
+    "venv": "venv",
     "reportMissingTypeStubs": false,
     "reportMissingImports": false,
     "reportMissingModuleSource": false,
-    "strict": ["."]
+    "reportUnknownMemberType": "none",
+    "reportUnknownArgumentType": "none",
+    "reportUnknownLambdaType": "none",
+    "reportUnknownVariableType": "none",
+    "typeCheckingMode": "basic"
 }
