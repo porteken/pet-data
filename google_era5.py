@@ -99,7 +99,7 @@ _C = 243.04
 EXPECTED_LOCATION_COUNT = 500
 THREE_DIMENSIONAL_ARRAY_NDIMS = 3
 ERA5_TIME_ORIGIN = "1959-01-01"
-DEFAULT_BATCH_HOURS = 24 * 7  # 168 hours (1 week)
+DEFAULT_BATCH_HOURS = 24 * 30  # 720 hours (~1 month)
 ERA5_THREAD_LOCAL = threading.local()
 
 GCS_BATCH_MAX_RETRIES = 3
@@ -347,6 +347,7 @@ def _load_era5_city_shard(
     *,
     city_shard_index: int,
     city_shard_count: int,
+    expected_location_count: int | None = EXPECTED_LOCATION_COUNT,
 ) -> DataFrame:
     """Return the cities and their tile_ids for the requested shard."""
     if city_shard_count < 1:
@@ -379,9 +380,9 @@ def _load_era5_city_shard(
         .reset_index(drop=True)
     )
 
-    if len(merged) != EXPECTED_LOCATION_COUNT:
+    if expected_location_count is not None and len(merged) != expected_location_count:
         msg = (
-            f"Expected {EXPECTED_LOCATION_COUNT} locations for ERA5, "
+            f"Expected {expected_location_count} locations for ERA5, "
             f"found {len(merged)} after city/tile merge."
         )
         raise ValueError(msg)
@@ -911,9 +912,10 @@ def process_era5(
     city_shard_count: int = 1,
     time_shard_index: int = 0,
     time_shard_count: int = 1,
-    max_workers: int = 4,
+    max_workers: int = -1,
     batch_hours: int = DEFAULT_BATCH_HOURS,
     concurrency_profile: str = "aggressive",
+    expected_location_count: int | None = EXPECTED_LOCATION_COUNT,
 ) -> None:
     """Download ERA5 weather + MRT for one year and one city shard."""
     _configure_concurrency(concurrency_profile)
@@ -932,6 +934,7 @@ def process_era5(
     shard_df = _load_era5_city_shard(
         city_shard_index=city_shard_index,
         city_shard_count=city_shard_count,
+        expected_location_count=expected_location_count,
     )
     if shard_df.empty:
         LOGGER.warning("No ERA5 cities selected for shard %s.", city_shard_index)
@@ -1020,7 +1023,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-workers",
         type=int,
-        default=4,
+        default=-1,
         help="Maximum ERA5 batch worker threads; use -1 for all available cores.",
     )
     parser.add_argument(
@@ -1051,6 +1054,15 @@ def _parse_args() -> argparse.Namespace:
             "moderate settings (64/4). 'conservative' uses minimal settings (16/2)."
         ),
     )
+    parser.add_argument(
+        "--expected-location-count",
+        type=int,
+        default=EXPECTED_LOCATION_COUNT,
+        help=(
+            f"Expected number of locations after city/tile merge "
+            f"(default: {EXPECTED_LOCATION_COUNT}). Use 0 to disable the check."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1068,6 +1080,7 @@ def main() -> None:
             max_workers=args.max_workers,
             batch_hours=args.batch_hours,
             concurrency_profile=args.concurrency_profile,
+            expected_location_count=args.expected_location_count or None,
         )
     except Exception as exc:
         LOGGER.exception("ERA5 pipeline failed for year=%s.", args.year)

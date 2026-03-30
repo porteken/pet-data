@@ -36,7 +36,7 @@ from shared_config import (
 )
 
 MRT_DATASET = "derived-utci-historical"
-MRT_CDS_REQUEST_CONCURRENCY = 4
+MRT_CDS_REQUEST_CONCURRENCY = 10
 
 MRT_CDS_REQUEST_SEMAPHORE = threading.BoundedSemaphore(MRT_CDS_REQUEST_CONCURRENCY)
 MRT_THREAD_LOCAL = threading.local()
@@ -52,7 +52,7 @@ def process_mrt(
     tile_ids: list[int] | None = None,
     tile_shard_index: int = 0,
     tile_shard_count: int = 1,
-    max_workers: int = 4,
+    max_workers: int = 8,
 ) -> None:
     """Download and process UTCI mean radiant temperature data grouped by tile."""
     build_mrt_date_bounds(int(year), month=month)
@@ -202,6 +202,15 @@ def _run_mrt_tile_jobs(
             LOGGER.info("MRT tile %s completed for %s.", tile_id, year)
 
 
+def _compute_tight_area(tile_cells: DataFrame) -> list[float]:
+    """Compute the tightest CDS area box [N, W, S, E] around actual grid cells."""
+    north = float(tile_cells["grid_lat"].max())
+    south = float(tile_cells["grid_lat"].min())
+    east = float(tile_cells["grid_lon"].max())
+    west = float(tile_cells["grid_lon"].min())
+    return [north, west, south, east]
+
+
 def _process_mrt_tile(
     *,
     client: CDSClient,
@@ -254,12 +263,7 @@ def _process_mrt_tile(
                         if month is not None
                         else [f"{day:02d}" for day in range(1, 32)]
                     ),
-                    "area": [
-                        float(tile_row["north"]),
-                        float(tile_row["west"]),
-                        float(tile_row["south"]),
-                        float(tile_row["east"]),
-                    ],
+                    "area": _compute_tight_area(tile_cells),
                 },
                 str(zip_path),
             )
@@ -471,7 +475,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-workers",
         type=int,
-        default=4,
+        default=8,
         help="Maximum number of concurrent workers for MRT pulls.",
     )
     return parser.parse_args()

@@ -14,6 +14,7 @@ from pull_mrt import (
     MRT_CDS_REQUEST_SEMAPHORE,
     MRT_NETCDF_READ_LOCK,
     MRT_THREAD_LOCAL,
+    _compute_tight_area,
     _mrt_partition_is_current,
     _mrt_partition_path,
     _normalize_mrt_columns,
@@ -23,8 +24,8 @@ from pull_mrt import (
 
 
 class TestMrtConcurrency:
-    def test_concurrency_is_four(self) -> None:
-        assert MRT_CDS_REQUEST_CONCURRENCY == 4
+    def test_concurrency_is_ten(self) -> None:
+        assert MRT_CDS_REQUEST_CONCURRENCY == 10
 
     def test_semaphore_exists(self) -> None:
         assert isinstance(MRT_CDS_REQUEST_SEMAPHORE, threading.BoundedSemaphore)
@@ -120,3 +121,24 @@ class TestMrtPartitionIsCurrent:
             str(tmp_path), "year=2020/tile_id=1", year=2020, month=1
         )
         assert result is False
+
+
+class TestComputeTightArea:
+    def test_single_cell(self) -> None:
+        cells = pd.DataFrame({"grid_lat": [30.0], "grid_lon": [-90.0]})
+        result = _compute_tight_area(cells)
+        assert result == [30.0, -90.0, 30.0, -90.0]
+
+    def test_multiple_cells(self) -> None:
+        cells = pd.DataFrame(
+            {"grid_lat": [30.0, 31.0, 30.5], "grid_lon": [-90.0, -89.0, -89.5]}
+        )
+        result = _compute_tight_area(cells)
+        assert result == [31.0, -90.0, 30.0, -89.0]
+
+    def test_tight_area_smaller_than_tile_box(self) -> None:
+        cells = pd.DataFrame({"grid_lat": [25.5, 25.75], "grid_lon": [-80.5, -80.25]})
+        result = _compute_tight_area(cells)
+        # Tight area should cover just the cells, not a full 3-degree tile
+        assert result[0] - result[2] == pytest.approx(0.25)  # north - south
+        assert result[3] - result[1] == pytest.approx(0.25)  # east - west

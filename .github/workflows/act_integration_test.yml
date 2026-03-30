@@ -9,8 +9,13 @@ jobs:
     env:
       ACT_PG_PASS: local-postgres-pass
       RUN_DIR: /tmp/pet-data-local-act
-      CDSAPI_URL: https://cds.climate.copernicus.eu/api
       TEST_CITY_COUNT: 1
+      # MinIO (S3-compatible) credentials
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://127.0.0.1:9000
+      S3_BUCKET: pet-parquet-files
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +24,7 @@ jobs:
         with:
           python-version: "3.10"
           cache: "pip"
-          cache-dependency-path: requirements-cds.txt
+          cache-dependency-path: requirements.txt
 
       - name: Prepare isolated run directory
         run: |
@@ -41,10 +46,13 @@ jobs:
             --exclude=raw_weather_grib \
             --exclude=utci_data_parquet \
             --exclude=weather_data_parquet \
+            --exclude=era5_data_parquet \
             -cf - . | tar -xf - -C "$RUN_DIR"
 
       - name: Install Dependencies
-        run: pip install -r "$RUN_DIR/requirements-cds.txt"
+        run: pip install -r "$RUN_DIR/requirements.txt"
+
+      # ---------- Container services ----------
 
       - name: Start disposable Postgres
         run: |
@@ -69,35 +77,34 @@ jobs:
           docker logs act-local-pg
           exit 1
 
-      - name: Compute 2-month test window
+      - name: Start MinIO (S3-compatible object store)
         run: |
           set -euo pipefail
-          cd "$RUN_DIR"
-          python - <<'PY' >> "$GITHUB_ENV"
-          from datetime import date
+          docker rm -f act-local-minio >/dev/null 2>&1 || true
+          docker run -d \
+            --name act-local-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            minio/minio:latest server /data
 
-          from shared_config import mrt_available_end_date
+          for attempt in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
 
+          docker logs act-local-minio
+          exit 1
 
-          def shift_month(value: date, delta: int) -> date:
-              month_index = value.year * 12 + (value.month - 1) + delta
-              year, month_index = divmod(month_index, 12)
-              return date(year, month_index + 1, 1)
+      - name: Create S3 test bucket
+        run: |
+          set -euo pipefail
+          aws s3 mb "s3://$S3_BUCKET"
+          aws s3 ls | grep "$S3_BUCKET"
 
-
-          end_month = mrt_available_end_date().replace(day=1)
-          start_month = shift_month(end_month, -1)
-          month_specs = [
-              f"{start_month.year}-{start_month.month:02d}",
-              f"{end_month.year}-{end_month.month:02d}",
-          ]
-          target_years = sorted({start_month.year, end_month.year})
-
-          print(f"MONTH_SPECS={' '.join(month_specs)}")
-          print(f"TARGET_YEARS={' '.join(str(year) for year in target_years)}")
-          print(f"WINDOW_START={start_month.isoformat()}")
-          print(f"WINDOW_END={mrt_available_end_date().isoformat()}")
-          PY
+      # ---------- Location metadata (mirrors setup-locations) ----------
 
       - name: Build location metadata
         run: |
@@ -138,64 +145,172 @@ jobs:
           )
           [ "$CITY_COUNT" -eq "$TEST_CITY_COUNT" ]
 
-      - name: Pull weather for 2 months
-        env:
-          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: |
-          set -euo pipefail
-          cd "$RUN_DIR"
-          for spec in $MONTH_SPECS; do
-            year=${spec%-*}
-            month=${spec#*-}
-            python pull_weather.py \
-              --year "$year" \
-              --month "$month" \
-              --weather-city-shard-index 0 \
-              --weather-city-shard-count 1 \
-              --expected-location-count "$TEST_CITY_COUNT" \
-              --max-workers 2
-          done
+      # ---------- Generate synthetic data (replaces real CDS/ERA5 pulls) ----------
 
-      - name: Pull MRT for 2 months
-        env:
-          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
+      - name: Generate synthetic ERA5, weather, and MRT data
         run: |
           set -euo pipefail
           cd "$RUN_DIR"
-          for spec in $MONTH_SPECS; do
-            year=${spec%-*}
-            month=${spec#*-}
-            python pull_mrt.py \
-              --year "$year" \
-              --month "$month" \
-              --max-workers 2
-          done
+          # Read the single test city's tile_id to build matching fixtures
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
 
-      - name: Verify pulled parquet outputs
+          import numpy as np
+          import pandas as pd
+
+          cities_df = pd.read_csv("cities.csv")
+          tile_map = pd.read_csv("output_tiles/city_to_tile.csv")
+          merged = cities_df.merge(
+              tile_map[["location_id", "tile_id"]],
+              on="location_id",
+          )
+          city = merged.iloc[0]
+          tile_id = int(city["tile_id"])
+          location_id = int(city["location_id"])
+          lat = float(city["lat"])
+          lng = float(city["lng"])
+
+          rng = np.random.default_rng(42)
+          YEAR = 2000
+          HOURS = 3 * 24  # 3 days
+
+          timestamps = pd.date_range(f"{YEAR}-01-01", periods=HOURS, freq="h")
+
+          # --- ERA5-style combined parquet (mirrors google_era5.py output) ---
+          era5_records = []
+          for ts in timestamps:
+              era5_records.append({
+                  "location_id": location_id, "lat": lat, "lng": lng,
+                  "time": ts,
+                  "t": round(float(rng.uniform(5, 35)), 5),
+                  "v": round(float(rng.uniform(0.5, 8)), 5),
+                  "rh": round(float(rng.uniform(20, 90)), 5),
+                  "mrt": round(float(rng.uniform(10, 55)), 5),
+              })
+          era5_df = pd.DataFrame(era5_records)
+          era5_dir = Path(f"era5_data_parquet/year={YEAR}/tile_id={tile_id}")
+          era5_dir.mkdir(parents=True, exist_ok=True)
+          era5_df.to_parquet(era5_dir / "combined.parquet", index=False)
+          print(f"Wrote {len(era5_df)} ERA5 rows to {era5_dir}")
+
+          # --- CDS-style weather parquet (mirrors pull_weather.py output) ---
+          weather_records = []
+          for ts in timestamps:
+              weather_records.append({
+                  "location_id": location_id,
+                  "timestamp": ts, "lat": lat, "lng": lng,
+                  "temperature_c": round(float(rng.uniform(5, 35)), 5),
+                  "wind_speed": round(float(rng.uniform(0.5, 8)), 5),
+                  "relative_humidity": round(float(rng.uniform(20, 90)), 5),
+              })
+          weather_df = pd.DataFrame(weather_records)
+          weather_dir = Path("weather_data_parquet/city_shard_index=0")
+          weather_dir.mkdir(parents=True, exist_ok=True)
+          weather_df.to_parquet(weather_dir / f"weather_{YEAR}_01.parquet", index=False)
+          print(f"Wrote {len(weather_df)} weather rows to {weather_dir}")
+
+          # --- CDS-style MRT parquet (mirrors pull_mrt.py output) ---
+          mrt_records = []
+          for ts in timestamps:
+              mrt_records.append({
+                  "timestamp": ts, "lat": lat, "lng": lng,
+                  "mean_radiant_temperature_c": round(float(rng.uniform(10, 55)), 5),
+              })
+          mrt_df = pd.DataFrame(mrt_records)
+          mrt_dir = Path(f"utci_data_parquet/year={YEAR}/month=01/tile_id={tile_id}")
+          mrt_dir.mkdir(parents=True, exist_ok=True)
+          mrt_df.to_parquet(mrt_dir / "mrt.parquet", index=False)
+          print(f"Wrote {len(mrt_df)} MRT rows to {mrt_dir}")
+          PY
+
+      # ---------- S3 flow (mirrors deploy-infrastructure + clear + upload) ----------
+
+      - name: Upload ERA5 shards to S3 (mirrors pull-google-era5 upload)
         run: |
           set -euo pipefail
           cd "$RUN_DIR"
+          aws s3 sync ./era5_data_parquet/ "s3://$S3_BUCKET/era5_data_parquet/"
+          ERA5_S3=$(aws s3 ls "s3://$S3_BUCKET/era5_data_parquet/" --recursive | wc -l)
+          echo "ERA5 objects in S3: $ERA5_S3"
+          [ "$ERA5_S3" -ge 1 ]
+
+      - name: Upload weather shards to S3 (mirrors process-weather upload)
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          aws s3 sync ./weather_data_parquet/ "s3://$S3_BUCKET/weather_data_parquet/"
+          WEATHER_S3=$(aws s3 ls "s3://$S3_BUCKET/weather_data_parquet/" --recursive | wc -l)
+          echo "Weather objects in S3: $WEATHER_S3"
+          [ "$WEATHER_S3" -ge 1 ]
+
+      - name: Upload MRT shards to S3 (mirrors process-mrt upload)
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          aws s3 sync ./utci_data_parquet/ "s3://$S3_BUCKET/utci_data_parquet/"
+          MRT_S3=$(aws s3 ls "s3://$S3_BUCKET/utci_data_parquet/" --recursive | wc -l)
+          echo "MRT objects in S3: $MRT_S3"
+          [ "$MRT_S3" -ge 1 ]
+
+      - name: Test clear_s3_prefix.py (mirrors clear-weather/mrt/era5-output)
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          python clear_s3_prefix.py --bucket "$S3_BUCKET" --prefix weather_data_parquet/ --max-workers 2
+          AFTER_CLEAR=$(aws s3 ls "s3://$S3_BUCKET/weather_data_parquet/" --recursive 2>/dev/null || true)
+          AFTER_COUNT=$(echo -n "$AFTER_CLEAR" | grep -c . || true)
+          echo "Weather objects after clear: $AFTER_COUNT"
+          [ "$AFTER_COUNT" -eq 0 ]
+
+      - name: Re-upload weather after clear (mirrors process-weather re-upload)
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          aws s3 sync ./weather_data_parquet/ "s3://$S3_BUCKET/weather_data_parquet/"
+
+      # ---------- Download from S3 (mirrors process-pet download) ----------
+
+      - name: Clear local data and download from S3
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          rm -rf era5_data_parquet weather_data_parquet utci_data_parquet
+          mkdir -p era5_data_parquet weather_data_parquet utci_data_parquet
+          aws s3 sync "s3://$S3_BUCKET/era5_data_parquet/" ./era5_data_parquet/
+          aws s3 sync "s3://$S3_BUCKET/weather_data_parquet/" ./weather_data_parquet/
+          aws s3 sync "s3://$S3_BUCKET/utci_data_parquet/" ./utci_data_parquet/
+
+      - name: Verify downloaded parquet files
+        run: |
+          set -euo pipefail
+          cd "$RUN_DIR"
+          ERA5_COUNT=$(find era5_data_parquet -name '*.parquet' | wc -l)
           WEATHER_COUNT=$(find weather_data_parquet -name '*.parquet' | wc -l)
           MRT_COUNT=$(find utci_data_parquet -name '*.parquet' | wc -l)
+          echo "ERA5 parquet files: $ERA5_COUNT"
           echo "Weather parquet files: $WEATHER_COUNT"
           echo "MRT parquet files: $MRT_COUNT"
+          [ "$ERA5_COUNT" -ge 1 ]
           [ "$WEATHER_COUNT" -ge 1 ]
           [ "$MRT_COUNT" -ge 1 ]
 
-      - name: Combine and compute PET
+      # ---------- Combine + PET (mirrors process-pet) ----------
+
+      - name: Combine ERA5 passthrough and compute PET
         run: |
           set -euo pipefail
           cd "$RUN_DIR"
-          for year in $TARGET_YEARS; do
-            python combine.py \
-              --year "$year" \
-              --shard-index 0 \
-              --shard-count 1
-            python calculate_pet.py \
-              --year "$year" \
-              --shard-index 0 \
-              --shard-count 1
-          done
+          python combine.py \
+            --era5-root ./era5_data_parquet \
+            --year 2000 \
+            --shard-index 0 \
+            --shard-count 1
+          python calculate_pet.py \
+            --year 2000 \
+            --shard-index 0 \
+            --shard-count 1
 
       - name: Verify combined and PET outputs
         run: |
@@ -207,6 +322,8 @@ jobs:
           echo "PET CSV files: $PET_COUNT"
           [ "$COMBINED_COUNT" -ge 1 ]
           [ "$PET_COUNT" -ge 1 ]
+
+      # ---------- Analytics (mirrors generate-analytics) ----------
 
       - name: Generate analytics
         run: |
@@ -223,6 +340,8 @@ jobs:
           test -f analytics_data_csv/shard_count=00001/shard_index=00000/percentiles.csv
           test -f analytics_data_csv/shard_count=00001/shard_index=00000/forecast.csv
           test -f analytics_data_csv/shard_count=00001/shard_index=00000/change_per_decade.csv
+
+      # ---------- Database load (mirrors prepare-db-load + load-to-db + finalize) ----------
 
       - name: Bootstrap disposable Postgres schema
         run: |
@@ -288,8 +407,12 @@ jobs:
           PY
 
       - name: Pipeline integration test passed
-        run: echo "Full local pull, transform, analytics, and load workflow passed."
+        run: echo "Full local pull, transform, S3 round-trip, analytics, and load workflow passed."
 
-      - name: Stop disposable Postgres
+      # ---------- Cleanup ----------
+
+      - name: Stop disposable containers
         if: always()
-        run: docker rm -f act-local-pg >/dev/null 2>&1 || true
+        run: |
+          docker rm -f act-local-pg >/dev/null 2>&1 || true
+          docker rm -f act-local-minio >/dev/null 2>&1 || true
