@@ -3,13 +3,18 @@ name: Pull All Data
 on:
   push:
     branches:
-      - master
+      - dev
+      - prd
   pull_request:
+    branches:
+      - dev
+      - prd
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
   build-year-range:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     runs-on: ubuntu-latest
     outputs:
       start_year: ${{ steps.compute.outputs.start_year }}
@@ -66,6 +71,7 @@ jobs:
           PY
 
   setup-locations:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +96,7 @@ jobs:
             output_tiles/
 
   deploy-infrastructure:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     runs-on: ubuntu-latest
     env:
       STACK_NAME: pet-data-infrastructure
@@ -137,6 +144,7 @@ jobs:
             --no-fail-on-empty-changes
 
   clear-weather-output:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
@@ -149,6 +157,7 @@ jobs:
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix weather_data_parquet/ --max-workers 8
 
   clear-mrt-output:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
@@ -161,6 +170,7 @@ jobs:
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix utci_data_parquet/ --max-workers 8
 
   clear-era5-output:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
@@ -173,6 +183,7 @@ jobs:
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix era5_data_parquet/ --max-workers 8
 
   cancel-cds-jobs:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -191,8 +202,8 @@ jobs:
         run: python cancel_cds_jobs.py
 
   pull-google-era5:
+    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.era5_years != '[]'
     needs: [setup-locations, clear-era5-output, build-year-range]
-    if: ${{ needs.build-year-range.outputs.era5_years != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 16
@@ -235,9 +246,9 @@ jobs:
             s3://pet-parquet-files/era5_data_parquet/year=${{ matrix.year }}/
 
   process-weather:
+    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.cds_years != '[]'
     needs:
       [setup-locations, clear-weather-output, build-year-range, cancel-cds-jobs]
-    if: ${{ needs.build-year-range.outputs.cds_years != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 2
@@ -282,6 +293,7 @@ jobs:
         run: aws s3 sync ./weather_data_parquet/ s3://pet-parquet-files/weather_data_parquet/
 
   process-mrt:
+    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.cds_year_months != '[]'
     needs:
       [
         setup-locations,
@@ -290,7 +302,6 @@ jobs:
         cancel-cds-jobs,
         process-weather,
       ]
-    if: ${{ needs.build-year-range.outputs.cds_year_months != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 8 # safe: process-weather is done, so full CDS quota is available
@@ -333,6 +344,11 @@ jobs:
             s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${{ matrix.month_pad }}/
 
   process-pet:
+    if: >-
+      (github.ref_name == 'dev' || github.ref_name == 'prd') &&
+      !cancelled() &&
+      (needs.pull-google-era5.result == 'success' ||
+       (needs.process-weather.result == 'success' && needs.process-mrt.result == 'success'))
     needs:
       [
         setup-locations,
@@ -341,12 +357,6 @@ jobs:
         pull-google-era5,
         build-year-range,
       ]
-    if: >-
-      ${{
-        !cancelled() &&
-        (needs.pull-google-era5.result == 'success' ||
-         (needs.process-weather.result == 'success' && needs.process-mrt.result == 'success'))
-      }}
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 8
@@ -402,6 +412,7 @@ jobs:
           if-no-files-found: ignore
 
   generate-analytics:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: [process-pet, build-year-range]
     runs-on: ubuntu-latest
     strategy:
@@ -445,6 +456,7 @@ jobs:
           path: analytics_data_csv/
 
   prepare-db-load:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: [setup-locations, generate-analytics]
     runs-on: ubuntu-latest
     steps:
@@ -513,6 +525,7 @@ jobs:
             --skip-table pet_change
 
   load-to-db:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: [prepare-db-load, generate-analytics, build-year-range]
     runs-on: ubuntu-latest
     strategy:
@@ -564,6 +577,7 @@ jobs:
             --load-shard-count 20
 
   finalize-db-load:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: load-to-db
     runs-on: ubuntu-latest
     steps:
