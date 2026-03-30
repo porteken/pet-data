@@ -23,7 +23,7 @@ def _write_shard_csv(
     shard_dir = root / f"year={year}" / f"tile_id={tile_id}"
     shard_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(rows)
-    df.to_csv(shard_dir / "pet.csv", index=False)
+    df.to_csv(shard_dir / "pet.csv.gz", index=False)
 
 
 class TestEndToEndAnalyticsPipeline:
@@ -55,7 +55,7 @@ class TestEndToEndAnalyticsPipeline:
     def test_load_pet_frame_from_shards(self, pipeline_dirs: dict[str, Path]) -> None:
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=0,
             shard_count=1,
@@ -68,14 +68,14 @@ class TestEndToEndAnalyticsPipeline:
     def test_sharded_load_splits_tiles(self, pipeline_dirs: dict[str, Path]) -> None:
         args_0 = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=0,
             shard_count=2,
         )
         args_1 = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=1,
             shard_count=2,
@@ -89,7 +89,7 @@ class TestEndToEndAnalyticsPipeline:
     def test_full_analytics_generation(self, pipeline_dirs: dict[str, Path]) -> None:
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=0,
             shard_count=1,
@@ -122,7 +122,7 @@ class TestEndToEndAnalyticsPipeline:
         """Requesting a tile that doesn't exist returns an empty frame."""
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=[999],
             shard_index=0,
             shard_count=1,

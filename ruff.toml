@@ -1,5 +1,5 @@
 line-length = 88
-exclude = ["typings"]
+exclude = ["typings", "venv", ".conda"]
 
 [lint]
 select = ["ALL"]

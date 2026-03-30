@@ -366,9 +366,12 @@ def _write_mrt_partition(
     partition_dir = f"{base_path}/{partition_path}"
     filesystem.create_dir(partition_dir, recursive=True)
     output_path = f"{partition_dir}/mrt.parquet"
+    float_cols = mrt_df.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        mrt_df[float_cols] = mrt_df[float_cols].astype("float32")
     table: Any = pa.Table.from_pandas(mrt_df, preserve_index=False)
     with filesystem.open_output_stream(output_path) as output_stream:
-        pq.write_table(table, output_stream)
+        pq.write_table(table, output_stream, compression="ZSTD")
 
 
 def _load_mrt_frame(zip_path: Path) -> DataFrame:

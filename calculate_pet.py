@@ -152,10 +152,13 @@ def main() -> None:
             raise RuntimeError(msg)
 
         pet_df = calculate_pet_frame(combined_df)
+        float_cols = pet_df.select_dtypes(include=["float64"]).columns
+        if len(float_cols) > 0:
+            pet_df[float_cols] = pet_df[float_cols].astype("float32")
         output_dir = Path(args.out_dir) / shard_key.partition_path
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / "pet.csv"
-        pet_df.to_csv(output_path, index=False)
+        output_path = output_dir / "pet.csv.gz"
+        pet_df.to_csv(output_path, index=False, compression="gzip")
         LOGGER.info("Saved %s rows to %s.", len(pet_df), output_path)
 
 

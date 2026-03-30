@@ -110,14 +110,14 @@ class TestPartitionFileExists:
 
 class TestExtractFiles:
     def test_returns_download_path_if_matching_suffix(self, tmp_path: Path) -> None:
-        csv_file = tmp_path / "data.csv"
+        csv_file = tmp_path / "data.csv.gz"
         csv_file.write_text("a,b\n1,2\n")
-        result = extract_files(csv_file, suffix=".csv")
+        result = extract_files(csv_file, suffix=".csv.gz")
         assert len(result) == 1
         assert result[0] == csv_file
 
     def test_returns_empty_for_wrong_suffix(self, tmp_path: Path) -> None:
-        csv_file = tmp_path / "data.csv"
+        csv_file = tmp_path / "data.csv.gz"
         csv_file.write_text("a,b\n1,2\n")
         result = extract_files(csv_file, suffix=".nc")
         assert result == []

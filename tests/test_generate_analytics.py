@@ -162,12 +162,12 @@ class TestDiscoverPetShards:
 
 class TestParsePartitionValue:
     def test_extracts_tile_id(self, tmp_path: Path) -> None:
-        shard_path = tmp_path / "year=2020" / "tile_id=7" / "pet.csv"
+        shard_path = tmp_path / "year=2020" / "tile_id=7" / "pet.csv.gz"
         result = _parse_partition_value(shard_path, tmp_path, "tile_id")
         assert result == 7
 
     def test_returns_none_for_missing_key(self, tmp_path: Path) -> None:
-        shard_path = tmp_path / "year=2020" / "pet.csv"
+        shard_path = tmp_path / "year=2020" / "pet.csv.gz"
         result = _parse_partition_value(shard_path, tmp_path, "tile_id")
         assert result is None
 
@@ -242,7 +242,7 @@ class TestLoadPetFrameFromShards:
 
 class TestLoadPetFrameFromCsv:
     def test_loads_csv(self, tmp_path: Path) -> None:
-        csv_path = tmp_path / "pet.csv"
+        csv_path = tmp_path / "pet.csv.gz"
         csv_path.write_text(
             "location_id,date,pet\n0,2020-01-01,15.0\n1,2020-01-01,16.0\n"
         )
@@ -250,7 +250,7 @@ class TestLoadPetFrameFromCsv:
         assert len(df) == 2
 
     def test_csv_sharding(self, tmp_path: Path) -> None:
-        csv_path = tmp_path / "pet.csv"
+        csv_path = tmp_path / "pet.csv.gz"
         csv_path.write_text(
             "location_id,date,pet\n0,2020-01-01,15.0\n1,2020-01-01,16.0\n"
         )
@@ -268,7 +268,7 @@ class TestLoadPetFrame:
             "location_id,date,pet\n1,2020-01-01,10.0\n"
         )
 
-        csv_path = tmp_path / "pet.csv"
+        csv_path = tmp_path / "pet.csv.gz"
         csv_path.write_text("location_id,date,pet\n99,2020-01-01,99.0\n")
 
         args = argparse.Namespace(
@@ -285,7 +285,7 @@ class TestLoadPetFrame:
     def test_falls_back_to_csv(self, tmp_path: Path) -> None:
         pet_root = tmp_path / "empty_shards"
 
-        csv_path = tmp_path / "pet.csv"
+        csv_path = tmp_path / "pet.csv.gz"
         csv_path.write_text("location_id,date,pet\n5,2020-01-01,20.0\n")
 
         args = argparse.Namespace(
@@ -302,7 +302,7 @@ class TestLoadPetFrame:
     def test_raises_when_no_data_found(self, tmp_path: Path) -> None:
         args = argparse.Namespace(
             pet_root=str(tmp_path / "empty"),
-            pet_csv=str(tmp_path / "no_such.csv"),
+            pet_csv=str(tmp_path / "no_such.csv.gz"),
             tile_ids=None,
             shard_index=0,
             shard_count=1,

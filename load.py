@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import io
 import logging
 import os
@@ -49,7 +50,7 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--cities-csv", default="cities.csv")
-    parser.add_argument("--pet-csv", default="pet.csv")
+    parser.add_argument("--pet-csv", default="pet.csv.gz")
     parser.add_argument("--pet-root", default="pet_data_csv")
     parser.add_argument("--analytics-root", default="analytics_data_csv")
     parser.add_argument("--analytics-shard-count", type=int, default=20)
@@ -268,7 +269,12 @@ def _copy_csv_file_in_batches(
     *,
     batch_size: int,
 ) -> int:
-    with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
+    with (
+        conn.cursor() as cur,
+        gzip.open(str(csv_path), "rt", encoding="utf-8", newline="")
+        if csv_path.suffix == ".gz"
+        else csv_path.open("r", encoding="utf-8", newline="") as f,
+    ):
         header = next(f, None)
         if header is None:
             LOGGER.warning("CSV file %s is empty. Skipping.", csv_path)
@@ -351,7 +357,7 @@ def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
     pet_csv_paths = _discover_csv_inputs(
         args.pet_csv,
         shard_root=args.pet_root,
-        shard_file_name="pet.csv",
+        shard_file_name="pet.csv.gz",
         shard_partition_key=None,
     )
     return _select_partition_shard_paths(
@@ -386,15 +392,15 @@ def _discover_analytics_csv_paths(
 
 
 def _discover_percentiles_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "percentiles.csv")
+    return _discover_analytics_csv_paths(args, "percentiles.csv.gz")
 
 
 def _discover_forecast_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "forecast.csv")
+    return _discover_analytics_csv_paths(args, "forecast.csv.gz")
 
 
 def _discover_pet_change_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "change_per_decade.csv")
+    return _discover_analytics_csv_paths(args, "change_per_decade.csv.gz")
 
 
 def _load_requested_tables(
@@ -421,7 +427,8 @@ def _load_requested_tables(
             csv_resolver(args),
             table_name,
             batch_size=args.copy_batch_size,
-            truncate=table_name in truncate_tables,
+            truncate=table_name in truncate_tables
+            and not (table_name == "locations" and args.skip_drop_views),
         )
 
 

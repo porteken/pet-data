@@ -12,7 +12,7 @@ DataFrame: TypeAlias = Any
 np: Any = cast("Any", import_module("numpy"))
 pd: Any = cast("Any", import_module("pandas"))
 
-PET_CSV_NAME = "pet.csv"
+PET_CSV_NAME = "pet.csv.gz"
 ANALYTICS_ROOT = Path("analytics_data_csv")
 PET_ROOT = Path("pet_data_csv")
 
@@ -32,7 +32,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Generate PET analytics from partitioned PET CSV shards or a "
-            "materialized pet.csv."
+            "materialized pet.csv.gz."
         ),
     )
     parser.add_argument("--pet-root", default=str(PET_ROOT))
@@ -61,20 +61,23 @@ def _p90(values: object) -> float:
 
 def generate_percentiles(df: DataFrame, output_dir: Path) -> Path:
     """Calculate the 10th and 90th percentile of PET per year per location."""
-    output_path = output_dir / "percentiles.csv"
+    output_path = output_dir / "percentiles.csv.gz"
     logger.info("Generating %s...", output_path)
     agg_df = (
         df.groupby(["year", "location_id"])["pet"].agg(p10=_p10, p90=_p90).reset_index()
     )
 
     rounded_df = agg_df.round(1)
-    rounded_df.to_csv(output_path, index=False)
+    float_cols = rounded_df.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        rounded_df[float_cols] = rounded_df[float_cols].astype("float32")
+    rounded_df.to_csv(output_path, index=False, compression="gzip")
     return output_path
 
 
 def generate_forecast(df: DataFrame, output_dir: Path) -> Path:
     """Generate linear trend forecasts for future decades (2030, 2040, 2050)."""
-    output_path = output_dir / "forecast.csv"
+    output_path = output_dir / "forecast.csv.gz"
     logger.info("Generating %s...", output_path)
     yearly_avg = df.groupby(["location_id", "year"])["pet"].mean().reset_index()
 
@@ -101,13 +104,16 @@ def generate_forecast(df: DataFrame, output_dir: Path) -> Path:
         forecast_records,
         columns=["location_id", "year", "pet"],
     )
-    forecast_df.to_csv(output_path, index=False)
+    float_cols = forecast_df.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        forecast_df[float_cols] = forecast_df[float_cols].astype("float32")
+    forecast_df.to_csv(output_path, index=False, compression="gzip")
     return output_path
 
 
 def generate_change_per_decade(df: DataFrame, output_dir: Path) -> Path:
     """Calculate the change in average PET between decades."""
-    output_path = output_dir / "change_per_decade.csv"
+    output_path = output_dir / "change_per_decade.csv.gz"
     logger.info("Generating %s...", output_path)
     yearly_avg = df.groupby(["location_id", "year"])["pet"].mean().reset_index()
 
@@ -126,7 +132,10 @@ def generate_change_per_decade(df: DataFrame, output_dir: Path) -> Path:
         decade_avg[["location_id", "decade", "change_value"]].round(2),
         columns=["location_id", "decade", "change_value"],
     ).rename(columns={"change_value": "change"})
-    final_df.to_csv(output_path, index=False)
+    float_cols = final_df.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        final_df[float_cols] = final_df[float_cols].astype("float32")
+    final_df.to_csv(output_path, index=False, compression="gzip")
     return output_path
 
 
@@ -263,7 +272,7 @@ def _load_pet_frame(args: argparse.Namespace) -> DataFrame:
         return _load_pet_frame_from_shards(pet_root, tile_ids=selected_tile_ids)
 
     if not pet_csv_path.exists():
-        msg = "No PET shard CSV files or materialized pet.csv were found."
+        msg = "No PET shard CSV files or materialized pet.csv.gz were found."
         raise FileNotFoundError(msg)
 
     logger.info(

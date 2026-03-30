@@ -63,12 +63,12 @@ class TestNormalizeWeatherColumns:
 
 class TestDetectWeatherCsvHeaderRow:
     def test_standard_header(self, tmp_path: Path) -> None:
-        csv_path = tmp_path / "weather.csv"
+        csv_path = tmp_path / "weather.csv.gz"
         csv_path.write_text("valid_time,u10,v10,t2m,d2m\n2020-01-01,1,2,293,290\n")
         assert _detect_weather_csv_header_row(csv_path, encoding="utf-8") == 0
 
     def test_header_with_metadata_prefix(self, tmp_path: Path) -> None:
-        csv_path = tmp_path / "weather.csv"
+        csv_path = tmp_path / "weather.csv.gz"
         csv_path.write_text(
             "# metadata line 1\n# metadata line 2\nvalid_time,u10,v10,t2m,d2m\n"
         )

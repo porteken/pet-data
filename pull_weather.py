@@ -565,12 +565,15 @@ def _write_weather_partition(
                 exc,
             )
 
+    float_cols = weather_df.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        weather_df[float_cols] = weather_df[float_cols].astype("float32")
     table: Any = pa.Table.from_pandas(
         weather_df.sort_values(["location_id", "timestamp"]).reset_index(drop=True),
         preserve_index=False,
     )
     with filesystem.open_output_stream(output_path) as output_stream:
-        pq.write_table(table, output_stream)
+        pq.write_table(table, output_stream, compression="ZSTD")
 
 
 def _normalize_weather_columns(df: DataFrame) -> DataFrame:

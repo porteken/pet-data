@@ -26,7 +26,7 @@ def _write_pet_shard(root: Path, year: int, tile_id: int, rows: list[dict]) -> P
     """Write a PET shard CSV to the standard partition layout."""
     shard_dir = root / f"year={year}" / f"tile_id={tile_id}"
     shard_dir.mkdir(parents=True, exist_ok=True)
-    path = shard_dir / "pet.csv"
+    path = shard_dir / "pet.csv.gz"
     df = pd.DataFrame(rows)
     df.to_csv(path, index=False)
     return path
@@ -122,7 +122,7 @@ class TestGenerateAnalyticsIntegration:
 
         args = argparse.Namespace(
             pet_root=str(pet_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=0,
             shard_count=1,
@@ -166,7 +166,7 @@ class TestGenerateAnalyticsIntegration:
         for shard_idx in range(3):
             args = argparse.Namespace(
                 pet_root=str(pet_dirs["pet_root"]),
-                pet_csv="nonexistent.csv",
+                pet_csv="nonexistent.csv.gz",
                 tile_ids=None,
                 shard_index=shard_idx,
                 shard_count=3,
@@ -180,7 +180,7 @@ class TestGenerateAnalyticsIntegration:
 
         args = argparse.Namespace(
             pet_root=str(pet_dirs["pet_root"]),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=[2],
             shard_index=0,
             shard_count=1,
@@ -255,7 +255,7 @@ class TestCalculatePetIntegration:
         # Write output and verify CSV format
         out_dir = tmp_path / "pet_out" / shard_key.partition_path
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "pet.csv"
+        out_path = out_dir / "pet.csv.gz"
         pet_df.to_csv(out_path, index=False)
 
         loaded = pd.read_csv(out_path)
@@ -484,7 +484,7 @@ class TestLoadIntegration:
                     "date": ["2000-01-01"],
                     "pet": [20.0],
                 }
-            ).to_csv(shard_dir / "pet.csv", index=False)
+            ).to_csv(shard_dir / "pet.csv.gz", index=False)
 
         # Analytics shards
         analytics_root = tmp_path / "analytics_data_csv"
@@ -500,21 +500,21 @@ class TestLoadIntegration:
                     "p10": [15.0],
                     "p90": [25.0],
                 }
-            ).to_csv(shard_dir / "percentiles.csv", index=False)
+            ).to_csv(shard_dir / "percentiles.csv.gz", index=False)
             pd.DataFrame(
                 {
                     "location_id": [1],
                     "year": [2030],
                     "pet": [22.0],
                 }
-            ).to_csv(shard_dir / "forecast.csv", index=False)
+            ).to_csv(shard_dir / "forecast.csv.gz", index=False)
             pd.DataFrame(
                 {
                     "location_id": [1],
                     "decade": ["2010s"],
                     "change": [0.5],
                 }
-            ).to_csv(shard_dir / "change_per_decade.csv", index=False)
+            ).to_csv(shard_dir / "change_per_decade.csv.gz", index=False)
 
         # Cities
         cities_path = tmp_path / "cities.csv"
@@ -538,9 +538,9 @@ class TestLoadIntegration:
         from load import _discover_csv_inputs
 
         paths = _discover_csv_inputs(
-            "nonexistent.csv",
+            "nonexistent.csv.gz",
             shard_root=str(load_dirs["pet_root"]),
-            shard_file_name="pet.csv",
+            shard_file_name="pet.csv.gz",
             shard_partition_key=None,
         )
         assert len(paths) == 3
@@ -552,9 +552,9 @@ class TestLoadIntegration:
         from load import _discover_csv_inputs
 
         paths = _discover_csv_inputs(
-            "percentiles.csv",
+            "percentiles.csv.gz",
             shard_root=str(load_dirs["analytics_root"]),
-            shard_file_name="percentiles.csv",
+            shard_file_name="percentiles.csv.gz",
             shard_count=2,
             shard_partition_key="shard_count",
         )
@@ -709,10 +709,10 @@ class TestFullPipelineIntegration:
 
             out_dir = pet_root / shard_key.partition_path
             out_dir.mkdir(parents=True, exist_ok=True)
-            pet_df.to_csv(out_dir / "pet.csv", index=False)
+            pet_df.to_csv(out_dir / "pet.csv.gz", index=False)
 
         # Verify all PET shards were written
-        pet_csvs = list(pet_root.rglob("pet.csv"))
+        pet_csvs = list(pet_root.rglob("pet.csv.gz"))
         assert len(pet_csvs) == 6
 
         # Step 3: Load PET shards and generate analytics
@@ -720,7 +720,7 @@ class TestFullPipelineIntegration:
 
         args = argparse.Namespace(
             pet_root=str(pet_root),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=0,
             shard_count=1,
@@ -766,12 +766,12 @@ class TestFullPipelineIntegration:
             pet_df = calculate_pet_frame(combined_df)
             out_dir = pet_root / shard_key.partition_path
             out_dir.mkdir(parents=True, exist_ok=True)
-            pet_df.to_csv(out_dir / "pet.csv", index=False)
+            pet_df.to_csv(out_dir / "pet.csv.gz", index=False)
 
         # Load all at once
         args_full = argparse.Namespace(
             pet_root=str(pet_root),
-            pet_csv="nonexistent.csv",
+            pet_csv="nonexistent.csv.gz",
             tile_ids=None,
             shard_index=0,
             shard_count=1,
@@ -783,7 +783,7 @@ class TestFullPipelineIntegration:
         for idx in range(2):
             args_shard = argparse.Namespace(
                 pet_root=str(pet_root),
-                pet_csv="nonexistent.csv",
+                pet_csv="nonexistent.csv.gz",
                 tile_ids=None,
                 shard_index=idx,
                 shard_count=2,
@@ -858,7 +858,7 @@ class TestRealDataOnDisk:
 
     @pytest.mark.skipif(
         not (
-            PROJECT_ROOT / "pet_data_csv" / "year=2000" / "tile_id=11" / "pet.csv"
+            PROJECT_ROOT / "pet_data_csv" / "year=2000" / "tile_id=11" / "pet.csv.gz"
         ).exists(),
         reason="Real PET data not available",
     )
@@ -872,7 +872,7 @@ class TestRealDataOnDisk:
 
         args = argparse.Namespace(
             pet_root=str(PROJECT_ROOT / "pet_data_csv"),
-            pet_csv=str(PROJECT_ROOT / "pet.csv"),
+            pet_csv=str(PROJECT_ROOT / "pet.csv.gz"),
             tile_ids=None,
             shard_index=0,
             shard_count=1,
@@ -886,9 +886,9 @@ class TestRealDataOnDisk:
         generate_forecast(df, out_dir)
         generate_change_per_decade(df, out_dir)
 
-        assert (out_dir / "percentiles.csv").exists()
-        assert (out_dir / "forecast.csv").exists()
-        assert (out_dir / "change_per_decade.csv").exists()
+        assert (out_dir / "percentiles.csv.gz").exists()
+        assert (out_dir / "forecast.csv.gz").exists()
+        assert (out_dir / "change_per_decade.csv.gz").exists()
 
     @pytest.mark.skipif(
         not (
