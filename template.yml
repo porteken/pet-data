@@ -41,7 +41,7 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnLike:
-                aws:SourceArn: !Sub 'arn:aws:s3:::${BucketName}'
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:s3:::${BucketName}'
           - Sid: DenyInsecureTransportForAccessLogsBucket
             Effect: Deny
             Principal: '*'
