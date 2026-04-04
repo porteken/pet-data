@@ -71,7 +71,9 @@ def generate_percentiles(df: DataFrame, output_dir: Path) -> Path:
     float_cols = rounded_df.select_dtypes(include=["float64"]).columns
     if len(float_cols) > 0:
         rounded_df[float_cols] = rounded_df[float_cols].astype("float32")
-    rounded_df.to_csv(output_path, index=False, compression="gzip")
+    tmp_output_path = output_path.with_suffix(".tmp")
+    rounded_df.to_csv(tmp_output_path, index=False, compression="gzip")
+    tmp_output_path.rename(output_path)
     return output_path
 
 
@@ -107,7 +109,9 @@ def generate_forecast(df: DataFrame, output_dir: Path) -> Path:
     float_cols = forecast_df.select_dtypes(include=["float64"]).columns
     if len(float_cols) > 0:
         forecast_df[float_cols] = forecast_df[float_cols].astype("float32")
-    forecast_df.to_csv(output_path, index=False, compression="gzip")
+    tmp_output_path = output_path.with_suffix(".tmp")
+    forecast_df.to_csv(tmp_output_path, index=False, compression="gzip")
+    tmp_output_path.rename(output_path)
     return output_path
 
 
@@ -135,7 +139,9 @@ def generate_change_per_decade(df: DataFrame, output_dir: Path) -> Path:
     float_cols = final_df.select_dtypes(include=["float64"]).columns
     if len(float_cols) > 0:
         final_df[float_cols] = final_df[float_cols].astype("float32")
-    final_df.to_csv(output_path, index=False, compression="gzip")
+    tmp_output_path = output_path.with_suffix(".tmp")
+    final_df.to_csv(tmp_output_path, index=False, compression="gzip")
+    tmp_output_path.rename(output_path)
     return output_path
 
 

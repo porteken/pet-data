@@ -647,8 +647,11 @@ def _write_era5_partition(
     if len(float_cols) > 0:
         frame[float_cols] = frame[float_cols].astype("float32")
     table: Any = pa.Table.from_pandas(frame, preserve_index=False)
-    with filesystem.open_output_stream(output_path) as out_stream:
+
+    tmp_output_path = output_path + ".tmp"
+    with filesystem.open_output_stream(tmp_output_path) as out_stream:
         pq.write_table(table, out_stream, compression="ZSTD")
+    filesystem.move(tmp_output_path, output_path)
 
 
 def _pending_batch_tiles(

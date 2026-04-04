@@ -122,7 +122,9 @@ def combine_shard(
     output_dir = Path(out_dir) / shard_key.partition_path
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "combined.parquet"
-    combined_df.to_parquet(output_path, index=False, compression="zstd")
+    tmp_output_path = output_path.with_suffix(".tmp")
+    combined_df.to_parquet(tmp_output_path, index=False, compression="zstd")
+    tmp_output_path.rename(output_path)
     LOGGER.info("Wrote %s rows to %s.", len(combined_df), output_path)
     return output_path
 
@@ -367,10 +369,11 @@ def _passthrough_era5_shard(
     if len(float_cols) > 0:
         era5_df[float_cols] = era5_df[float_cols].astype("float32")
     era5_df.sort_values(["location_id", "time"]).reset_index(drop=True).to_parquet(
-        output_path,
+        output_path.with_suffix(".tmp"),
         index=False,
         compression="zstd",
     )
+    output_path.with_suffix(".tmp").rename(output_path)
     LOGGER.info("Wrote %s era5 rows to %s.", len(era5_df), output_path)
 
 

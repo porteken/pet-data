@@ -572,8 +572,10 @@ def _write_weather_partition(
         weather_df.sort_values(["location_id", "timestamp"]).reset_index(drop=True),
         preserve_index=False,
     )
-    with filesystem.open_output_stream(output_path) as output_stream:
+    tmp_output_path = output_path + ".tmp"
+    with filesystem.open_output_stream(tmp_output_path) as output_stream:
         pq.write_table(table, output_stream, compression="ZSTD")
+    filesystem.move(tmp_output_path, output_path)
 
 
 def _normalize_weather_columns(df: DataFrame) -> DataFrame:

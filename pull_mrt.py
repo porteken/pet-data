@@ -370,8 +370,11 @@ def _write_mrt_partition(
     if len(float_cols) > 0:
         mrt_df[float_cols] = mrt_df[float_cols].astype("float32")
     table: Any = pa.Table.from_pandas(mrt_df, preserve_index=False)
-    with filesystem.open_output_stream(output_path) as output_stream:
+
+    tmp_output_path = output_path + ".tmp"
+    with filesystem.open_output_stream(tmp_output_path) as output_stream:
         pq.write_table(table, output_stream, compression="ZSTD")
+    filesystem.move(tmp_output_path, output_path)
 
 
 def _load_mrt_frame(zip_path: Path) -> DataFrame:

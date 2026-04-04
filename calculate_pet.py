@@ -158,7 +158,9 @@ def main() -> None:
         output_dir = Path(args.out_dir) / shard_key.partition_path
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / "pet.csv.gz"
-        pet_df.to_csv(output_path, index=False, compression="gzip")
+        tmp_output_path = output_path.with_suffix(".tmp")
+        pet_df.to_csv(tmp_output_path, index=False, compression="gzip")
+        tmp_output_path.rename(output_path)
         LOGGER.info("Saved %s rows to %s.", len(pet_df), output_path)
 
 

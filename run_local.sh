@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 # Local mirror of .github/workflows/pull_all.yml
-# Skips S3 sync and AWS CloudFormation steps; all data lives on local disk.
+# Uses Google Cloud Run for ERA5 data, local compute for CDS.
 set -euo pipefail
 
-export SUPABASE_DB_URI="postgresql://postgres:postgres@localhost:5432/postgres"
+if [ -f .env ]; then
+    # Load environment variables from .env file
+    # shellcheck disable=SC2046
+    export $(grep -v '^#' .env | xargs)
+fi
+
+if [ -z "${SUPABASE_DB_URI:-}" ]; then
+    echo "ERROR: SUPABASE_DB_URI is not set. Please defined it in .env or your environment." >&2
+    # exit 1
+    # Not exiting here as some steps might not need it, though Step 7/8/9 do.
+fi
+
 
 # ---------------------------------------------------------------------------
-# Parallel job helpers
+# Parallel job helpers (FAIL FAST ENABLED)
 # ---------------------------------------------------------------------------
-
-# _pids: global accumulator reused per phase
 _PIDS=()
 
 _kill_tree() {
@@ -27,7 +36,7 @@ _kill_tree() {
 
 _cleanup() {
     trap - SIGINT SIGTERM ERR EXIT
-    echo -e "\n[Shutdown] Caught signal. Stopping all background jobs..." >&2
+    echo -e "\n[Shutdown] Caught signal or failure. Stopping all background jobs..." >&2
 
     local active=()
     for pid in "${_PIDS[@]+"${_PIDS[@]}"}"; do
@@ -42,7 +51,6 @@ _cleanup() {
             _kill_tree "$pid" TERM
         done
 
-        # Give them up to 5 seconds to gracefully exit
         for _ in {1..25}; do
             local still_alive=0
             for pid in "${active[@]}"; do
@@ -57,7 +65,6 @@ _cleanup() {
             sleep 0.2
         done
 
-        # Force kill any remaining
         for pid in "${active[@]}"; do
             if kill -0 "$pid" 2>/dev/null; then
                 echo "[Shutdown] Force killing PID $pid..." >&2
@@ -85,18 +92,23 @@ _retry() {
     done
 }
 
-# Background a command, add its PID to _PIDS, and block until fewer than
-# MAX_PARALLEL jobs are running (mirrors GitHub's max-parallel setting).
 _launch() {
     local max=$1
     shift
     "$@" &
     _PIDS+=($!)
-    # throttle: wait until a slot is free
     while (( ${#_PIDS[@]} >= max )); do
         local alive=()
         for pid in "${_PIDS[@]}"; do
-            kill -0 "$pid" 2>/dev/null && alive+=("$pid")
+            if kill -0 "$pid" 2>/dev/null; then
+                alive+=("$pid")
+            else
+                # Fail fast logic: Check exit code instantly when job dies
+                wait "$pid" || {
+                    echo "ERROR: Background job $pid failed during launch throttling." >&2
+                    exit 1
+                }
+            fi
         done
         _PIDS=("${alive[@]+"${alive[@]}"}")
         if (( ${#_PIDS[@]} >= max )); then
@@ -105,38 +117,48 @@ _launch() {
     done
 }
 
-# Wait for all accumulated PIDs; fail if any job failed.
 _wait_phase() {
     local label=${1:-phase}
-    local failed=0
-    for pid in "${_PIDS[@]+"${_PIDS[@]}"}"; do
-        wait "$pid" || { echo "ERROR: job $pid failed in [$label]" >&2; failed=1; }
+    while (( ${#_PIDS[@]} > 0 )); do
+        local alive=()
+        for pid in "${_PIDS[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                alive+=("$pid")
+            else
+                # Fail fast logic: if any job fails in this phase, crash pipeline immediately
+                wait "$pid" || {
+                    echo "ERROR: job $pid failed in [$label]" >&2
+                    exit 1
+                }
+            fi
+        done
+        _PIDS=("${alive[@]+"${alive[@]}"}")
+        if (( ${#_PIDS[@]} > 0 )); then
+            sleep 0.3
+        fi
     done
-    _PIDS=()
-    if (( failed )); then
-        exit 1
-    fi
 }
 
 # ---------------------------------------------------------------------------
-# Step 1: Compute year ranges  (build-year-range + setup-locations jobs)
+# Step 1: Compute year ranges
 # ---------------------------------------------------------------------------
 echo "====== Step 1: Compute year ranges + setup locations ======"
 mkdir -p output_tiles era5_data_parquet weather_data_parquet utci_data_parquet \
          pet_data_csv analytics_data_csv combined_data_parquet
 
-# build_year_range.py --shell emits: ERA5_YEARS, CDS_YEARS, CDS_YEAR_MONTHS, ALL_YEARS, etc.
 eval "$(python build_year_range.py --shell)"
-# ERA5_YEARS   — space-separated list of years to pull from Google ARCO
-# CDS_YEARS    — space-separated list of years to pull from CDS (weather)
-# CDS_YEAR_MONTHS — JSON array of {year, month, month_pad} objects (for MRT)
-# ALL_YEARS    — every year from ERA5_START through previous year (for PET/analytics)
+
+# TEMPORARY OVERRIDE FOR DRY RUN
+ERA5_YEARS="2023 2024"
+CDS_YEARS="2025"
+ALL_YEARS="2023 2024 2025"
+export CDS_YEAR_MONTHS='[{"year": 2025, "month": 1, "month_pad": "01"}, {"year": 2025, "month": 2, "month_pad": "02"}]'
+
 
 echo "  ERA5 years : $ERA5_YEARS"
 echo "  CDS years  : $CDS_YEARS"
 echo "  All years  : $ALL_YEARS"
 
-# setup-locations
 python cities.py
 python boxes.py \
     --cities-csv cities.csv \
@@ -146,47 +168,43 @@ python boxes.py \
     --city-tile-out output_tiles/city_to_tile.csv
 
 # ---------------------------------------------------------------------------
-# Step 2: Pull ERA5  (8 processes in parallel, 1 internal thread each = 8 concurrent GCS streams)
+# Step 2: Pull ERA5 (Offloaded to Google Cloud Run Jobs)
 # ---------------------------------------------------------------------------
-echo "====== Step 2: Pull ERA5 (8 processes in parallel, 1 worker each) ======"
+echo "====== Step 2: Pull ERA5 (parallel via Cloud Run, max 8) ======"
 for YEAR in $ERA5_YEARS; do
-    _launch 8 _retry 3 python google_era5.py \
-        --year "$YEAR" \
-        --city-shard-count 1 \
-        --time-shard-index 0 \
-        --time-shard-count 1 \
-        --concurrency-profile balanced \
-        --batch-hours 720 \
-        --max-workers 1
+    _launch 8 _retry 3 gcloud run jobs execute era5-worker \
+        --region=us-east1 \
+        --wait \
+        --args="--year=$YEAR,--city-shard-count=1,--time-shard-index=0,--time-shard-count=1,--concurrency-profile=balanced,--out-dir=s3://pet-parquet-files"
 done
 _wait_phase "pull-google-era5"
 
+echo "====== Syncing ERA5 Data Locally from S3 ======"
+# Cloud Run wrote directly to S3. We must sync it locally so Steps 5 and 6 can compute PET.
+aws s3 sync s3://pet-parquet-files/era5_data_parquet/ ./era5_data_parquet/
+
 # ---------------------------------------------------------------------------
-# Step 3: Pull Weather  (process-weather: 10 city-shards, max-parallel 2)
-#         Weather runs in parallel with ERA5 in CI but depends on CDS quota;
-#         here we run it after ERA5 to avoid CDS conflicts, matching CI intent.
+# Step 3: Pull Weather (CDS API - STRICT 4-job concurrency)
 # ---------------------------------------------------------------------------
-echo "====== Step 3: Pull Weather (parallel: 10 city-shards, max 2) ======"
-for CITY_SHARD in 0 1 2 3 4 5 6 7 8 9; do
-    _launch 2 _retry 3 python pull_weather.py \
-        --start-year "$START_YEAR" \
+echo "====== Step 3: Pull Weather (parallel: 10 city-shards, max 4) ======"
+for CITY_SHARD in {0..9}; do
+    _launch 4 _retry 3 python pull_weather.py \
+        --start-year "2024" \
         --weather-city-shard-index "$CITY_SHARD" \
         --weather-city-shard-count 10 \
-        --max-workers 2
+        --max-workers 1 # Forces 1 thread per job to map 1:1 with _launch bounds
 done
 _wait_phase "process-weather"
 
 # ---------------------------------------------------------------------------
-# Step 4: Pull MRT  (process-mrt: year × month, max-parallel 8)
-#         Runs after weather in CI (full CDS quota available).
+# Step 4: Pull MRT (CDS API - STRICT 4-job concurrency)
 # ---------------------------------------------------------------------------
-echo "====== Step 4: Pull MRT (parallel: year-month pairs, max 8) ======"
-# CDS_YEAR_MONTHS is a JSON array; parse year/month pairs with python
+echo "====== Step 4: Pull MRT (parallel: year-month pairs, max 4) ======"
 while IFS=$'\t' read -r YM_YEAR YM_MONTH; do
-    _launch 8 _retry 3 python pull_mrt.py \
+    _launch 4 _retry 3 python pull_mrt.py \
         --year "$YM_YEAR" \
         --month "$YM_MONTH" \
-        --max-workers 6
+        --max-workers 1 # Forces 1 thread per job to map 1:1 with _launch bounds
 done < <(python - <<'PY'
 import json, sys, os
 for ym in json.loads(os.environ["CDS_YEAR_MONTHS"]):
@@ -196,12 +214,12 @@ PY
 _wait_phase "process-mrt"
 
 # ---------------------------------------------------------------------------
-# Step 5: Combine + Calculate PET  (process-pet: year × 4 shards, max 8)
+# Step 5: Combine + Calculate PET (Compute Intensive - Maxed out)
 # ---------------------------------------------------------------------------
-echo "====== Step 5: Combine + Calculate PET (parallel: year × 4 shards, max 8) ======"
+echo "====== Step 5: Combine + Calculate PET (parallel: year × 4 shards, max 16) ======"
 for YEAR in $ALL_YEARS; do
-    for PET_SHARD in 0 1 2 3; do
-        _launch 8 bash -c "
+    for PET_SHARD in {0..3}; do
+        _launch 16 bash -c "
             python combine.py \
                 --era5-root ./era5_data_parquet \
                 --year $YEAR \
@@ -217,45 +235,31 @@ done
 _wait_phase "process-pet"
 
 # ---------------------------------------------------------------------------
-# Step 6: Generate Analytics  (generate-analytics: 20 shards, max 10)
+# Step 6: Generate Analytics (Compute Intensive - Maxed out)
 # ---------------------------------------------------------------------------
-echo "====== Step 6: Generate Analytics (parallel: 20 shards, max 10) ======"
-for ANA_SHARD in $(seq 0 19); do
-    _launch 10 python generate_analytics.py \
+echo "====== Step 6: Generate Analytics (parallel: 20 shards, max 20) ======"
+for ANA_SHARD in {0..19}; do
+    _launch 20 python generate_analytics.py \
         --shard-index "$ANA_SHARD" \
         --shard-count 20
 done
 _wait_phase "generate-analytics"
 
 # ---------------------------------------------------------------------------
-# Step 7: Prepare DB load  (prepare-db-load: drop views, truncate, load locations)
+# Step 7: Prepare DB load
 # ---------------------------------------------------------------------------
 echo "====== Step 7: Prepare DB (drop views, truncate tables, load locations) ======"
 python - <<'PY'
-import os, sys
+import os, sys, psycopg2
 from pathlib import Path
-
-import psycopg2
-
 db_uri = os.environ.get("SUPABASE_DB_URI")
-if not db_uri:
-    print("SUPABASE_DB_URI not set, skipping database cleanup.")
-    sys.exit(0)
-
+if not db_uri: sys.exit(0)
 conn = psycopg2.connect(db_uri)
 conn.autocommit = True
 try:
     with conn.cursor() as cur:
         cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
-        cur.execute("""
-            TRUNCATE TABLE
-                locations,
-                pet,
-                pet_percentiles,
-                pet_forecast,
-                pet_change
-            CASCADE
-        """)
+        cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
 finally:
     conn.close()
 PY
@@ -270,32 +274,13 @@ python load.py \
     --skip-table pet_change
 
 # ---------------------------------------------------------------------------
-# Step 8: Load shards to DB  (load-to-db: 20 shards, max 10)
+# Step 8: Load shards to DB (Database I/O bound - Max 16)
 # ---------------------------------------------------------------------------
-echo "====== Step 8: Load shards to DB (parallel: 20 shards, max 10) ======"
-for LOAD_SHARD in $(seq 0 19); do
-    _launch 10 python load.py \
+echo "====== Step 8: Load shards to DB (parallel: 20 shards, max 16) ======"
+for LOAD_SHARD in {0..19}; do
+    _launch 16 python load.py \
         --append-only \
         --skip-drop-views \
         --skip-create-views \
         --skip-table locations \
-        --analytics-shard-count 20 \
-        --load-shard-index "$LOAD_SHARD" \
-        --load-shard-count 20
-done
-_wait_phase "load-to-db"
-
-# ---------------------------------------------------------------------------
-# Step 9: Finalize  (finalize-db-load: recreate views)
-# ---------------------------------------------------------------------------
-echo "====== Step 9: Recreate views ======"
-python load.py \
-    --append-only \
-    --skip-drop-views \
-    --skip-table locations \
-    --skip-table pet \
-    --skip-table pet_percentiles \
-    --skip-table pet_forecast \
-    --skip-table pet_change
-
-echo "====== Pipeline complete! ======"
+        --analytics-shard
