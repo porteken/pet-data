@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import pathlib
+from typing import cast
+
+import pandas as pd
 import pytest
 
+import google_era5
 from google_era5 import (
     DEFAULT_BATCH_HOURS,
     _era5_partition_path,
     _iter_time_batches,
     _resolve_era5_max_workers,
+    _run_era5_batch_jobs,
     _select_time_shard_batches,
     _year_time_slice,
 )
@@ -121,3 +127,65 @@ class TestResolveEra5MaxWorkers:
     def test_raises_on_zero(self) -> None:
         with pytest.raises(ValueError, match="max_workers"):
             _resolve_era5_max_workers(0)
+
+
+class TestRunEra5BatchJobs:
+    def test_parallel_branch_uses_threads(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        shard_df = pd.DataFrame(
+            {
+                "location_id": [1],
+                "tile_id": [99],
+                "lat": [35.0],
+                "lng": [-80.0],
+            }
+        )
+        batch_frames = {
+            0: shard_df.copy(),
+            1: shard_df.copy(),
+        }
+        completed_batches: list[int] = []
+
+        def fake_pending_batch_tiles(
+            _shard: pd.DataFrame,
+            *,
+            _era5_root: str,
+            _year: int,
+            batch_index: int,
+            _force: bool = False,
+        ) -> pd.DataFrame:
+            return batch_frames[batch_index].copy()
+
+        def fake_process_batch(**kwargs: object) -> int:
+            batch_index = cast("int", kwargs["batch_index"])
+            completed_batches.append(batch_index)
+            return batch_index
+
+        monkeypatch.setattr(
+            google_era5,
+            "_pending_batch_tiles",
+            fake_pending_batch_tiles,
+        )
+        monkeypatch.setattr(
+            google_era5,
+            "_process_era5_batch_with_thread_dataset",
+            fake_process_batch,
+        )
+        monkeypatch.setenv("ERA5_CONCURRENCY_PROFILE", "aggressive")
+
+        wrote_batches = _run_era5_batch_jobs(
+            selected_batches=[(0, 0, 23), (1, 24, 47)],
+            shard_df=shard_df,
+            era5_root=str(tmp_path / "era5"),
+            year=2001,
+            city_shard_index=0,
+            city_shard_count=1,
+            time_shard_index=0,
+            time_shard_count=1,
+            max_workers=2,
+            force=False,
+        )
+
+        assert wrote_batches is True
+        assert sorted(completed_batches) == [0, 1]

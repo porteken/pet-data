@@ -23,10 +23,10 @@ def _as_float_array(value: object) -> NDArray[np.float64]:
 
 class TestC2K:
     def test_freezing_point(self) -> None:
-        assert c2k(0.0) == 273.15
+        assert np.isclose(_as_float(c2k(0.0)), 273.15, rtol=1e-09, atol=1e-09)
 
     def test_boiling_point(self) -> None:
-        assert c2k(100.0) == 373.15
+        assert np.isclose(_as_float(c2k(100.0)), 373.15, rtol=1e-09, atol=1e-09)
 
 
 class TestSvpMurray:
@@ -39,7 +39,7 @@ class TestSvpMurray:
 class TestPetConstants:
     def test_standard_atmosphere(self) -> None:
         c = PetConstants()
-        assert c.po == 1013.25
+        assert np.isclose(c.po, 1013.25, rtol=1e-09, atol=1e-09)
         assert c.p == 1013.25
 
 

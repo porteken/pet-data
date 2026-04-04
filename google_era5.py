@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
 import importlib
 import json
 import os
@@ -11,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, TypeAlias, TypeVar, cast
 
 from boxes import GRID_DEG, OUTPUT_DIR, generate_tile_outputs
 from pull_cds_shared import LOGGER, DataFrame, pa, partition_file_exists, pd, pq
@@ -36,6 +38,7 @@ def _arco_stable_end_year() -> int:
 
 Dataset: TypeAlias = Any
 ArrayLike: TypeAlias = Any
+ZarrMetadata: TypeAlias = dict[str, object]
 
 
 ERA5_ARCO_STORE = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
@@ -104,6 +107,15 @@ ERA5_THREAD_LOCAL = threading.local()
 
 GCS_BATCH_MAX_RETRIES = 3
 GCS_BATCH_RETRY_DELAY_SECONDS = 10
+OPEN_GCS_FILESYSTEMS: list[Any] = []
+
+TrackedFilesystemT = TypeVar("TrackedFilesystemT")
+
+
+def _track_gcs_filesystem(fs: TrackedFilesystemT) -> TrackedFilesystemT:
+    """Track a gcsfs filesystem so its session can be closed at shutdown."""
+    OPEN_GCS_FILESYSTEMS.append(fs)
+    return fs
 
 
 def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
@@ -116,19 +128,21 @@ def _coerce_int_tuple(raw_value: object) -> tuple[int, ...] | None:
     return tuple(cast("list[int]", raw_dims))
 
 
-def _load_arco_store_metadata() -> dict[str, object]:
+def _load_arco_store_metadata() -> ZarrMetadata:
     """Return consolidated Zarr metadata for the public ARCO ERA5 store."""
     gcsfs = cast("Any", importlib.import_module("gcsfs"))
-    fs = gcsfs.GCSFileSystem(token="anon")  # noqa: S106
+    fs = _track_gcs_filesystem(
+        gcsfs.GCSFileSystem(token="anon", skip_instance_cache=True),  # noqa: S106
+    )
     metadata_path = ERA5_ARCO_STORE.removeprefix("gs://") + "/.zmetadata"
     with fs.open(metadata_path, "r") as metadata_file:
-        return cast("dict[str, object]", json.load(metadata_file))
+        return cast("ZarrMetadata", json.load(metadata_file))
 
 
 def _problematic_arco_chunks() -> dict[str, tuple[tuple[int, ...], tuple[int, ...]]]:
     """Return any variables chunked as one full global field per hour."""
     metadata = _load_arco_store_metadata()
-    metadata_entries = cast("dict[str, object]", metadata.get("metadata", {}))
+    metadata_entries = cast("ZarrMetadata", metadata.get("metadata", {}))
 
     problematic_chunks: dict[str, tuple[tuple[int, ...], tuple[int, ...]]] = {}
     for canonical_name, candidates in ERA5_VARIABLE_CANDIDATES.items():
@@ -208,10 +222,16 @@ def _open_zarr_store() -> Dataset:
     dask_array = cast("Any", importlib.import_module("dask.array"))
     zarr = cast("Any", importlib.import_module("zarr"))
 
-    # Create GCS filesystem with tuned connection/block settings
-    fs = gcsfs.GCSFileSystem(
-        token="anon",  # noqa: S106
-        default_block_size=8 * 1024 * 1024,  # 8MB blocks
+    # Create GCS filesystem with tuned connection/block settings.
+    # skip_instance_cache=True ensures each call gets a fresh GCSFileSystem
+    # bound to the current event loop, preventing the shutdown RuntimeError
+    # where gcsfs tries to close an aiohttp session on a different loop.
+    fs = _track_gcs_filesystem(
+        gcsfs.GCSFileSystem(
+            token="anon",  # noqa: S106
+            default_block_size=8 * 1024 * 1024,  # 8MB blocks
+            skip_instance_cache=True,
+        ),
     )
     root = zarr.open_group(fs.get_mapper(ERA5_ARCO_STORE), mode="r")
     resolved_names = _resolve_store_variables(set(root.array_keys()))
@@ -637,13 +657,14 @@ def _pending_batch_tiles(
     era5_root: str,
     year: int,
     batch_index: int,
+    force: bool = False,
 ) -> DataFrame:
     """Return only the cities for tiles that still need this batch written."""
     pending_frames: list[DataFrame] = []
     tile_ids = sorted(int(raw_tile_id) for raw_tile_id in shard_df["tile_id"].unique())
     for tile_id in tile_ids:
         tile_cities = shard_df[shard_df["tile_id"] == tile_id].copy()
-        if _era5_batch_exists(
+        if not force and _era5_batch_exists(
             era5_root,
             year,
             tile_id,
@@ -709,6 +730,7 @@ def _get_thread_dataset() -> Dataset:
     """Return a thread-local ERA5 dataset handle."""
     ds = getattr(ERA5_THREAD_LOCAL, "ds", None)
     if ds is None:
+        _configure_concurrency(os.environ.get("ERA5_CONCURRENCY_PROFILE", "balanced"))
         ds = _open_zarr_store()
         ERA5_THREAD_LOCAL.ds = ds
     return ds
@@ -821,6 +843,7 @@ def _run_era5_batch_jobs(
     time_shard_index: int,
     time_shard_count: int,
     max_workers: int,
+    force: bool = False,
 ) -> bool:
     """Run the pending ERA5 batch jobs, using worker threads when beneficial."""
     batch_jobs: list[tuple[int, int, int, DataFrame]] = []
@@ -830,6 +853,7 @@ def _run_era5_batch_jobs(
             era5_root=era5_root,
             year=year,
             batch_index=batch_index,
+            force=force,
         )
         if pending_batch_df.empty:
             continue
@@ -877,7 +901,7 @@ def _run_era5_batch_jobs(
         return True
 
     LOGGER.info(
-        "Processing %s ERA5 batches with %s worker threads (%s Dask workers/batch).",
+        "Processing %s ERA5 batches with %s worker threads (%s Dask threads/batch).",
         len(batch_jobs),
         worker_count,
         dask_workers,
@@ -919,6 +943,7 @@ def process_era5(
     batch_hours: int = DEFAULT_BATCH_HOURS,
     concurrency_profile: str = "aggressive",
     expected_location_count: int | None = EXPECTED_LOCATION_COUNT,
+    force: bool = False,
 ) -> None:
     """Download ERA5 weather + MRT for one year and one city shard."""
     _configure_concurrency(concurrency_profile)
@@ -971,6 +996,7 @@ def process_era5(
         time_shard_index=time_shard_index,
         time_shard_count=time_shard_count,
         max_workers=max_workers,
+        force=force,
     )
 
     if not wrote_any_batches:
@@ -1066,11 +1092,73 @@ def _parse_args() -> argparse.Namespace:
             f"(default: {EXPECTED_LOCATION_COUNT}). Use 0 to disable the check."
         ),
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing partitions even if they already exist on disk.",
+    )
     return parser.parse_args()
+
+
+def _close_gcsfs_sessions() -> None:
+    """Close all open gcsfs sessions before interpreter shutdown.
+
+    Python's weakref finalizers close gcsfs aiohttp sessions, but they run
+    after the main event loop has been torn down, causing a RuntimeError
+    ("Future attached to a different loop").  By closing all cached
+    GCSFileSystem instances explicitly on a fresh loop here — before the
+    weakref finalizers fire — we prevent that race condition.
+    """
+    try:
+        gcsfs_mod = importlib.import_module("gcsfs")
+    except ImportError:
+        return
+
+    # Collect all live GCSFileSystem instances from the instance cache.
+    instances = list(OPEN_GCS_FILESYSTEMS)
+    cache: dict[Any, Any] | None = getattr(gcsfs_mod.GCSFileSystem, "_cache", None)
+    if cache:
+        instances.extend(cache.values())
+    # Also handle the newer fsspec AbstractFileSystem._cache structure.
+    fsspec_cache: dict[Any, Any] | None = None
+    with contextlib.suppress(ImportError):
+        fsspec_mod = importlib.import_module("fsspec")
+        fsspec_cache = getattr(fsspec_mod.AbstractFileSystem, "_cache", None)
+    if fsspec_cache:
+        instances.extend(
+            v for v in fsspec_cache.values() if isinstance(v, gcsfs_mod.GCSFileSystem)
+        )
+
+    if not instances:
+        return
+
+    seen_instance_ids: set[int] = set()
+    for inst in instances:
+        if id(inst) in seen_instance_ids:
+            continue
+        seen_instance_ids.add(id(inst))
+
+        session = getattr(inst, "_session", None)
+        if session is None:
+            continue
+
+        connector = getattr(session, "_connector", None)
+        with contextlib.suppress(Exception):
+            if connector is not None:
+                connector._close()  # type: ignore[attr-defined]  # noqa: SLF001
+        with contextlib.suppress(Exception):
+            session._connector = None  # type: ignore[attr-defined]  # noqa: SLF001
+        with contextlib.suppress(Exception):
+            inst._session = None  # type: ignore[attr-defined]  # noqa: SLF001
+
+    OPEN_GCS_FILESYSTEMS.clear()
 
 
 def main() -> None:
     """Download and write ERA5 weather + MRT parquet shards."""
+    # Register a shutdown backstop, but also close sessions explicitly in the
+    # main control flow while tracked filesystems are still strongly referenced.
+    atexit.register(_close_gcsfs_sessions)
     args = _parse_args()
     try:
         process_era5(
@@ -1084,10 +1172,13 @@ def main() -> None:
             batch_hours=args.batch_hours,
             concurrency_profile=args.concurrency_profile,
             expected_location_count=args.expected_location_count or None,
+            force=args.force,
         )
     except Exception as exc:
         LOGGER.exception("ERA5 pipeline failed for year=%s.", args.year)
         raise SystemExit(1) from exc
+    finally:
+        _close_gcsfs_sessions()
 
 
 if __name__ == "__main__":
