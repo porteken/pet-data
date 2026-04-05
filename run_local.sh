@@ -15,6 +15,12 @@ if [ -z "${SUPABASE_DB_URI:-}" ]; then
     # Not exiting here as some steps might not need it, though Step 7/8/9 do.
 fi
 
+# Completely disable implicit BLAS threading to prevent CPU thrashing
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export VECLIB_MAX_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # ---------------------------------------------------------------------------
 # Parallel job helpers (FAIL FAST ENABLED)
@@ -148,13 +154,6 @@ mkdir -p output_tiles era5_data_parquet weather_data_parquet utci_data_parquet \
 
 eval "$(python build_year_range.py --shell)"
 
-# TEMPORARY OVERRIDE FOR DRY RUN
-ERA5_YEARS="2023 2024"
-CDS_YEARS="2025"
-ALL_YEARS="2023 2024 2025"
-export CDS_YEAR_MONTHS='[{"year": 2025, "month": 1, "month_pad": "01"}, {"year": 2025, "month": 2, "month_pad": "02"}]'
-
-
 echo "  ERA5 years : $ERA5_YEARS"
 echo "  CDS years  : $CDS_YEARS"
 echo "  All years  : $ALL_YEARS"
@@ -171,29 +170,62 @@ python boxes.py \
 # Step 2: Pull ERA5 (Offloaded to Google Cloud Run Jobs)
 # ---------------------------------------------------------------------------
 echo "====== Step 2: Pull ERA5 (parallel via Cloud Run, max 8) ======"
+# Total city shards: 20
+# Each year is processed per-city-shard in the cloud.
+# --max-workers 1: each process processes monthly batches sequentially, avoiding
+# the OOM caused by up to 12 concurrent batch threads each holding large zarr
+# chunk buffers.  This keeps peak memory to ~500 MB/process so we can safely
+# run 8 processes at once without exceeding available RAM.
 for YEAR in $ERA5_YEARS; do
-    _launch 8 _retry 3 gcloud run jobs execute era5-worker \
-        --region=us-east1 \
-        --wait \
-        --args="--year=$YEAR,--city-shard-count=1,--time-shard-index=0,--time-shard-count=1,--concurrency-profile=balanced,--out-dir=s3://pet-parquet-files"
+    for CITY_SHARD in {0..1}; do
+        _launch 8 _retry 3 python google_era5.py \
+            --year=$YEAR \
+            --city-shard-count=2 \
+            --city-shard-index=$CITY_SHARD \
+            --time-shard-index=0 \
+            --time-shard-count=1 \
+            --max-workers 1 \
+            --concurrency-profile=conservative \
+            --out-dir=./era5_data_parquet \
+            --expected-location-count 5
+    done
 done
 _wait_phase "pull-google-era5"
 
 echo "====== Syncing ERA5 Data Locally from S3 ======"
-# Cloud Run wrote directly to S3. We must sync it locally so Steps 5 and 6 can compute PET.
-aws s3 sync s3://pet-parquet-files/era5_data_parquet/ ./era5_data_parquet/
+# Skipping S3 sync for local minimum test
+# aws s3 sync s3://pet-parquet-files/era5_data_parquet/ ./era5_data_parquet/
+
+# ---------------------------------------------------------------------------
+# Step 2.5: Cancel Active CDS Jobs
+# ---------------------------------------------------------------------------
+echo "====== Step 2.5: Cancel Active CDS Jobs ======"
+if [ -n "${CDSAPI_KEY:-}" ]; then
+    python cancel_cds_jobs.py
+else
+    echo "Skipping CDS job cancellation: CDSAPI_KEY not set."
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: Pull Weather (CDS API - STRICT 4-job concurrency)
 # ---------------------------------------------------------------------------
-echo "====== Step 3: Pull Weather (parallel: 10 city-shards, max 4) ======"
-for CITY_SHARD in {0..9}; do
-    _launch 4 _retry 3 python pull_weather.py \
-        --start-year "2024" \
-        --weather-city-shard-index "$CITY_SHARD" \
-        --weather-city-shard-count 10 \
-        --max-workers 1 # Forces 1 thread per job to map 1:1 with _launch bounds
-done
+echo "====== Step 3: Pull Weather (parallel: 20 city-shards, max 4) ======"
+while IFS=$'\t' read -r YM_YEAR YM_MONTH; do
+    for CITY_SHARD in {0..19}; do
+        _launch 4 _retry 3 python pull_weather.py \
+            --year "$YM_YEAR" \
+            --month "$YM_MONTH" \
+            --weather-city-shard-index "$CITY_SHARD" \
+            --weather-city-shard-count 20 \
+            --max-workers 10 \
+            --expected-location-count 500
+    done
+done < <(python - <<'PY'
+import json, sys, os
+for ym in json.loads(os.environ["CDS_YEAR_MONTHS"]):
+    print(f"{ym['year']}\t{ym['month']}")
+PY
+)
 _wait_phase "process-weather"
 
 # ---------------------------------------------------------------------------
@@ -204,7 +236,7 @@ while IFS=$'\t' read -r YM_YEAR YM_MONTH; do
     _launch 4 _retry 3 python pull_mrt.py \
         --year "$YM_YEAR" \
         --month "$YM_MONTH" \
-        --max-workers 1 # Forces 1 thread per job to map 1:1 with _launch bounds
+        --max-workers 10
 done < <(python - <<'PY'
 import json, sys, os
 for ym in json.loads(os.environ["CDS_YEAR_MONTHS"]):
@@ -216,19 +248,19 @@ _wait_phase "process-mrt"
 # ---------------------------------------------------------------------------
 # Step 5: Combine + Calculate PET (Compute Intensive - Maxed out)
 # ---------------------------------------------------------------------------
-echo "====== Step 5: Combine + Calculate PET (parallel: year × 4 shards, max 16) ======"
+echo "====== Step 5: Combine + Calculate PET (parallel: year x tile shards, max 16) ======"
 for YEAR in $ALL_YEARS; do
-    for PET_SHARD in {0..3}; do
+    for PET_SHARD in {0..19}; do
         _launch 16 bash -c "
             python combine.py \
                 --era5-root ./era5_data_parquet \
                 --year $YEAR \
                 --shard-index $PET_SHARD \
-                --shard-count 4 && \
+                --shard-count 20 && \
             python calculate_pet.py \
                 --year $YEAR \
                 --shard-index $PET_SHARD \
-                --shard-count 4
+                --shard-count 20
         "
     done
 done
@@ -248,7 +280,7 @@ _wait_phase "generate-analytics"
 # ---------------------------------------------------------------------------
 # Step 7: Prepare DB load
 # ---------------------------------------------------------------------------
-echo "====== Step 7: Prepare DB (drop views, truncate tables, load locations) ======"
+echo "====== Step 7: Prepare DB (create/update tables, truncate tables, load locations) ======"
 python - <<'PY'
 import os, sys, psycopg2
 from pathlib import Path
@@ -259,6 +291,7 @@ conn.autocommit = True
 try:
     with conn.cursor() as cur:
         cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
+        cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
         cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
 finally:
     conn.close()
@@ -283,4 +316,23 @@ for LOAD_SHARD in {0..19}; do
         --skip-drop-views \
         --skip-create-views \
         --skip-table locations \
-        --analytics-shard
+        --analytics-shard-count 20 \
+        --load-shard-index "$LOAD_SHARD" \
+        --load-shard-count 20
+done
+_wait_phase "load-to-db"
+
+# ---------------------------------------------------------------------------
+# Step 9: Finalize
+# ---------------------------------------------------------------------------
+echo "====== Step 9: Recreate views ======"
+python load.py \
+    --append-only \
+    --skip-drop-views \
+    --skip-table locations \
+    --skip-table pet \
+    --skip-table pet_percentiles \
+    --skip-table pet_forecast \
+    --skip-table pet_change
+
+echo "====== Pipeline complete! ======"
