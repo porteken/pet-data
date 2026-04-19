@@ -1,6 +1,0 @@
--r requirements.txt
-cdsapi
-xarray
-cfgrib
-netCDF4
-thermofeel

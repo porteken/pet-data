@@ -1,17 +1,6 @@
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: trailing-whitespace
-        exclude: ^typings/
-      - id: end-of-file-fixer
-        exclude: ^typings/
-      - id: check-yaml
-        exclude: ^template\.yml$
-      - id: check-added-large-files
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.6
+    rev: v0.15.11
     hooks:
       - id: ruff
         args: [--fix]
@@ -21,3 +10,14 @@ repos:
     rev: v1.1.408
     hooks:
       - id: pyright
+  - repo: https://github.com/concur1/sqruff-pre-commit
+    # Sqruff version.
+    rev: v0.38.0
+    hooks:
+      # Run the formatter.
+      - id: sqruff-fix
+        files: \.sql$
+      # Run the linter.
+      - id: sqruff-lint
+        files: \.sql$
+

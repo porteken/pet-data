@@ -1,0 +1,98 @@
+Running local pipeline in smoke mode: 2024-2025 ERA5 week only.
+====== Step 1: Compute year ranges + setup locations ======
+2026-04-18 20:28:20,480 - Generating locations dataset...
+2026-04-18 20:28:20,656 - Successfully saved 500 cities to cities.csv
+====== Step 2: Compute ERA5 + PET (parallel, CPU-aware) ======
+2026-04-18 20:28:21 - INFO - ERA5->PET year=2024 city_shard=0/2 time_shard=17/53: 1 batch(es)
+2026-04-18 20:28:21 - INFO - ERA5->PET year=2024 city_shard=1/2 time_shard=17/53: 1 batch(es)
+ERA5->PET 2024:   0%|          | 0/1 [00:00<?, ?it/s]2026-04-18 20:28:23 - INFO - Computing ERA5->PET for year 2024 batch 17 over 250 cities.
+ERA5->PET 2024:   0%|          | 0/1 [00:00<?, ?it/s]2026-04-18 20:28:23 - INFO - Computing ERA5->PET for year 2024 batch 17 over 250 cities.
+2026-04-18 20:30:18,252 INFO Request ID is 4ab85835-6f99-49e4-ae88-e25b97466bc4
+2026-04-18 20:30:18 - INFO - Request ID is 4ab85835-6f99-49e4-ae88-e25b97466bc4
+2026-04-18 20:30:18 - INFO - CDS request 4ab85835-6f99-49e4-ae88-e25b97466bc4 for derived-utci-historical is accepted.
+2026-04-18 20:30:23,382 INFO Request ID is 436c45b8-19af-4df0-bba6-371c103f528a
+2026-04-18 20:30:23 - INFO - Request ID is 436c45b8-19af-4df0-bba6-371c103f528a
+2026-04-18 20:30:23 - INFO - CDS request 436c45b8-19af-4df0-bba6-371c103f528a for derived-utci-historical is accepted.
+2026-04-18 20:30:33 - INFO - CDS request 4ab85835-6f99-49e4-ae88-e25b97466bc4 for derived-utci-historical is completed.
+2026-04-18 20:30:33,904 WARNING Download format not supported for this dataset. Defaulting to zip.
+2026-04-18 20:30:33 - WARNING - Download format not supported for this dataset. Defaulting to zip.
+2026-04-18 20:30:33,904 INFO status has been updated to successful
+2026-04-18 20:30:33 - INFO - status has been updated to successful
+2026-04-18 20:30:34 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-18/6ae1dd46e3015ccd5db78f89d19b6bd5.zip
+
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:   0%|          | 0.00/13.0M [00:00<?, ?B/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:   8%|▊         | 1.00M/13.0M [00:01<00:19, 634kB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  15%|█▌        | 2.00M/13.0M [00:02<00:10, 1.06MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  23%|██▎       | 3.00M/13.0M [00:02<00:07, 1.35MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  31%|███       | 4.00M/13.0M [00:03<00:05, 1.65MB/s][A2026-04-18 20:30:38 - INFO - CDS request 436c45b8-19af-4df0-bba6-371c103f528a for derived-utci-historical is completed.
+2026-04-18 20:30:39,001 WARNING Download format not supported for this dataset. Defaulting to zip.
+2026-04-18 20:30:39 - WARNING - Download format not supported for this dataset. Defaulting to zip.
+2026-04-18 20:30:39,001 INFO status has been updated to successful
+2026-04-18 20:30:39 - INFO - status has been updated to successful
+2026-04-18 20:30:39 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-18/62a9a63d1e7ed0fe5317ab4c1b48ed77.zip
+
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  38%|███▊      | 5.00M/13.0M [00:03<00:04, 1.76MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  46%|████▌     | 6.00M/13.0M [00:04<00:03, 1.98MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:   0%|          | 0.00/14.1M [00:00<?, ?B/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  54%|█████▎    | 7.00M/13.0M [00:04<00:03, 2.10MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  61%|██████▏   | 8.00M/13.0M [00:04<00:02, 2.13MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  69%|██████▉   | 9.00M/13.0M [00:05<00:01, 2.25MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:   7%|▋         | 1.00M/14.1M [00:01<00:18, 746kB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  77%|███████▋  | 10.0M/13.0M [00:05<00:01, 2.35MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  14%|█▍        | 2.00M/14.1M [00:01<00:08, 1.42MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  21%|██▏       | 3.00M/14.1M [00:01<00:05, 2.23MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  84%|████████▍ | 11.0M/13.0M [00:06<00:00, 2.43MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  28%|██▊       | 4.00M/14.1M [00:01<00:03, 3.19MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  36%|███▌      | 5.00M/14.1M [00:02<00:02, 4.09MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  50%|████▉     | 7.00M/14.1M [00:02<00:01, 6.53MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  64%|██████▍   | 9.00M/14.1M [00:02<00:00, 8.68MB/s][A
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip:  92%|█████████▏| 12.0M/13.0M [00:06<00:00, 2.39MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  78%|███████▊  | 11.0M/14.1M [00:02<00:00, 10.3MB/s][A
+62a9a63d1e7ed0fe5317ab4c1b48ed77.zip:  92%|█████████▏| 13.0M/14.1M [00:02<00:00, 11.6MB/s][A
+                                                                                          [AERA5->PET 2024:   0%|          | 0/1 [02:19<?, ?it/s]
+Traceback (most recent call last):
+  File "/home/kenneth-porter/pet-data/google_era5.py", line 855, in main
+    process_era5(
+    ~~~~~~~~~~~~^
+        args.year,
+        ^^^^^^^^^^
+    ...<8 lines>...
+        args.months,
+        ^^^^^^^^^^^^
+    )
+    ^
+  File "/home/kenneth-porter/pet-data/google_era5.py", line 822, in process_era5
+    _run_era5_batch_jobs(
+    ~~~~~~~~~~~~~~~~~~~~^
+        selected_batches=selected_batches,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+        allowed_months=months,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/kenneth-porter/pet-data/google_era5.py", line 781, in _run_era5_batch_jobs
+    _process_era5_batch_job(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        ds=ds, pet_root=era5_root, year=year, city_shard_index=city_shard_index,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        batch_index=b_idx, start_h=s_h, end_h=e_h, pending_batch_df=df,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        compute_workers=dask_workers, allowed_months=allowed_months,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/kenneth-porter/pet-data/google_era5.py", line 720, in _process_era5_batch_job
+    frame = _compute_location_frame(ds, pending_batch_df, start_h=start_h, end_h=end_h, compute_workers=compute_workers)
+  File "/home/kenneth-porter/pet-data/google_era5.py", line 640, in _compute_location_frame
+    cds_ds = xr.open_dataset(tmp_nc.name)
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/xarray/backends/api.py", line 696, in open_dataset
+    engine = plugins.guess_engine(filename_or_obj)
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/xarray/backends/plugins.py", line 194, in guess_engine
+    raise ValueError(error_msg)
+ValueError: did not find a match in any of xarray's currently installed IO backends ['netcdf4', 'scipy', 'cfgrib', 'zarr']. Consider explicitly selecting one of the installed engines via the ``engine`` parameter, or installing additional IO dependencies, see:
+https://docs.xarray.dev/en/stable/getting-started-guide/installing.html
+https://docs.xarray.dev/en/stable/user-guide/io.html
+
+6ae1dd46e3015ccd5db78f89d19b6bd5.zip: 100%|█████████▉| 13.0M/13.0M [00:07<00:00, 2.36MB/s][A
+                                                                                          [AA background job failed!

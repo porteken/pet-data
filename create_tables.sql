@@ -1,0 +1,70 @@
+set statement_timeout = '5s' ;
+set lock_timeout = '1s' ;
+DROP MATERIALIZED VIEW IF EXISTS public.pet_year_avg CASCADE ;
+DROP MATERIALIZED VIEW IF EXISTS public.pet_year_max CASCADE ;
+DROP MATERIALIZED VIEW IF EXISTS public.pet_year CASCADE ;
+
+-- Note: We use CREATE TABLE IF NOT EXISTS where possible, 
+-- but for a full rebuild we might still want to DROP or just ALTER.
+-- The user asked to "allow for any additional columns or changes", 
+-- which implies ALTER but for simplicity in this pipeline, 
+-- we can recreate or ensure columns exist.
+
+CREATE TABLE IF NOT EXISTS public.locations (
+location_id bigint PRIMARY KEY,
+city text NOT NULL,
+state text NOT NULL,
+lat double precision NOT NULL,
+lng double precision NOT NULL
+) ;
+
+CREATE TABLE IF NOT EXISTS public.pet (
+location_id bigint NOT NULL,
+date date NOT NULL,
+pet double precision NOT NULL
+) ;
+
+CREATE TABLE IF NOT EXISTS public.pet_percentiles (
+year bigint NOT NULL,
+location_id bigint NOT NULL,
+p10 double precision NOT NULL,
+p90 double precision NOT NULL
+) ;
+
+CREATE TABLE IF NOT EXISTS public.pet_forecast (
+location_id bigint NOT NULL,
+year bigint NOT NULL,
+pet double precision NOT NULL,
+lower double precision,
+upper double precision
+) ;
+
+-- Handle migrations for pet_forecast if it already exists
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='lower') THEN
+        ALTER TABLE public.pet_forecast ADD COLUMN lower double precision;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='upper') THEN
+        ALTER TABLE public.pet_forecast ADD COLUMN upper double precision;
+    END IF;
+END $$ ;
+
+CREATE TABLE IF NOT EXISTS public.pet_change (
+location_id bigint NOT NULL,
+year bigint NOT NULL,
+change double precision NOT NULL
+) ;
+
+-- Handle migrations for pet_change if it already exists
+-- (remove decade, add year)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_change' AND column_name='decade') THEN
+        ALTER TABLE public.pet_change DROP COLUMN decade;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_change' AND column_name='year') THEN
+        ALTER TABLE public.pet_change ADD COLUMN year integer;
+        -- If we were keeping data we'd need a default, but TRUNCATE is usually called.
+    END IF;
+END $$ ;

@@ -1,4 +1,4 @@
-"""Generate PET analytics from PET CSV shards or a materialized PET CSV."""
+"""Generate PET analytics from PET parquet shards or a materialized PET CSV."""
 
 from __future__ import annotations
 
@@ -12,9 +12,18 @@ DataFrame: TypeAlias = Any
 np: Any = cast("Any", import_module("numpy"))
 pd: Any = cast("Any", import_module("pandas"))
 
-PET_CSV_NAME = "pet.csv.gz"
+try:
+    prophet_module: Any = import_module("prophet")
+    Prophet: Any = prophet_module.Prophet
+except (ImportError, AttributeError):
+    Prophet = None
+
+PET_CSV_NAME = "pet.csv"
+PET_BATCH_GLOB = "pet_batch_*.parquet"
 ANALYTICS_ROOT = Path("analytics_data_csv")
 PET_ROOT = Path("pet_data_csv")
+FORECAST_END_YEAR = 2100
+GENERATING_LOG_MESSAGE = "Generating %s..."
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -26,19 +35,94 @@ class ForecastRecord(TypedDict):
     location_id: object
     year: int
     pet: float
+    lower: float
+    upper: float
+
+
+def _yearly_average_pet(df: DataFrame) -> DataFrame:
+    return df.groupby(["location_id", "year"])["pet"].mean().reset_index()
+
+
+def _empty_forecast_frame() -> DataFrame:
+    return pd.DataFrame(
+        columns=["location_id", "year", "pet", "lower", "upper"],
+    )
+
+
+def _build_forecast_frame(df: DataFrame) -> DataFrame:
+    if Prophet is None:
+        logger.warning("Prophet not found. Forecast outputs will be empty.")
+        return _empty_forecast_frame()
+
+    logging.getLogger("prophet").setLevel(logging.WARNING)
+    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+
+    yearly_avg = _yearly_average_pet(df)
+    all_forecasts: list[DataFrame] = []
+    location_ids = sorted(yearly_avg["location_id"].unique().tolist())
+
+    for loc_id in location_ids:
+        loc_df = yearly_avg[yearly_avg["location_id"] == loc_id].copy()
+        if len(loc_df) <= 1:
+            continue
+
+        loc_df = loc_df.rename(columns={"year": "ds", "pet": "y"})
+        loc_df["ds"] = pd.to_datetime(loc_df["ds"], format="%Y")
+
+        model = Prophet(
+            growth="linear",
+            yearly_seasonality=True,
+            weekly_seasonality=False,
+            daily_seasonality=False,
+            changepoint_prior_scale=0.01,
+        )
+        model.fit(loc_df)
+
+        last_year = int(loc_df["ds"].dt.year.max())
+        periods_to_forecast = FORECAST_END_YEAR - last_year
+        if periods_to_forecast <= 0:
+            continue
+
+        future_df = model.make_future_dataframe(periods=periods_to_forecast, freq="YS")
+        forecast = model.predict(future_df)
+        forecast["location_id"] = loc_id
+
+        forecast_subset = forecast[
+            ["ds", "location_id", "yhat", "yhat_lower", "yhat_upper"]
+        ].copy()
+        forecast_subset = forecast_subset.rename(
+            columns={
+                "ds": "year",
+                "yhat": "pet",
+                "yhat_lower": "lower",
+                "yhat_upper": "upper",
+            },
+        )
+        forecast_subset["year"] = forecast_subset["year"].dt.year
+        forecast_subset = forecast_subset[forecast_subset["year"] > last_year]
+        all_forecasts.append(forecast_subset)
+
+    if not all_forecasts:
+        logger.warning("No forecasts were generated.")
+        return _empty_forecast_frame()
+
+    final_forecast_df = pd.concat(all_forecasts, ignore_index=True).round(1)
+    float_cols = final_forecast_df.select_dtypes(include=["float64"]).columns
+    if len(float_cols) > 0:
+        final_forecast_df[float_cols] = final_forecast_df[float_cols].astype("float32")
+    return final_forecast_df
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate PET analytics from partitioned PET CSV shards or a "
-            "materialized pet.csv.gz."
+            "Generate PET analytics from partitioned PET parquet shards or a "
+            "materialized pet.csv."
         ),
     )
     parser.add_argument("--pet-root", default=str(PET_ROOT))
     parser.add_argument("--pet-csv", default=PET_CSV_NAME)
     parser.add_argument("--out-dir", default=str(ANALYTICS_ROOT))
-    parser.add_argument("--tile-id", dest="tile_ids", action="append", type=int)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=20)
     return parser.parse_args()
@@ -61,8 +145,8 @@ def _p90(values: object) -> float:
 
 def generate_percentiles(df: DataFrame, output_dir: Path) -> Path:
     """Calculate the 10th and 90th percentile of PET per year per location."""
-    output_path = output_dir / "percentiles.csv.gz"
-    logger.info("Generating %s...", output_path)
+    output_path = output_dir / "percentiles.parquet"
+    logger.info(GENERATING_LOG_MESSAGE, output_path)
     agg_df = (
         df.groupby(["year", "location_id"])["pet"].agg(p10=_p10, p90=_p90).reset_index()
     )
@@ -72,168 +156,80 @@ def generate_percentiles(df: DataFrame, output_dir: Path) -> Path:
     if len(float_cols) > 0:
         rounded_df[float_cols] = rounded_df[float_cols].astype("float32")
     tmp_output_path = output_path.with_suffix(".tmp")
-    rounded_df.to_csv(tmp_output_path, index=False, compression="gzip")
+    rounded_df.to_parquet(tmp_output_path, index=False, compression="snappy")
     tmp_output_path.rename(output_path)
     return output_path
 
 
 def generate_forecast(df: DataFrame, output_dir: Path) -> Path:
-    """Generate linear trend forecasts for future decades (2030, 2040, 2050)."""
-    output_path = output_dir / "forecast.csv.gz"
-    logger.info("Generating %s...", output_path)
-    yearly_avg = df.groupby(["location_id", "year"])["pet"].mean().reset_index()
+    """Generate PET forecasts with lower and upper bounds using Prophet (up to 2100)."""
+    output_path = output_dir / "forecast.parquet"
+    logger.info(GENERATING_LOG_MESSAGE, output_path)
+    final_forecast_df = _build_forecast_frame(df)
 
-    forecast_records: list[ForecastRecord] = []
-    for loc_id, group in yearly_avg.groupby("location_id"):
-        if len(group) <= 1:
-            continue
-
-        x = np.asarray(group["year"].to_numpy(), dtype=float)
-        y = np.asarray(group["pet"].to_numpy(), dtype=float)
-        slope, intercept = (float(value) for value in np.polyfit(x, y, 1))
-
-        for future_year in [2030, 2040, 2050]:
-            projected_pet = (slope * future_year) + intercept
-            forecast_records.append(
-                {
-                    "location_id": loc_id,
-                    "year": future_year,
-                    "pet": round(projected_pet, 2),
-                },
-            )
-
-    forecast_df = pd.DataFrame(
-        forecast_records,
-        columns=["location_id", "year", "pet"],
-    )
-    float_cols = forecast_df.select_dtypes(include=["float64"]).columns
-    if len(float_cols) > 0:
-        forecast_df[float_cols] = forecast_df[float_cols].astype("float32")
     tmp_output_path = output_path.with_suffix(".tmp")
-    forecast_df.to_csv(tmp_output_path, index=False, compression="gzip")
+    final_forecast_df.to_parquet(tmp_output_path, index=False, compression="snappy")
     tmp_output_path.rename(output_path)
     return output_path
 
 
 def generate_change_per_decade(df: DataFrame, output_dir: Path) -> Path:
     """Calculate the change in average PET between decades."""
-    output_path = output_dir / "change_per_decade.csv.gz"
-    logger.info("Generating %s...", output_path)
-    yearly_avg = df.groupby(["location_id", "year"])["pet"].mean().reset_index()
-
-    yearly_avg["decade_start"] = (yearly_avg["year"] // 10) * 10
+    output_path = output_dir / "change_per_decade.parquet"
+    logger.info(GENERATING_LOG_MESSAGE, output_path)
+    yearly_avg = _yearly_average_pet(df)
+    forecast_df = _build_forecast_frame(df)
+    future_yearly_avg = forecast_df[["location_id", "year", "pet"]].copy()
+    frames = [yearly_avg]
+    if not future_yearly_avg.empty:
+        frames.append(future_yearly_avg)
+    combined_yearly_avg = pd.concat(frames, ignore_index=True)
+    combined_yearly_avg = combined_yearly_avg.drop_duplicates(
+        subset=["location_id", "year"],
+        keep="first",
+    )
+    combined_yearly_avg["decade_start"] = (combined_yearly_avg["year"] // 10) * 10
 
     decade_avg = (
-        yearly_avg.groupby(["location_id", "decade_start"])["pet"].mean().reset_index()
+        combined_yearly_avg.groupby(["location_id", "decade_start"])["pet"]
+        .mean()
+        .reset_index()
     )
 
     decade_avg = decade_avg.sort_values(["location_id", "decade_start"])
     decade_avg["change_value"] = decade_avg.groupby("location_id")["pet"].diff()
-    decade_avg["decade"] = decade_avg["decade_start"].astype(str) + "s"
     decade_avg = decade_avg.dropna(subset=["change_value"])
 
     final_df = pd.DataFrame(
-        decade_avg[["location_id", "decade", "change_value"]].round(2),
-        columns=["location_id", "decade", "change_value"],
-    ).rename(columns={"change_value": "change"})
+        decade_avg[["location_id", "decade_start", "change_value"]].round(2),
+        columns=["location_id", "decade_start", "change_value"],
+    ).rename(columns={"change_value": "change", "decade_start": "year"})
+
     float_cols = final_df.select_dtypes(include=["float64"]).columns
     if len(float_cols) > 0:
         final_df[float_cols] = final_df[float_cols].astype("float32")
+
     tmp_output_path = output_path.with_suffix(".tmp")
-    final_df.to_csv(tmp_output_path, index=False, compression="gzip")
+    final_df.to_parquet(tmp_output_path, index=False, compression="snappy")
     tmp_output_path.rename(output_path)
     return output_path
 
 
-def _discover_pet_shards(pet_root: Path) -> dict[int, list[Path]]:
-    shard_mapping: dict[int, list[Path]] = {}
+def _discover_pet_files(pet_root: Path) -> list[Path]:
+    """Return all pet batch CSV files sorted by path."""
     if not pet_root.exists():
-        return shard_mapping
-
-    for shard_path in sorted(pet_root.rglob(PET_CSV_NAME)):
-        tile_id = _parse_partition_value(shard_path, pet_root, "tile_id")
-        if tile_id is None:
-            continue
-        shard_mapping.setdefault(tile_id, []).append(shard_path)
-
-    return shard_mapping
+        return []
+    return sorted(pet_root.rglob(PET_BATCH_GLOB))
 
 
-def _parse_partition_value(
-    shard_path: Path,
-    root_path: Path,
-    partition_key: str,
-) -> int | None:
-    try:
-        relative_parts = shard_path.relative_to(root_path).parts
-    except ValueError:
-        return None
-
-    for part in relative_parts:
-        prefix = f"{partition_key}="
-        if part.startswith(prefix):
-            try:
-                return int(part.removeprefix(prefix))
-            except ValueError:
-                return None
-
-    return None
-
-
-def _select_tile_ids(
-    available_tile_ids: list[int],
+def _select_pet_files(
+    all_files: list[Path],
     *,
-    requested_tile_ids: list[int] | None,
     shard_index: int,
     shard_count: int,
-) -> list[int]:
-    if shard_count < 1:
-        msg = "shard_count must be >= 1"
-        raise ValueError(msg)
-    if shard_index < 0 or shard_index >= shard_count:
-        msg = f"shard_index must be between 0 and {shard_count - 1}"
-        raise ValueError(msg)
-
-    allowed_tiles = None if requested_tile_ids is None else set(requested_tile_ids)
-    filtered_tile_ids = [
-        tile_id
-        for tile_id in sorted(available_tile_ids)
-        if allowed_tiles is None or tile_id in allowed_tiles
-    ]
-    return [
-        tile_id
-        for position, tile_id in enumerate(filtered_tile_ids)
-        if position % shard_count == shard_index
-    ]
-
-
-def _load_pet_frame_from_shards(
-    pet_root: Path,
-    *,
-    tile_ids: list[int],
-) -> DataFrame:
-    shard_mapping = _discover_pet_shards(pet_root)
-    selected_paths = [
-        shard_path
-        for tile_id in tile_ids
-        for shard_path in shard_mapping.get(tile_id, [])
-    ]
-    if not selected_paths:
-        return pd.DataFrame(columns=["location_id", "date", "pet", "year"])
-
-    logger.info(
-        "Loading PET rows from %s shard CSV files across %s tiles...",
-        len(selected_paths),
-        len(tile_ids),
-    )
-    shard_frames = [
-        pd.read_csv(shard_path, usecols=["location_id", "date", "pet"])
-        for shard_path in selected_paths
-    ]
-    df = pd.concat(shard_frames, ignore_index=True)
-    df["date"] = pd.to_datetime(df["date"])
-    df["year"] = df["date"].dt.year
-    return df
+) -> list[Path]:
+    """Distribute pet files evenly across shards by position."""
+    return [f for i, f in enumerate(all_files) if i % shard_count == shard_index]
 
 
 def _load_pet_frame_from_csv(
@@ -256,41 +252,38 @@ def _load_pet_frame_from_csv(
 def _load_pet_frame(args: argparse.Namespace) -> DataFrame:
     pet_root = Path(args.pet_root)
     pet_csv_path = Path(args.pet_csv)
-    shard_mapping = _discover_pet_shards(pet_root)
 
-    if shard_mapping:
-        selected_tile_ids = _select_tile_ids(
-            sorted(shard_mapping),
-            requested_tile_ids=args.tile_ids,
-            shard_index=args.shard_index,
-            shard_count=args.shard_count,
-        )
-        if not selected_tile_ids:
-            logger.warning("No PET tiles matched the requested shard filters.")
-            return pd.DataFrame(columns=["location_id", "date", "pet", "year"])
-
+    all_files = _discover_pet_files(pet_root)
+    if all_files:
         logger.info(
-            "Selected %s PET tiles for analytics shard %s/%s.",
-            len(selected_tile_ids),
+            "Loading %s PET files for analytics shard %s/%s.",
+            len(all_files),
             args.shard_index,
             args.shard_count,
         )
-        return _load_pet_frame_from_shards(pet_root, tile_ids=selected_tile_ids)
+        frames = [
+            pd.read_parquet(f, columns=["location_id", "date", "pet"])
+            for f in all_files
+        ]
+        df = pd.concat(frames, ignore_index=True)
+        df["date"] = pd.to_datetime(df["date"])
+        df["year"] = df["date"].dt.year
 
-    if not pet_csv_path.exists():
-        msg = "No PET shard CSV files or materialized pet.csv.gz were found."
-        raise FileNotFoundError(msg)
+        if args.shard_count > 1:
+            location_ids = pd.to_numeric(df["location_id"], errors="coerce")
+            df = df[location_ids.mod(args.shard_count).eq(args.shard_index)].copy()
 
-    logger.info(
-        "PET shard CSV files not found under %s. Falling back to %s.",
-        pet_root,
-        pet_csv_path,
-    )
-    return _load_pet_frame_from_csv(
-        pet_csv_path,
-        shard_index=args.shard_index,
-        shard_count=args.shard_count,
-    )
+        return df
+
+    if pet_csv_path.exists():
+        return _load_pet_frame_from_csv(
+            pet_csv_path,
+            shard_index=args.shard_index,
+            shard_count=args.shard_count,
+        )
+
+    logger.warning("No PET data found in %s or %s.", pet_root, pet_csv_path)
+    return pd.DataFrame(columns=["location_id", "date", "pet", "year"])
 
 
 def _output_dir(out_dir: Path, *, shard_index: int, shard_count: int) -> Path:
@@ -310,8 +303,12 @@ def main() -> None:
     df = _load_pet_frame(args)
 
     if df.empty:
-        msg = "No PET rows matched the requested analytics shard."
-        raise RuntimeError(msg)
+        logger.warning(
+            "No PET rows matched shard %s/%s. Skipping.",
+            args.shard_index,
+            args.shard_count,
+        )
+        return
 
     generate_percentiles(df, output_dir)
     generate_forecast(df, output_dir)

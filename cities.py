@@ -6,6 +6,8 @@ import logging
 from importlib import import_module
 from typing import Any, TypeAlias, cast
 
+GRID_DEG: float = 0.25
+
 DataFrame: TypeAlias = Any
 np: Any = cast("Any", import_module("numpy"))
 pd: Any = cast("Any", import_module("pandas"))
@@ -42,32 +44,25 @@ def filter_bounding_box(df: DataFrame) -> DataFrame:
     ]
 
 
+MAX_CITIES = 500
+
+
 def process_cities(df: DataFrame) -> DataFrame:
-    """Keep highest population city per .25' and return top 500 cities."""
+    """Deduplicate by ERA5 grid cell, cap at 500 cities, and assign location IDs."""
     df = df.copy()
 
-    # Create snapped coordinates for grouping only (not for output)
-    df["snapped_lat"] = np.round(df["lat"] * 4) / 4
-    df["snapped_lng"] = np.round(df["lng"] * 4) / 4
+    # Sort by population descending so the highest-pop city wins each grid cell
+    df = df.sort_values("population", ascending=False)
 
-    # Keep the highest population city per grid cell
-    idx = df.groupby(["snapped_lat", "snapped_lng"])["population"].idxmax()
-    df = df.loc[idx]
+    # Snap to the nearest ERA5 grid centre and keep one city per cell
+    df["_snap_lat"] = (pd.to_numeric(df["lat"]) / GRID_DEG).round() * GRID_DEG
+    df["_snap_lng"] = (pd.to_numeric(df["lng"]) / GRID_DEG).round() * GRID_DEG
+    df = df.drop_duplicates(subset=["_snap_lat", "_snap_lng"], keep="first")
+    df = df.drop(columns=["_snap_lat", "_snap_lng"])
 
-    # Select top 500 cities by population
-    df = df.nlargest(500, "population").sort_values("population", ascending=False)
-    df = df.reset_index(drop=True).reset_index(names="location_id")
+    df = df.head(MAX_CITIES).reset_index(drop=True).reset_index(names="location_id")
 
-    # Output only the 5 standard columns with real coordinates
-    return df[
-        [
-            "location_id",
-            "city",
-            "state",
-            "lat",
-            "lng",
-        ]
-    ]
+    return df[["location_id", "city", "state", "lat", "lng"]]
 
 
 def main() -> None:

@@ -22,25 +22,28 @@ def main() -> None:
     # Ensure we never exceed prev_year
     era5_end = min(era5_end, prev_year)
 
+    era5_years = list(range(era5_start, era5_end + 1))
+
     cds_start = era5_end + 1
     end_date = mrt_available_end_date()
     end_date = min(end_date, date(prev_year, 12, 31))
 
-    # All years from 2000 through the end of the previous year
-    years = list(range(era5_start, end_date.year + 1))
-    era5_years = list(range(era5_start, min(era5_end, end_date.year) + 1))
-    cds_years = list(range(cds_start, end_date.year + 1))
+    cds_years = []
+    cds_year_months = []
+    if cds_start <= end_date.year:
+        for year in range(cds_start, end_date.year + 1):
+            cds_years.append(year)
+            m_end = 12 if year < end_date.year else end_date.month
+            cds_year_months.extend(
+                {
+                    "year": year,
+                    "month": month,
+                    "month_pad": f"{month:02d}",
+                }
+                for month in range(1, m_end + 1)
+            )
 
-    cds_year_months = [
-        {
-            "year": year,
-            "month": month,
-            "month_pad": f"{month:02d}",
-        }
-        for year in cds_years
-        for month in range(1, 13)
-        if (year, month) <= (end_date.year, end_date.month)
-    ]
+    years = sorted(set(era5_years + cds_years))
 
     # Output format for shell (eval-able)
     if "--shell" in sys.argv:

@@ -1,9 +1,8 @@
-"""Load generated CSV inputs into the database and manage views."""
+"""Load generated parquet inputs into the database and manage views."""
 
 from __future__ import annotations
 
 import argparse
-import gzip
 import io
 import logging
 import os
@@ -11,11 +10,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import psycopg2
+import pyarrow.parquet as pq
 from psycopg2 import sql
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from psycopg2.extensions import connection
 
 LOGGER = logging.getLogger(__name__)
@@ -50,7 +48,7 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--cities-csv", default="cities.csv")
-    parser.add_argument("--pet-csv", default="pet.csv.gz")
+    parser.add_argument("--pet-csv", default="pet.csv")
     parser.add_argument("--pet-root", default="pet_data_csv")
     parser.add_argument("--analytics-root", default="analytics_data_csv")
     parser.add_argument("--analytics-shard-count", type=int, default=20)
@@ -210,11 +208,10 @@ def _select_partition_shard_paths(
     for csv_path in csv_paths:
         partition_value = _extract_partition_marker(csv_path, root_path, partition_key)
         if partition_value is None:
-            msg = (
-                f"Cannot shard load for {csv_path}; missing {partition_key}=... "
-                f"partition under {root_path}."
-            )
-            raise RuntimeError(msg)
+            # Fallback to a special value for non-partitioned files.
+            # We include the filename to allow multiple non-partitioned files
+            # to be distributed across shards if there are many of them.
+            partition_value = f"__unpartitioned__:{csv_path.name}"
         grouped_paths.setdefault(partition_value, []).append(csv_path)
 
     selected_partition_values = {
@@ -243,23 +240,41 @@ def _filter_paths_by_partition_value(
     for csv_path in csv_paths:
         marker = _extract_partition_marker(csv_path, root_path, partition_key)
         if marker is None:
-            msg = (
-                f"Cannot select {partition_key}={partition_value} for {csv_path}; "
-                f"missing partition under {root_path}."
-            )
-            raise RuntimeError(msg)
+            # If the file is not partitioned, we treat it as belonging to
+            # the first shard (index 0) of that partition key.
+            # This allows single files to be loaded in a sharded environment.
+            if partition_value in ("0", "00000"):
+                filtered_paths.append(csv_path)
+            continue
         if marker == partition_value:
             filtered_paths.append(csv_path)
     return filtered_paths
 
 
-def _take_lines(f: io.TextIOBase, n: int) -> Iterator[str]:
-    """Yield up to *n* lines from an open text file."""
-    for _ in range(n):
-        line = f.readline()
-        if not line:
-            return
-        yield line
+def _copy_parquet_file_in_batches(
+    conn: connection,
+    table_name: str,
+    parquet_path: Path,
+    *,
+    batch_size: int,
+) -> int:
+    parquet_file = pq.ParquetFile(str(parquet_path))
+    column_names = parquet_file.schema_arrow.names
+    copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
+        sql.Identifier(table_name),
+        sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
+    )
+
+    total_rows = 0
+    with conn.cursor() as cur:
+        for batch in parquet_file.iter_batches(batch_size=batch_size):
+            batch_df = batch.to_pandas()
+            csv_buffer = io.StringIO()
+            batch_df.to_csv(csv_buffer, index=False, header=False)
+            csv_buffer.seek(0)
+            cur.copy_expert(copy_statement.as_string(conn), csv_buffer)
+            total_rows += cur.rowcount
+    return total_rows
 
 
 def _copy_csv_file_in_batches(
@@ -269,35 +284,25 @@ def _copy_csv_file_in_batches(
     *,
     batch_size: int,
 ) -> int:
-    with (
-        conn.cursor() as cur,
-        gzip.open(str(csv_path), "rt", encoding="utf-8", newline="")
-        if csv_path.suffix == ".gz"
-        else csv_path.open("r", encoding="utf-8", newline="") as f,
-    ):
+    """Load a plain CSV file (no compression) into a table via COPY."""
+    with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
         header = next(f, None)
         if header is None:
             LOGGER.warning("CSV file %s is empty. Skipping.", csv_path)
             return 0
-
         column_names = [col.strip() for col in header.split(",")]
         copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
             sql.Identifier(table_name),
             sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
         )
-
         total_rows = 0
         while True:
-            lines = list(_take_lines(f, batch_size))
+            lines = list(f.readlines(batch_size))
             if not lines:
                 break
-            batch_buffer = io.StringIO("".join(lines))
-            cur.copy_expert(
-                copy_statement.as_string(conn),
-                batch_buffer,
-            )
+            cur.copy_expert(copy_statement.as_string(conn), io.StringIO("".join(lines)))
             total_rows += cur.rowcount
-        return total_rows
+    return total_rows
 
 
 def bulk_insert_csv_files(
@@ -308,14 +313,14 @@ def bulk_insert_csv_files(
     batch_size: int,
     truncate: bool,
 ) -> None:
-    """Load one or more CSV files into a destination table."""
+    """Load one or more parquet (or CSV) files into a destination table."""
     if not csv_paths:
-        LOGGER.warning("No CSV inputs found for %s. Skipping.", table_name)
+        LOGGER.warning("No data inputs found for %s. Skipping.", table_name)
         return
 
     if truncate:
         LOGGER.info(
-            "Truncating and loading %s CSV inputs into %s...",
+            "Truncating and loading %s file(s) into %s...",
             len(csv_paths),
             table_name,
         )
@@ -327,20 +332,33 @@ def bulk_insert_csv_files(
             )
     else:
         LOGGER.info(
-            "Appending %s CSV inputs into %s...",
+            "Appending %s file(s) into %s...",
             len(csv_paths),
             table_name,
         )
 
     total_rows: int = 0
-    for csv_path in csv_paths:
-        LOGGER.info("Loading %s into %s...", csv_path, table_name)
-        total_rows += _copy_csv_file_in_batches(
-            conn,
-            table_name,
-            csv_path,
-            batch_size=batch_size,
-        )
+    for file_path in csv_paths:
+        LOGGER.info("Loading %s into %s...", file_path, table_name)
+        if file_path.suffix == ".parquet":
+            total_rows += _copy_parquet_file_in_batches(
+                conn,
+                table_name,
+                file_path,
+                batch_size=batch_size,
+            )
+        else:
+            total_rows += _copy_csv_file_in_batches(
+                conn,
+                table_name,
+                file_path,
+                batch_size=batch_size,
+            )
+
+    if total_rows == 0:
+        msg = f"Zero rows were loaded into table {table_name}. Continuing load."
+        LOGGER.warning(msg)
+        return
 
     LOGGER.info(
         "Successfully loaded %d rows into %s.",
@@ -354,16 +372,16 @@ def _discover_locations_csv_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
-    pet_csv_paths = _discover_csv_inputs(
+    pet_paths = _discover_csv_inputs(
         args.pet_csv,
         shard_root=args.pet_root,
-        shard_file_name="pet.csv.gz",
+        shard_file_name="pet_batch_*.parquet",
         shard_partition_key=None,
     )
     return _select_partition_shard_paths(
-        pet_csv_paths,
+        pet_paths,
         root_path=Path(args.pet_root),
-        partition_key="tile_id",
+        partition_key="year",
         shard_index=args.load_shard_index,
         shard_count=args.load_shard_count,
     )
@@ -392,15 +410,15 @@ def _discover_analytics_csv_paths(
 
 
 def _discover_percentiles_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "percentiles.csv.gz")
+    return _discover_analytics_csv_paths(args, "percentiles.parquet")
 
 
 def _discover_forecast_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "forecast.csv.gz")
+    return _discover_analytics_csv_paths(args, "forecast.parquet")
 
 
 def _discover_pet_change_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "change_per_decade.csv.gz")
+    return _discover_analytics_csv_paths(args, "change_per_decade.parquet")
 
 
 def _load_requested_tables(

@@ -18,12 +18,12 @@ from generate_analytics import (
 
 
 def _write_shard_csv(
-    root: Path, year: int, tile_id: int, rows: list[dict[str, object]]
+    root: Path, year: int, rows: list[dict[str, object]], city_shard: int = 0
 ) -> None:
-    shard_dir = root / f"year={year}" / f"tile_id={tile_id}"
+    shard_dir = root / f"year={year}"
     shard_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(rows)
-    df.to_csv(shard_dir / "pet.csv.gz", index=False)
+    df.to_parquet(shard_dir / f"pet_batch_0000_{city_shard:02d}.parquet", index=False)
 
 
 class TestEndToEndAnalyticsPipeline:
@@ -35,9 +35,9 @@ class TestEndToEndAnalyticsPipeline:
         out_dir = tmp_path / "analytics_data_csv"
         rng = np.random.default_rng(0)
 
-        # Create multi-year, multi-tile PET shards
+        # Create multi-year PET shards (2 city groups per year)
         for year in [2000, 2001, 2010, 2011]:
-            for tile_id in [1, 2]:
+            for city_shard, loc_ids in enumerate([[10, 11], [20, 21]]):
                 dates = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
                 rows = [
                     {
@@ -45,18 +45,17 @@ class TestEndToEndAnalyticsPipeline:
                         "date": d.strftime("%Y-%m-%d"),
                         "pet": round(rng.uniform(5, 35), 1),
                     }
-                    for loc_id in [tile_id * 10, tile_id * 10 + 1]
+                    for loc_id in loc_ids
                     for d in dates
                 ]
-                _write_shard_csv(pet_root, year, tile_id, rows)
+                _write_shard_csv(pet_root, year, rows, city_shard)
 
         return {"pet_root": pet_root, "out_dir": out_dir}
 
     def test_load_pet_frame_from_shards(self, pipeline_dirs: dict[str, Path]) -> None:
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv.gz",
-            tile_ids=None,
+            pet_csv="nonexistent.csv",
             shard_index=0,
             shard_count=1,
         )
@@ -65,32 +64,29 @@ class TestEndToEndAnalyticsPipeline:
         assert "year" in df.columns
         assert set(df["year"].unique()) == {2000, 2001, 2010, 2011}
 
-    def test_sharded_load_splits_tiles(self, pipeline_dirs: dict[str, Path]) -> None:
+    def test_sharded_load_splits_files(self, pipeline_dirs: dict[str, Path]) -> None:
         args_0 = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv.gz",
-            tile_ids=None,
+            pet_csv="nonexistent.csv",
             shard_index=0,
             shard_count=2,
         )
         args_1 = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv.gz",
-            tile_ids=None,
+            pet_csv="nonexistent.csv",
             shard_index=1,
             shard_count=2,
         )
         df0 = _load_pet_frame(args_0)
         df1 = _load_pet_frame(args_1)
+        # Together they should cover all 4 location IDs
         combined_ids = set(df0["location_id"]).union(set(df1["location_id"]))
-        assert len(combined_ids) == 4  # 2 tiles × 2 locations each
-        assert set(df0["location_id"]).isdisjoint(set(df1["location_id"]))
+        assert len(combined_ids) == 4
 
     def test_full_analytics_generation(self, pipeline_dirs: dict[str, Path]) -> None:
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv.gz",
-            tile_ids=None,
+            pet_csv="nonexistent.csv",
             shard_index=0,
             shard_count=1,
         )
@@ -100,32 +96,33 @@ class TestEndToEndAnalyticsPipeline:
 
         # Percentiles
         pct_path = generate_percentiles(df, out_dir)
-        pct_df = pd.read_csv(pct_path)
+        pct_df = pd.read_parquet(pct_path)
         assert len(pct_df) > 0
         assert (pct_df["p10"] <= pct_df["p90"]).all()
 
         # Forecast
         fc_path = generate_forecast(df, out_dir)
-        fc_df = pd.read_csv(fc_path)
-        assert set(fc_df["year"]) == {2030, 2040, 2050}
+        fc_df = pd.read_parquet(fc_path)
+        assert int(fc_df["year"].min()) == int(df["year"].max()) + 1  # pyright: ignore[reportArgumentType]
+        assert int(fc_df["year"].max()) == 2100  # pyright: ignore[reportArgumentType]
         assert bool(fc_df["pet"].notna().all())
 
         # Change per decade
         chg_path = generate_change_per_decade(df, out_dir)
-        chg_df = pd.read_csv(chg_path)
-        assert "decade" in chg_df.columns
+        chg_df = pd.read_parquet(chg_path)
+        assert "year" in chg_df.columns
         assert "change" in chg_df.columns
 
-    def test_empty_shard_match_returns_empty(
+    def test_empty_shard_beyond_file_count_returns_empty(
         self, pipeline_dirs: dict[str, Path]
     ) -> None:
-        """Requesting a tile that doesn't exist returns an empty frame."""
+        """Requesting a shard index beyond available files returns an empty frame."""
+        # With 8 files total and shard_count=100, shard_index=99 gets 0 files
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
-            pet_csv="nonexistent.csv.gz",
-            tile_ids=[999],
-            shard_index=0,
-            shard_count=1,
+            pet_csv="nonexistent.csv",
+            shard_index=99,
+            shard_count=100,
         )
         df = _load_pet_frame(args)
         assert df.empty

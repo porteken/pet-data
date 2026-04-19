@@ -1,110 +1,0 @@
-====== Setting Up Local Directories ======
-2026-03-30 10:51:05,490 - Generating locations dataset...
-2026-03-30 10:51:05,559 - Successfully saved 500 cities to cities.csv
-Input cities: 500
-Unique snapped ERA5 cells: 500
-Occupied adaptive tiles: 128
-====== [Job: pull-google-era5] Year: 2000 ======
-2026-03-30 10:51:06 - INFO - Concurrency profile 'conservative': Zarr I/O limit=16, Dask workers/batch=2
-2026-03-30 10:51:06 - INFO - ERA5 shard 1/500 selected location_ids 0-0 (1 cities, 1 tiles).
-2026-03-30 10:51:06 - WARNING - Google ARCO ERA5 variables are chunked as one full global latitude/longitude field per hour (10u: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), 10v: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), 2d: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), 2t: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), fdir: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), ssr: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), ssrd: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), str: chunks=(1, 721, 1440) shape=(1323648, 721, 1440), strd: chunks=(1, 721, 1440) shape=(1323648, 721, 1440)). This script now reads resumable time batches for each requested shard and splits each in-memory result by tile to avoid repeated full-globe fetches, but each batch read can still be slow.
-2026-03-30 10:51:06 - INFO - ERA5 year 2000 assigned 1 batch(es) to time shard 1/120.
-2026-03-30 10:51:06 - INFO - Queueing ERA5 tile 93 year 2000 batch 0 (1 cities).
-2026-03-30 10:51:08 - INFO - Reading ERA5 city shard 1/500 time shard 1/120 year 2000 batch 0 covering 2000-01-01T00:00:00 to 2000-01-30T23:00:00 across 1 cities in 1 pending tiles.
-2026-03-30 11:04:19 - INFO - Fetched 6480 chunks (720 hours x 9 vars) in 789.9 seconds (8.2 chunks/sec).
-2026-03-30 11:04:19 - INFO - Wrote 720 ERA5 rows for tile 93 year 2000 batch 0.
-2026-03-30 11:04:19 - INFO - ERA5 processing complete for year=2000 city shard 1/500 time shard 1/120.
-Traceback (most recent call last):
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/weakref.py", line 666, in _exitfunc
-    f()
-    ~^^
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/weakref.py", line 590, in __call__
-    return info.func(*info.args, **(info.kwargs or {}))
-           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/gcsfs/core.py", line 389, in close_session
-    asyn.sync(asyn.loop[0], session.close, timeout=0.1)
-    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/fsspec/asyn.py", line 103, in sync
-    raise return_result
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/fsspec/asyn.py", line 56, in _runner
-    result[0] = await coro
-                ^^^^^^^^^^
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
-    return await fut
-           ^^^^^^^^^
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/client.py", line 1349, in close
-    await self._connector.close()
-  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/connector.py", line 1044, in close
-    await super().close(abort_ssl=abort_ssl or self._ssl_shutdown_timeout == 0)
-RuntimeError: Task <Task pending name='Task-26038' coro=<_runner() running at /home/kenneth-porter/miniconda3/lib/python3.13/site-packages/fsspec/asyn.py:56> cb=[_chain_future.<locals>._call_set_state() at /home/kenneth-porter/miniconda3/lib/python3.13/asyncio/futures.py:391]> got Future <Task pending name='Task-26039' coro=<_wait_for_close() running at /home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/connector.py:138> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]>> attached to a different loop
-2026-03-30 11:04:19 - ERROR - Task was destroyed but it is pending!
-task: <Task pending name='Task-26039' coro=<_wait_for_close() done, defined at /home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/connector.py:136> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]>>
-====== [Job: process-weather] Year: 2000 ======
-2026-03-30 11:04:21 - INFO - Weather shard 1/500 selected location_ids 0-0 (1 cities).
-2026-03-30 11:04:21 - INFO - Starting weather shard 0 for 1 cities over 2000-01-01/2000-12-31. (exists=True, current=False)
-Weather locations:   0%|          | 0/1 [00:00<?, ?location/s]2026-03-30 11:04:21,416 INFO [2026-02-16T00:00:00] - To generate this ERA5 hourly time series dataset, **homogenisation conventions have been applied to the ERA5 source GRIB data** to ensure consistency, usability, and alignment across chosen variables and time steps. The processed data were then written to an **ARCO Zarr archive**, enabling efficient cloud-optimised access and scalable data retrieval. Please refer to the [user guide](https://confluence.ecmwf.int/x/R6cfHg) for details.
-
-- The dataset presented here is a subset of selected parameters from the full [CDS ERA5 hourly data on single levels (1940–present)](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview). **Requirements for additional parameters may be considered**. Please raise your request with ECMWF Support [here](https://jira.ecmwf.int/plugins/servlet/desk/portal/1/create/202).
-2026-03-30 11:04:21 - INFO - [2026-02-16T00:00:00] - To generate this ERA5 hourly time series dataset, **homogenisation conventions have been applied to the ERA5 source GRIB data** to ensure consistency, usability, and alignment across chosen variables and time steps. The processed data were then written to an **ARCO Zarr archive**, enabling efficient cloud-optimised access and scalable data retrieval. Please refer to the [user guide](https://confluence.ecmwf.int/x/R6cfHg) for details.
-
-- The dataset presented here is a subset of selected parameters from the full [CDS ERA5 hourly data on single levels (1940–present)](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview). **Requirements for additional parameters may be considered**. Please raise your request with ECMWF Support [here](https://jira.ecmwf.int/plugins/servlet/desk/portal/1/create/202).
-2026-03-30 11:04:21,417 INFO Request ID is 66b76f85-e791-4290-9f87-bdc243ea561a
-2026-03-30 11:04:21 - INFO - Request ID is 66b76f85-e791-4290-9f87-bdc243ea561a
-2026-03-30 11:04:21 - INFO - CDS request 66b76f85-e791-4290-9f87-bdc243ea561a for reanalysis-era5-single-levels-timeseries is accepted.
-2026-03-30 11:04:57 - INFO - CDS request 66b76f85-e791-4290-9f87-bdc243ea561a for reanalysis-era5-single-levels-timeseries is completed.
-2026-03-30 11:04:57,239 INFO status has been updated to successful
-2026-03-30 11:04:57 - INFO - status has been updated to successful
-2026-03-30 11:04:57 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-03-29/69c36cf6fe00275dc3e597f4854d23b3.zip
-
-69c36cf6fe00275dc3e597f4854d23b3.zip:   0%|          | 0.00/191k [00:00<?, ?B/s][A
-69c36cf6fe00275dc3e597f4854d23b3.zip: 100%|██████████| 191k/191k [00:00<00:00, 232kB/s][A
-                                                                                       [AWeather locations: 100%|██████████| 1/1 [00:38<00:00, 38.76s/location]Weather locations: 100%|██████████| 1/1 [00:38<00:00, 38.76s/location]
-2026-03-30 11:04:59 - INFO - Weather processing complete for shard 1/500 with 1 cities over 2000-01-01/2000-12-31.
-====== [Job: process-mrt] Year: 2000 Month: 1 ======
-2026-03-30 11:05:01 - INFO - Using existing tile metadata under output_tiles.
-MRT tiles:   0%|          | 0/1 [00:00<?, ?tile/s]2026-03-30 11:05:01 - INFO - Starting MRT tile 1 for 2000-01.
-2026-03-30 11:05:01,637 INFO Request ID is 80d5004d-c8a6-4626-9173-1e707db29410
-2026-03-30 11:05:01 - INFO - Request ID is 80d5004d-c8a6-4626-9173-1e707db29410
-2026-03-30 11:05:01 - INFO - CDS request 80d5004d-c8a6-4626-9173-1e707db29410 for derived-utci-historical is accepted.
-2026-03-30 11:06:17 - INFO - CDS request 80d5004d-c8a6-4626-9173-1e707db29410 for derived-utci-historical is running.
-2026-03-30 11:07:18 - INFO - CDS request 80d5004d-c8a6-4626-9173-1e707db29410 for derived-utci-historical is completed.
-2026-03-30 11:07:18,683 INFO status has been updated to successful
-2026-03-30 11:07:18 - INFO - status has been updated to successful
-2026-03-30 11:07:18 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-03-30/15c4c0204eb0a8afb519c9f5545fb401.zip
-
-15c4c0204eb0a8afb519c9f5545fb401.zip:   0%|          | 0.00/794k [00:00<?, ?B/s][A
-15c4c0204eb0a8afb519c9f5545fb401.zip: 100%|██████████| 794k/794k [00:01<00:00, 735kB/s][A
-                                                                                       [AMRT tiles: 100%|██████████| 1/1 [02:19<00:00, 139.97s/tile]MRT tiles: 100%|██████████| 1/1 [02:19<00:00, 139.97s/tile]
-2026-03-30 11:07:21 - INFO - MRT processing complete for 1 selected tiles.
-====== [Job: process-mrt] Year: 2000 Month: 2 ======
-2026-03-30 11:07:22 - INFO - Using existing tile metadata under output_tiles.
-MRT tiles:   0%|          | 0/1 [00:00<?, ?tile/s]2026-03-30 11:07:22 - INFO - Starting MRT tile 1 for 2000-02.
-2026-03-30 11:07:22,529 INFO Request ID is 8d927f1c-cfc0-469a-aee1-7330f703d72c
-2026-03-30 11:07:22 - INFO - Request ID is 8d927f1c-cfc0-469a-aee1-7330f703d72c
-2026-03-30 11:07:22 - INFO - CDS request 8d927f1c-cfc0-469a-aee1-7330f703d72c for derived-utci-historical is accepted.
-2026-03-30 11:07:38 - INFO - CDS request 8d927f1c-cfc0-469a-aee1-7330f703d72c for derived-utci-historical is running.
-2026-03-30 11:08:38 - INFO - CDS request 8d927f1c-cfc0-469a-aee1-7330f703d72c for derived-utci-historical is completed.
-2026-03-30 11:08:38,560 INFO status has been updated to successful
-2026-03-30 11:08:38 - INFO - status has been updated to successful
-2026-03-30 11:08:38 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-03-30/a110de6f20f6b3e220ff9d9a4b0957cb.zip
-
-a110de6f20f6b3e220ff9d9a4b0957cb.zip:   0%|          | 0.00/743k [00:00<?, ?B/s][A
-a110de6f20f6b3e220ff9d9a4b0957cb.zip: 100%|██████████| 743k/743k [00:01<00:00, 664kB/s][A
-                                                                                       [AMRT tiles: 100%|██████████| 1/1 [01:19<00:00, 79.00s/tile]MRT tiles: 100%|██████████| 1/1 [01:19<00:00, 79.00s/tile]
-2026-03-30 11:08:41 - INFO - MRT processing complete for 1 selected tiles.
-====== [Job: process-mrt] Year: 2000 Month: 3 ======
-2026-03-30 11:08:42 - INFO - Using existing tile metadata under output_tiles.
-MRT tiles:   0%|          | 0/1 [00:00<?, ?tile/s]2026-03-30 11:08:42 - INFO - Starting MRT tile 1 for 2000-03.
-2026-03-30 11:08:42,954 INFO Request ID is 6ceb964d-8e34-416b-95da-058ce1b97751
-2026-03-30 11:08:42 - INFO - Request ID is 6ceb964d-8e34-416b-95da-058ce1b97751
-2026-03-30 11:08:43 - INFO - CDS request 6ceb964d-8e34-416b-95da-058ce1b97751 for derived-utci-historical is accepted.
-2026-03-30 11:08:58 - INFO - CDS request 6ceb964d-8e34-416b-95da-058ce1b97751 for derived-utci-historical is running.
-2026-03-30 11:10:59 - INFO - CDS request 6ceb964d-8e34-416b-95da-058ce1b97751 for derived-utci-historical is completed.
-2026-03-30 11:10:59,530 INFO status has been updated to successful
-2026-03-30 11:10:59 - INFO - status has been updated to successful
-2026-03-30 11:10:59 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-03-30/37408cd48784c72a9bad1be0c3561e08.zip
-
-37408cd48784c72a9bad1be0c3561e08.zip:   0%|          | 0.00/794k [00:00<?, ?B/s][A
-37408cd48784c72a9bad1be0c3561e08.zip: 100%|██████████| 794k/794k [00:01<00:00, 731kB/s][A
-                                                                                       [AMRT tiles: 100%|██████████| 1/1 [02:19<00:00, 139.65s/tile]MRT tiles: 100%|██████████| 1/1 [02:19<00:00, 139.65s/tile]
-2026-03-30 11:11:02 - INFO - MRT processing complete for 1 selected tiles.

@@ -13,121 +13,41 @@ jobs:
       window_start: ${{ steps.compute.outputs.window_start }}
       window_end: ${{ steps.compute.outputs.window_end }}
       analytics_shards: ${{ steps.compute.outputs.analytics_shards }}
-      months: ${{ steps.compute.outputs.months }}
     steps:
       - uses: actions/checkout@v4
       - id: compute
         run: python build_year_range.py --github --yearly >> "$GITHUB_OUTPUT"
 
-  process-weather:
-    needs: build-target-window
-    runs-on: ubuntu-latest
-    name: Pull Weather (${{ needs.build-target-window.outputs.target_year }})
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
-      - name: Install dependencies
-        run: pip install -r requirements-cds.txt
-      - name: Cancel Pending Jobs
-        env:
-          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
-          CDS_API_URL: ${{ secrets.CDS_API_URL }}
-        run: python cancel_cds_jobs.py
-      - name: Pull Weather Data
-        env:
-          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
-          CDS_API_URL: ${{ secrets.CDS_API_URL }}
-        run: |
-          python pull_weather.py \
-            --year ${{ needs.build-target-window.outputs.target_year }} \
-            --weather-city-shard-count 1 \
-            --max-workers 10
-      - name: Upload Weather Parquet
-        uses: actions/upload-artifact@v4
-        with:
-          name: weather-parquet-yearly
-          path: weather_data_parquet/
-          retention-days: 1
-
-  process-mrt:
+  compute-pet:
     needs: build-target-window
     runs-on: ubuntu-latest
     strategy:
+      max-parallel: 4
       fail-fast: false
       matrix:
-        month: ${{ fromJSON(needs.build-target-window.outputs.months) }}
-    name: Pull MRT (Month ${{ matrix.month }})
+        time_shard_index: [0, 1, 2, 3]
+    name: ERA5->PET ${{ needs.build-target-window.outputs.target_year }} time ${{ matrix.time_shard_index }}/4
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
-      - name: Install dependencies
-        run: pip install -r requirements-cds.txt
-      - name: Pull MRT Data
-        env:
-          CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
-          CDS_API_URL: ${{ secrets.CDS_API_URL }}
-        run: |
-          python pull_mrt.py \
-            --year ${{ needs.build-target-window.outputs.target_year }} \
-            --month ${{ matrix.month }} \
-            --max-workers 10
-      - name: Upload MRT Parquet
-        uses: actions/upload-artifact@v4
-        with:
-          name: mrt-parquet-month-${{ matrix.month }}
-          path: utci_data_parquet/
-          retention-days: 1
-
-  combine-and-calculate-pet:
-    needs: [build-target-window, process-weather, process-mrt]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard_index: [0, 1, 2, 3] # 4 shards for PET calc
-    name: Compute PET Shard ${{ matrix.shard_index }}/4
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Download Weather Parquet
-        uses: actions/download-artifact@v4
-        with:
-          name: weather-parquet-yearly
-          path: weather_data_parquet
-      - name: Download MRT Parquet
-        uses: actions/download-artifact@v4
-        with:
-          pattern: mrt-parquet-month-*
-          path: utci_data_parquet
-          merge-multiple: true
-      - name: Combine Datasets
+      - name: Compute PET Data
         run: |
-          python combine_datasets.py \
-            --year ${{ needs.build-target-window.outputs.target_year }}
-      - name: Calculate PET
-        run: |
-          python calculate_pet.py \
+          python google_era5.py \
             --year ${{ needs.build-target-window.outputs.target_year }} \
-            --tile-shard-index ${{ matrix.shard_index }} \
-            --tile-shard-count 4
-      - name: Upload PET Shard
+            --city-shard-count 1 \
+            --time-shard-index ${{ matrix.time_shard_index }} \
+            --time-shard-count 4 \
+            --max-workers 4 \
+            --concurrency-profile aggressive
+      - name: Upload PET Parquet
         uses: actions/upload-artifact@v4
         with:
-          name: pet-shard-${{ matrix.shard_index }}
+          name: pet-data-${{ matrix.time_shard_index }}
           path: pet_data_csv/
           retention-days: 1
 
@@ -141,17 +61,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Export Existing PET Rows
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
-        run: |
-          python historical_pet_update.py export \
-            "${{ needs.build-target-window.outputs.window_start }}" \
-            "${{ needs.build-target-window.outputs.window_end }}" \
-            existing_pet.csv
+          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+        run: python historical_pet_update.py export "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}" existing_pet.csv
       - name: Upload Exported CSV
         uses: actions/upload-artifact@v4
         with:
@@ -160,7 +75,7 @@ jobs:
           retention-days: 1
 
   generate-analytics:
-    needs: [build-target-window, combine-and-calculate-pet, export-existing-data]
+    needs: [build-target-window, compute-pet, export-existing-data]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -173,13 +88,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Dependencies
         run: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
-      - name: Download PET Shards
+      - name: Download Computed PET Data
         uses: actions/download-artifact@v4
         with:
-          pattern: pet-shard-*
+          pattern: pet-data-*
           path: pet_data_csv
           merge-multiple: true
       - name: Download Exported CSV
@@ -187,15 +101,9 @@ jobs:
         with:
           name: existing-pet-csv
       - name: Build Full PET CSV For Analytics
-        run: |
-          python historical_pet_update.py merge \
-            pet_full.csv existing_pet.csv --dirs pet_data_csv
+        run: python historical_pet_update.py merge pet_full.csv existing_pet.csv --dirs pet_data_csv
       - name: Generate Analytics
-        run: |
-          python generate_analytics.py \
-            --pet-csv pet_full.csv \
-            --shard-index ${{ matrix.shard_index }} \
-            --shard-count 20
+        run: python generate_analytics.py --pet-csv pet_full.csv --shard-index ${{ matrix.shard_index }} --shard-count 20
       - name: Upload analytics shard
         uses: actions/upload-artifact@v4
         with:
@@ -213,20 +121,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Clean Up Database Window
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
-        run: |
-          python historical_pet_update.py delete-window \
-            "${{ needs.build-target-window.outputs.window_start }}" \
-            "${{ needs.build-target-window.outputs.window_end }}"
+          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+        run: python historical_pet_update.py delete-window "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}"
 
   load-to-db:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [prepare-db-load, generate-analytics, combine-and-calculate-pet, build-target-window]
+    needs: [prepare-db-load, generate-analytics, compute-pet, build-target-window]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -239,13 +143,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Dependencies
         run: pip install -r requirements.txt
-      - name: Download PET Shards
+      - name: Download Computed PET Data
         uses: actions/download-artifact@v4
         with:
-          pattern: pet-shard-*
+          pattern: pet-data-*
           path: pet_data_csv
           merge-multiple: true
       - name: Download Analytics Shard
@@ -255,16 +158,8 @@ jobs:
           path: analytics_data_csv
       - name: Load Shard to Database
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
-        run: |
-          python load.py \
-            --append-only \
-            --skip-drop-views \
-            --skip-create-views \
-            --skip-table locations \
-            --analytics-shard-count 20 \
-            --load-shard-index ${{ matrix.shard_index }} \
-            --load-shard-count 20
+          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+        run: python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -276,18 +171,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Dependencies
         run: pip install -r requirements.txt
       - name: Recreate Views
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
-        run: |
-          python load.py \
-            --append-only \
-            --skip-drop-views \
-            --skip-table locations \
-            --skip-table pet \
-            --skip-table pet_percentiles \
-            --skip-table pet_forecast \
-            --skip-table pet_change
+          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+        run: python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change

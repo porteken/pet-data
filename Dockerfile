@@ -1,0 +1,31 @@
+# Use an official, lightweight Python 3.10 image
+FROM python:3.10-slim
+
+# Keep Python from buffering stdout/stderr so logs appear instantly in Google Cloud
+ENV PYTHONUNBUFFERED=1
+# Keep Python from writing .pyc files
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Install system dependencies (sometimes required for xarray/pandas C-extensions)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy your requirements files first to leverage Docker layer caching
+COPY requirements.txt requirements-gcs.txt* ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt && \
+    if [ -f requirements-gcs.txt ]; then pip install --no-cache-dir -r requirements-gcs.txt; fi
+
+# Copy the rest of your local project files into the container
+COPY . .
+
+# Make the entrypoint script executable
+RUN chmod +x entrypoint.sh
+
+# Launch the shell script instead of python directly
+ENTRYPOINT ["./entrypoint.sh"]

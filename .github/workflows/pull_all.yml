@@ -2,14 +2,9 @@ name: Pull All Data
 
 on:
   push:
-    branches:
-      - dev
-      - prd
+    branches: [dev, prd]
   pull_request:
-    branches:
-      - dev
-      - prd
-    types: [opened, synchronize, reopened]
+    branches: [dev, prd]
   workflow_dispatch:
 
 jobs:
@@ -17,52 +12,18 @@ jobs:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
     runs-on: ubuntu-latest
     outputs:
-      start_year: ${{ steps.compute.outputs.start_year }}
-      end_year: ${{ steps.compute.outputs.end_year }}
       years: ${{ steps.compute.outputs.years }}
-      era5_years: ${{ steps.compute.outputs.era5_years }}
-      cds_years: ${{ steps.compute.outputs.cds_years }}
-      cds_year_months: ${{ steps.compute.outputs.cds_year_months }}
       analytics_shards: ${{ steps.compute.outputs.analytics_shards }}
-      end_date: ${{ steps.compute.outputs.end_date }}
     steps:
       - uses: actions/checkout@v4
       - id: compute
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          from shared_config import mrt_available_end_date
           from datetime import datetime, timezone
-
-          ERA5_START = 2000
-          _now = datetime.now(tz=timezone.utc)
-          if _now.month < 4:
-              ERA5_END = _now.year - 2
-          else:
-              ERA5_END = _now.year - 1
-          CDS_START = ERA5_END + 1
-          end_date = mrt_available_end_date()
-          years = list(range(ERA5_START, end_date.year + 1))
-          era5_years = list(range(ERA5_START, min(ERA5_END, end_date.year) + 1))
-          cds_years = list(range(CDS_START, end_date.year + 1))
-          cds_year_months = [
-              {
-                  "year": year,
-                  "month": month,
-                  "month_pad": f"{month:02d}",
-              }
-              for year in cds_years
-              for month in range(1, 13)
-              if (year, month) <= (end_date.year, end_date.month)
-          ]
-
-          print(f"start_year={ERA5_START}")
-          print(f"end_year={end_date.year}")
-          print(f"end_date={end_date.isoformat()}")
-          print(f"years={json.dumps(years)}")
-          print(f"era5_years={json.dumps(era5_years)}")
-          print(f"cds_years={json.dumps(cds_years)}")
-          print(f"cds_year_months={json.dumps(cds_year_months)}")
+          now = datetime.now(tz=timezone.utc)
+          ERA5_END = now.year - 2 if now.month < 4 else now.year - 1
+          print(f"years={json.dumps(list(range(2000, ERA5_END + 1)))}")
           print(f"analytics_shards={json.dumps(list(range(20)))}")
           PY
 
@@ -75,14 +36,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
-          cache-dependency-path: requirements.txt
       - name: Install Dependencies
         run: pip install -r requirements.txt
-      - name: Run cities.py
-        run: python cities.py
-      - name: Run boxes.py
-        run: python boxes.py
+      - name: Run setup
+        run: |
+          python cities.py
       - name: Upload locations data
         uses: actions/upload-artifact@v4
         with:
@@ -99,270 +57,55 @@ jobs:
       BUCKET_NAME: pet-parquet-files
     steps:
       - uses: actions/checkout@v4
-      - name: Preflight CloudFormation state
+      - name: Deploy S3 Bucket
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          set -euo pipefail
-          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
-          if [ -z "$STACK_STATUS" ] || [ "$STACK_STATUS" = "None" ]; then exit 0; fi
-          case "$STACK_STATUS" in
-            *_IN_PROGRESS|*_FAILED)
-              echo "::error::CloudFormation stack $STACK_NAME is currently $STACK_STATUS."
-              exit 1
-              ;;
-          esac
-          if aws cloudformation describe-stack-resource --stack-name "$STACK_NAME" --logical-resource-id PetParquetFilesBucket >/dev/null 2>&1; then
-            if ! aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
-              echo "::error::S3 bucket $BUCKET_NAME does not exist."
-              exit 1
-            fi
-          fi
-      - name: Deploy S3 Bucket CloudFormation Stack
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          aws cloudformation deploy \
-            --template-file template.yml \
-            --stack-name "$STACK_NAME" \
-            --parameter-overrides BucketName="$BUCKET_NAME" \
-            --no-fail-on-empty-changes
+          aws cloudformation deploy --template-file template.yml --stack-name "$STACK_NAME" --parameter-overrides BucketName="$BUCKET_NAME" --no-fail-on-empty-changes
 
-  clear-weather-output:
+  clear-pet-output:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Clear Weather Prefix
+      - name: Clear PET Prefix
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix weather_data_parquet/ --max-workers 8
+        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix pet_data_csv/ --max-workers 8
 
-  clear-mrt-output:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: deploy-infrastructure
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Clear MRT Prefix
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix utci_data_parquet/ --max-workers 8
-
-  clear-era5-output:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: deploy-infrastructure
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Clear ERA5 Prefix
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix era5_data_parquet/ --max-workers 8
-
-  cancel-cds-jobs:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
-          cache-dependency-path: requirements.txt
-      - name: Install Dependencies
-        run: pip install -r requirements-cds.txt
-      - name: Cancel Active CDS Jobs
-        env:
-          CDSAPI_URL: https://cds.climate.copernicus.eu/api
-          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: python cancel_cds_jobs.py
-
-  pull-google-era5:
-    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.era5_years != '[]'
-    needs: [setup-locations, clear-era5-output, build-year-range]
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 16
-      fail-fast: true
-      matrix:
-        year: ${{ fromJSON(needs.build-year-range.outputs.era5_years) }}
-        time_shard_index: [0, 1, 2, 3]
-    name: ERA5 ${{ matrix.year }} time ${{ matrix.time_shard_index }}/4
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Authenticate GCP
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Pull ERA5 via Cloud Run (Writes straight to S3)
-        run: |
-          gcloud run jobs execute era5-worker \
-            --region us-east1 \
-            --wait \
-            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
-
-  process-weather:
-    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.cds_years != '[]'
-    needs: [setup-locations, clear-weather-output, build-year-range, cancel-cds-jobs]
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 4  # MAXIMIZED SAFE LIMIT FOR CDS QUEUE
-      fail-fast: true
-      matrix:
-        city_shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    name: Weather shard ${{ matrix.city_shard_index }}/10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
-      - name: Install Dependencies
-        run: pip install -r requirements-cds.txt
-      - name: Download Locations Data
-        uses: actions/download-artifact@v4
-        with:
-          name: locations-data
-          path: .
-      - name: Pull Weather
-        env:
-          CDSAPI_URL: https://cds.climate.copernicus.eu/api
-          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: |
-          python pull_weather.py \
-            --start-year 2024 \
-            --weather-city-shard-index ${{ matrix.city_shard_index }} \
-            --weather-city-shard-count 10 \
-            --max-workers 1  # FORCES 1 STREAM PER JOB TO PREVENT API BANS
-      - name: Upload Weather Shards to S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 sync ./weather_data_parquet/ s3://pet-parquet-files/weather_data_parquet/
-
-  process-mrt:
-    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.cds_year_months != '[]'
-    needs: [setup-locations, clear-mrt-output, build-year-range, cancel-cds-jobs, process-weather]
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 4  # MAXIMIZED SAFE LIMIT FOR CDS QUEUE
-      fail-fast: true
-      matrix:
-        include: ${{ fromJSON(needs.build-year-range.outputs.cds_year_months) }}
-    name: MRT ${{ matrix.year }}-${{ matrix.month }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
-      - name: Install Dependencies
-        run: pip install -r requirements-cds.txt
-      - name: Download Locations Data
-        uses: actions/download-artifact@v4
-        with:
-          name: locations-data
-          path: .
-      - name: Pull MRT
-        env:
-          CDSAPI_URL: https://cds.climate.copernicus.eu/api
-          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
-        run: |
-          python pull_mrt.py \
-            --year ${{ matrix.year }} \
-            --month ${{ matrix.month }} \
-            --max-workers 1  # FORCES 1 STREAM PER JOB TO PREVENT API BANS
-      - name: Upload MRT Shards to S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 sync ./utci_data_parquet/year=${{ matrix.year }}/month=${{ matrix.month_pad }}/ s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/month=${{ matrix.month_pad }}/
-
-  process-pet:
-    if: >-
-      (github.ref_name == 'dev' || github.ref_name == 'prd') &&
-      !cancelled() &&
-      (needs.pull-google-era5.result == 'success' ||
-       (needs.process-weather.result == 'success' && needs.process-mrt.result == 'success'))
-    needs: [setup-locations, process-weather, process-mrt, pull-google-era5, build-year-range]
+  compute-pet-google-era5:
+    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.years != '[]'
+    needs: [setup-locations, clear-pet-output, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 16
       fail-fast: true
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
-        pet_shard_index: [0, 1, 2, 3]
-    name: PET ${{ matrix.year }} shard ${{ matrix.pet_shard_index }}/4
+        time_shard_index: [0, 1, 2, 3]
+    name: ERA5->PET ${{ matrix.year }} time ${{ matrix.time_shard_index }}/4
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Authenticate GCP
+        uses: google-github-actions/auth@v2
         with:
-          python-version: "3.10"
-          cache: "pip"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-      - name: Download Locations Data
-        uses: actions/download-artifact@v4
-        with:
-          name: locations-data
-          path: .
-      - name: Download Data from S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
-          mkdir -p ./era5_data_parquet/year=${{ matrix.year }}
-          mkdir -p ./utci_data_parquet/year=${{ matrix.year }}
-          aws s3 sync s3://pet-parquet-files/era5_data_parquet/year=${{ matrix.year }}/ ./era5_data_parquet/year=${{ matrix.year }}/
-          if [ "${{ contains(fromJSON(needs.build-year-range.outputs.cds_years), matrix.year) }}" = "true" ]; then
-            aws s3 sync s3://pet-parquet-files/weather_data_parquet/ ./weather_data_parquet/
-          fi
-          aws s3 sync s3://pet-parquet-files/utci_data_parquet/year=${{ matrix.year }}/ ./utci_data_parquet/year=${{ matrix.year }}/
-      - name: Combine and Compute PET
-        run: |
-          python combine.py \
-            --era5-root ./era5_data_parquet \
-            --year ${{ matrix.year }} \
-            --shard-index ${{ matrix.pet_shard_index }} \
-            --shard-count 4
-          python calculate_pet.py \
-            --year ${{ matrix.year }} \
-            --shard-index ${{ matrix.pet_shard_index }} \
-            --shard-count 4
-      - name: Upload Computed PET Shard
-        uses: actions/upload-artifact@v4
-        with:
-          name: pet-shard-${{ matrix.year }}-${{ matrix.pet_shard_index }}
-          path: pet_data_csv/
-          if-no-files-found: ignore
+          gcloud run jobs execute era5-worker \
+            --region us-east1 --wait \
+            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   generate-analytics:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [process-pet, build-year-range]
+    needs: [compute-pet-google-era5, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 20
@@ -376,25 +119,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Dependencies
         run: pip install -r requirements.txt
-      - name: Compute Shard Paths
-        id: calc
-        run: |
-          pet_idx=$((${{ matrix.analytics_shard_index }} % 4))
-          echo "pet_idx=$pet_idx" >> "$GITHUB_OUTPUT"
-      - name: Download Corresponding PET Shards
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pet-shard-*-${{ steps.calc.outputs.pet_idx }}
-          merge-multiple: true
-          path: pet_data_csv
+      - name: Sync Data from S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
       - name: Generate Analytics
-        run: |
-          python generate_analytics.py \
-            --shard-index ${{ matrix.analytics_shard_index }} \
-            --shard-count 20
+        run: python generate_analytics.py --shard-index ${{ matrix.analytics_shard_index }} --shard-count 20
       - name: Upload Analytics Shard
         uses: actions/upload-artifact@v4
         with:
@@ -411,7 +145,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Database Dependencies
         run: pip install -r requirements.txt
       - name: Download locations-data
@@ -419,36 +152,21 @@ jobs:
         with:
           name: locations-data
           path: .
-      - name: Drop Views And Truncate Tables
+      - name: Drop Views And Load Locations
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
         run: |
           python - <<'PY'
           import os, sys, psycopg2
           from pathlib import Path
-          db_uri = os.environ.get("SUPABASE_DB_URI")
-          if not db_uri: sys.exit(0)
-          conn = psycopg2.connect(db_uri)
+          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
           conn.autocommit = True
-          try:
-              with conn.cursor() as cur:
-                  cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
-                  cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
-          finally:
-              conn.close()
+          with conn.cursor() as cur:
+              cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
+              cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
+          conn.close()
           PY
-      - name: Load Locations
-        env:
-          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: |
-          python load.py \
-            --append-only \
-            --skip-drop-views \
-            --skip-create-views \
-            --skip-table pet \
-            --skip-table pet_percentiles \
-            --skip-table pet_forecast \
-            --skip-table pet_change
+          python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 
   load-to-db:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -466,20 +184,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
       - name: Install Database Dependencies
         run: pip install -r requirements.txt
-      - name: Compute Shard Paths
-        id: calc
-        run: |
-          pet_idx=$((${{ matrix.load_shard_index }} % 4))
-          echo "pet_idx=$pet_idx" >> "$GITHUB_OUTPUT"
-      - name: Download PET Shards
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pet-shard-*-${{ steps.calc.outputs.pet_idx }}
-          merge-multiple: true
-          path: pet_data_csv
+      - name: Sync Data from S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
       - name: Download analytics shards
         uses: actions/download-artifact@v4
         with:
@@ -489,15 +201,7 @@ jobs:
       - name: Load shard to Supabase
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: |
-          python load.py \
-            --append-only \
-            --skip-drop-views \
-            --skip-create-views \
-            --skip-table locations \
-            --analytics-shard-count 20 \
-            --load-shard-index ${{ matrix.load_shard_index }} \
-            --load-shard-count 20
+        run: python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -514,12 +218,4 @@ jobs:
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: |
-          python load.py \
-            --append-only \
-            --skip-drop-views \
-            --skip-table locations \
-            --skip-table pet \
-            --skip-table pet_percentiles \
-            --skip-table pet_forecast \
-            --skip-table pet_change
+        run: python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change

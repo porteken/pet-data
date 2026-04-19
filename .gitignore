@@ -12,3 +12,10 @@ venv
 !README.md
 .env
 google.json
+raw_weather_grib
+pet_data_csv
+combined_data_parquet
+analytics_data_csv
+era5_data_parquet
+output_tiles
+.conda

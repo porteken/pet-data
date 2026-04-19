@@ -25,10 +25,10 @@ YEAR = 2000
 DAYS = 3
 HOURS = DAYS * 24
 
-# Two cities from the real city_to_tile mapping
+# Two cities from the real cities.csv
 CITIES = [
-    {"location_id": 7, "lat": 32.75, "lng": -117.25, "tile_id": 11},
-    {"location_id": 116, "lat": 26.0, "lng": -97.5, "tile_id": 1},
+    {"location_id": 7, "lat": 32.75, "lng": -117.25},
+    {"location_id": 116, "lat": 26.0, "lng": -97.5},
 ]
 
 
@@ -55,7 +55,7 @@ def _generate_era5_combined(out_root: Path | None = None) -> None:
             )
 
         df = pd.DataFrame(records)
-        out_dir = out / f"year={YEAR}" / f"tile_id={city['tile_id']}"
+        out_dir = out / f"year={YEAR}" / f"location_id={city['location_id']}"
         out_dir.mkdir(parents=True, exist_ok=True)
         df.to_parquet(out_dir / "combined.parquet", index=False)
 

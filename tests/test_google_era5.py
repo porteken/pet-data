@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import pathlib
 from typing import cast
+from unittest.mock import MagicMock
 
+import numpy as np
 import pandas as pd
 import pytest
+from typing_extensions import Self
 
 import google_era5
 from google_era5 import (
     DEFAULT_BATCH_HOURS,
+    ERA5_TIME_ORIGIN,
+    _compute_location_frame,
     _era5_partition_path,
     _iter_time_batches,
     _resolve_era5_max_workers,
@@ -36,6 +41,13 @@ class TestYearTimeSlice:
         start_h, end_h = _year_time_slice(2024)
         # 2024 is a leap year: 8784 hours
         assert end_h - start_h + 1 == 8784
+
+    def test_starts_at_beginning_of_year(self) -> None:
+        start_h, _ = _year_time_slice(2024)
+        epoch = pd.Timestamp(google_era5.ERA5_TIME_ORIGIN)
+        assert epoch + pd.Timedelta(hours=start_h) == pd.Timestamp(
+            "2024-01-01 00:00:00"
+        )
 
     def test_non_leap_year(self) -> None:
         start_h, end_h = _year_time_slice(2023)
@@ -108,12 +120,12 @@ class TestSelectTimeShardBatches:
 
 class TestEra5PartitionPath:
     def test_without_batch(self) -> None:
-        result = _era5_partition_path(2024, 5)
-        assert result == "year=2024/tile_id=5"
+        result = _era5_partition_path(2024)
+        assert result == "year=2024"
 
     def test_with_batch_index(self) -> None:
-        result = _era5_partition_path(2024, 5, batch_index=3)
-        assert result == "year=2024/tile_id=5/batch_index=0003"
+        result = _era5_partition_path(2024, batch_index=3)
+        assert result == "year=2024/batch_index=0003"
 
 
 class TestResolveEra5MaxWorkers:
@@ -136,7 +148,6 @@ class TestRunEra5BatchJobs:
         shard_df = pd.DataFrame(
             {
                 "location_id": [1],
-                "tile_id": [99],
                 "lat": [35.0],
                 "lng": [-80.0],
             }
@@ -150,11 +161,13 @@ class TestRunEra5BatchJobs:
         def fake_pending_batch_tiles(
             _shard: pd.DataFrame,
             *,
-            _era5_root: str,
-            _year: int,
+            era5_root: str,
+            year: int,
+            city_shard_index: int,
             batch_index: int,
-            _force: bool = False,
+            force: bool = False,
         ) -> pd.DataFrame:
+            del era5_root, year, city_shard_index, force
             return batch_frames[batch_index].copy()
 
         def fake_process_batch(**kwargs: object) -> int:
@@ -189,3 +202,159 @@ class TestRunEra5BatchJobs:
 
         assert wrote_batches is True
         assert sorted(completed_batches) == [0, 1]
+
+
+class TestComputeLocationFrameAlignment:
+    """Verify that weather values are correctly aligned to (location, time) pairs.
+
+    ERA5 xarray selection produces (n_times, n_locs) arrays.  Without a .T
+    transpose those arrays are raveled in time-first order, which mismatches the
+    DataFrame's loc-first row ordering (np.repeat / np.tile).  The test below
+    constructs two synthetic cities whose daily-max PET ranks should be strictly
+    ordered (hot city always > cold city) - a property that breaks when loc/time
+    data is scrambled.
+    """
+
+    def _make_fake_dataset(
+        self,
+        n_times: int,
+        n_locs: int,
+        hot_temp_k: float,
+        cold_temp_k: float,
+    ) -> MagicMock:
+        """Return a minimal xarray-like Dataset mock with two distinct temperature profiles.
+
+        City 0 (hot): constant ``hot_temp_k``, dew-point 10 K below.
+        City 1 (cold): constant ``cold_temp_k``, dew-point 10 K below.
+        All radiation variables are zero (night-time → no solar MRT boost).
+        Wind speed is fixed at 2 m/s (> 0 so the filter keeps all rows).
+        """
+        # Temperatures: shape (n_times, n_locs) — xarray returns time-first
+        temps = np.empty((n_times, n_locs), dtype=float)
+        temps[:, 0] = hot_temp_k
+        temps[:, 1] = cold_temp_k
+        dew = temps - 10.0  # dew-point 10 K below air temp
+
+        # Wind components: shape (n_times, n_locs)
+        np.full((n_times, n_locs), np.sqrt(2.0))  # u=v=√2 → speed=2
+
+        # All radiation zero → MRT driven purely by longwave (strd/str)
+        # strd ≈ σT⁴ for a rough sky estimate; here use a small positive const
+        rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)  # W/m² * 3600 = J/m²
+        rad_net = np.zeros((n_times, n_locs))  # net = 0
+
+        # Build xarray-style variables accessible by key
+        raw = {
+            "10u": temps * 0 + np.sqrt(2.0),
+            "10v": temps * 0 + np.sqrt(2.0),
+            "2t": temps,
+            "2d": dew,
+            "ssrd": rad_net.copy(),
+            "strd": rad_down.copy(),
+            "ssr": rad_net.copy(),
+            "str": rad_net.copy(),
+            "fdir": rad_net.copy(),
+            "msdrswrf": rad_net.copy(),
+        }
+
+        # time coordinate: integer hours since ERA5_TIME_ORIGIN for a Jan week
+        epoch = pd.Timestamp(ERA5_TIME_ORIGIN)
+        start_h = int((pd.Timestamp("2010-01-01") - epoch).total_seconds() // 3600)
+        time_vals = np.arange(start_h, start_h + n_times, dtype=int)
+
+        class _FakeVar:
+            def __init__(self, arr: np.ndarray) -> None:
+                self.values = arr
+
+        class _FakeDataset:
+            def __init__(self) -> None:
+                self._raw = raw
+                self.time = _FakeVar(time_vals)
+
+            def __getitem__(self, key: str) -> _FakeVar:
+                return _FakeVar(self._raw[key])
+
+            def assign_coords(self, **kwargs: object) -> _FakeDataset:
+                copy = _FakeDataset()
+                if "time" in kwargs:
+                    copy.time = _FakeVar(np.asarray(kwargs["time"]))
+                return copy
+
+        return _FakeDataset()  # type: ignore[return-value]
+
+    def test_hot_city_has_higher_pet_than_cold_city(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """City 0 (hot) should consistently produce higher daily max PET than city 1 (cold)."""
+        n_times = 24  # one day of hourly data
+        n_locs = 2
+        hot_k = 308.15  # 35 °C
+        cold_k = 278.15  # 5 °C
+
+        fake_ds = self._make_fake_dataset(n_times, n_locs, hot_k, cold_k)
+
+        # Patch dask so compute() returns the mock object unchanged
+        import dask as _dask
+
+        class _FakeDaskCtx:
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                pass
+
+        monkeypatch.setattr(
+            _dask, "config", MagicMock(set=lambda **_kw: _FakeDaskCtx())
+        )
+
+        # Patch xr.DataArray so sel() works — we bypass xarray's sel entirely
+        # by replacing city_selection.compute() return value via monkeypatching
+        # _compute_location_frame's internal calls.
+
+        def _fake_compute(_self: object) -> object:
+            return fake_ds
+
+        # We intercept at the compute() call inside _compute_location_frame.
+        # The easiest way: patch the Dataset's sel to return an object whose
+        # .compute() returns our fake dataset.
+        class _FakeSel:
+            def sel(self, *_args: object, **_kw: object) -> _FakeSel:
+                return self
+
+            def compute(self) -> object:
+                return fake_ds
+
+        class _FakeSliceable:
+            def __getitem__(self, _keys: object) -> _FakeSliceable:
+                return self
+
+            def sel(self, *_args: object, **_kw: object) -> _FakeSel:
+                return _FakeSel()
+
+        fake_ds_with_slice = _FakeSliceable()
+
+        cities = pd.DataFrame(
+            {
+                "location_id": [0, 1],
+                "lat": [40.0, 40.0],
+                "lng": [-75.0, -75.0],
+            }
+        )
+
+        result = _compute_location_frame(
+            fake_ds_with_slice,  # type: ignore[arg-type]
+            cities,
+            start_h=0,
+            end_h=n_times - 1,
+            compute_workers=1,
+        )
+
+        assert not result.empty, "Expected non-empty PET result"
+        # After the transposition fix each city should receive its own temperature
+        pet_hot = result.loc[result["location_id"] == 0, "pet"].max()
+        pet_cold = result.loc[result["location_id"] == 1, "pet"].max()
+        assert pet_hot > pet_cold, (
+            f"Hot city PET ({pet_hot}) should exceed cold city PET ({pet_cold}). "
+            "This failure typically means the (n_times, n_locs) arrays are being "
+            "raveled without transposition, scrambling loc/time alignment."
+        )

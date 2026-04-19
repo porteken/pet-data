@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import csv
-import gzip
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -55,40 +54,59 @@ def merge_csvs(
     source_files: list[str],
     output_file: str,
 ) -> None:
-    """Merge multiple PET CSV files/directories into one."""
-    print(f"Merging CSVs into {output_file}...")  # noqa: T201
-    source_paths = [Path(f) for f in source_files]
+    """Merge multiple PET CSV/parquet files/directories into one output CSV."""
+    pd = importlib.import_module("pandas")
+
+    print(f"Merging PET data into {output_file}...")  # noqa: T201
+    frames = []
+
+    # Explicit file list (CSV or parquet)
+    for path_str in source_files:
+        source_path = Path(path_str)
+        if not source_path.exists():
+            continue
+        try:
+            if source_path.suffix == ".parquet":
+                frames.append(
+                    pd.read_parquet(
+                        source_path,
+                        columns=["location_id", "date", "pet"],
+                    ),
+                )
+            else:
+                frames.append(
+                    pd.read_csv(source_path, usecols=["location_id", "date", "pet"]),
+                )
+        except Exception as e:  # noqa: BLE001
+            print(f"Error processing {source_path}: {e}")  # noqa: T201
+
+    # Directory scan: prefer parquet shards, fall back to CSV files
     for d in source_dirs:
-        source_paths.extend(sorted(Path(d).rglob("pet.csv.gz")))
-        source_paths.extend(sorted(Path(d).rglob("pet.csv")))
+        parquet_shards = sorted(Path(d).rglob("pet_batch_*.parquet"))
+        if parquet_shards:
+            for p in parquet_shards:
+                try:
+                    frames.append(
+                        pd.read_parquet(p, columns=["location_id", "date", "pet"]),
+                    )
+                except Exception as e:  # noqa: BLE001, PERF203
+                    print(f"Error processing {p}: {e}")  # noqa: T201
+        else:
+            for p in sorted(Path(d).rglob("pet.csv")):
+                try:
+                    frames.append(
+                        pd.read_csv(p, usecols=["location_id", "date", "pet"]),
+                    )
+                except Exception as e:  # noqa: BLE001, PERF203
+                    print(f"Error processing {p}: {e}")  # noqa: T201
 
-    with Path(output_file).open("w", encoding="utf-8", newline="") as out_f:
-        writer = None
-        for source_path in source_paths:
-            if not source_path.exists():
-                continue
-
-            # Handle .gz if necessary
-            open_func = gzip.open if source_path.suffix == ".gz" else open
-
-            try:
-                with open_func(
-                    str(source_path),
-                    "rt",
-                    encoding="utf-8",
-                    newline="",
-                ) as in_f:
-                    reader = csv.reader(in_f)
-                    header = next(reader, None)
-                    if header is None:
-                        continue
-                    if writer is None:
-                        writer = csv.writer(out_f)
-                        writer.writerow(header)
-                    for row in reader:
-                        writer.writerow(row)
-            except Exception as e:  # noqa: BLE001
-                print(f"Error processing {source_path}: {e}")  # noqa: T201
+    if frames:
+        combined = pd.concat(frames, ignore_index=True)
+        combined.to_csv(output_file, index=False)
+        print(f"Wrote {len(combined)} rows to {output_file}.")  # noqa: T201
+    else:
+        Path(output_file).write_text("location_id,date,pet\n", encoding="utf-8")
+        print("No source data found; wrote empty CSV.")  # noqa: T201
 
 
 def delete_window(window_start: str, window_end: str) -> None:
