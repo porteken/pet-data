@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local pipeline relying EXCLUSIVELY on Google ARCO ERA5 -> Direct PET calculation
+# Local hybrid PET pipeline: Google ARCO weather + CDS MRT -> combined hourly -> PET -> analytics
 set -euo pipefail
 
 if [ -f .env ]; then
@@ -8,6 +8,8 @@ if [ -f .env ]; then
     source .env
     set +a
 fi
+
+PYTHON_BIN=${PYTHON_BIN:-python}
 
 if [ -z "${SUPABASE_DB_URI:-}" ]; then
     echo "WARNING: SUPABASE_DB_URI is not set. Database upload steps will be skipped."
@@ -18,16 +20,27 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export VECLIB_MAX_THREADS=1
 export NUMEXPR_NUM_THREADS=1
+export PET_ANALYTICS_USE_DASK=${PET_ANALYTICS_USE_DASK:-1}
 
-RUN_LOCAL_MODE=${RUN_LOCAL_MODE:-full}
-RUN_LOCAL_SKIP_ERA5_PULL=${RUN_LOCAL_SKIP_ERA5_PULL:-0}
+RUN_LOCAL_MODE=${RUN_LOCAL_MODE:-smoke}
+RUN_LOCAL_SKIP_WEATHER_PULL=${RUN_LOCAL_SKIP_WEATHER_PULL:-0}
+RUN_LOCAL_SKIP_MRT_PULL=${RUN_LOCAL_SKIP_MRT_PULL:-0}
+RUN_LOCAL_SKIP_COMBINE=${RUN_LOCAL_SKIP_COMBINE:-0}
+RUN_LOCAL_SKIP_PET=${RUN_LOCAL_SKIP_PET:-0}
+RUN_LOCAL_SKIP_ANALYTICS=${RUN_LOCAL_SKIP_ANALYTICS:-0}
+RUN_LOCAL_SKIP_DB_LOAD=${RUN_LOCAL_SKIP_DB_LOAD:-0}
+RUN_LOCAL_YEARS=${RUN_LOCAL_YEARS:-"2024 2025"}
 
 _PIDS=()
 
 _kill_tree() {
     local pid=$1 sig=${2:-TERM} children
     children=$(pgrep -P "$pid" 2>/dev/null || true)
-    if [ -n "$children" ]; then for c in $children; do _kill_tree "$c" "$sig"; done; fi
+    if [ -n "$children" ]; then
+        for c in $children; do
+            _kill_tree "$c" "$sig"
+        done
+    fi
     kill -"$sig" "$pid" 2>/dev/null || true
 }
 
@@ -41,7 +54,6 @@ _cleanup() {
     fi
     exit "$exit_code"
 }
-# Catch all abort signals AND script exits to ensure cleanup fires safely
 trap _cleanup SIGINT SIGTERM ERR EXIT
 
 _launch() {
@@ -50,16 +62,13 @@ _launch() {
     _PIDS+=($!)
 
     while (( ${#_PIDS[@]} >= max )); do
-        # Wait for any job to finish, catch failure immediately
         wait -n || { echo "A background job failed!"; exit 1; }
-        
+
         local active_pids=()
         for pid in "${_PIDS[@]}"; do
-            # kill -0 checks if the process is still running
             if kill -0 "$pid" 2>/dev/null; then
                 active_pids+=("$pid")
             else
-                # Explicitly reap the finished PID to guarantee we capture its exit status
                 wait "$pid" || { echo "Shard job $pid failed!"; exit 1; }
             fi
         done
@@ -68,8 +77,9 @@ _launch() {
 }
 
 _wait_phase() {
+    local label=${1:-phase}
     for pid in "${_PIDS[@]}"; do
-        wait "$pid" || { echo "Shard job $pid failed!"; exit 1; }
+        wait "$pid" || { echo "Phase '$label' failed in job $pid!"; exit 1; }
     done
     _PIDS=()
 }
@@ -79,87 +89,176 @@ CPU_COUNT=$(_cpu_count)
 AVAILABLE_CPUS=$(( CPU_COUNT > 1 ? CPU_COUNT - 1 : 1 ))
 COMPUTE_JOB_LIMIT=$(( AVAILABLE_CPUS < 8 ? AVAILABLE_CPUS : 8 ))
 
+ALL_YEARS="$RUN_LOCAL_YEARS"
+SMOKE_MONTH=5
+SMOKE_START_DAY=1
+SMOKE_END_DAY=7
+SMOKE_MONTH_PAD=$(printf '%02d' "$SMOKE_MONTH")
+
 if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
-    ALL_YEARS='2024 2025'
-    ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-168}
-    ERA5_TIME_SHARD_COUNT=${ERA5_TIME_SHARD_COUNT:-53}
-    echo "Running local pipeline in smoke mode: 2024-2025 ERA5 week only."
+    PIPELINE_MONTHS=(5)
+    WEATHER_BATCH_HOURS=${RUN_LOCAL_WEATHER_BATCH_HOURS:-168}
+    echo "Running local pipeline in smoke mode: ${ALL_YEARS} first week of May."
 else
-    ALL_YEARS='2024 2025'
-    ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-168}
-    MONTHS_FILTER="--months 5 6 7 8 9"
-    echo "Running local pipeline in full mode: $ALL_YEARS (May-Sept)."
+    PIPELINE_MONTHS=(5 6 7 8 9)
+    WEATHER_BATCH_HOURS=${RUN_LOCAL_WEATHER_BATCH_HOURS:-720}
+    echo "Running local pipeline in full mode: ${ALL_YEARS} (May-Sept)."
 fi
 
-export ALL_YEARS
+echo "====== Step 1: Setup locations, tiles, and clean outputs ======"
+rm -rf output_tiles
+if [[ "$RUN_LOCAL_SKIP_ANALYTICS" != "1" ]]; then rm -rf analytics_data_csv; fi
+if [[ "$RUN_LOCAL_SKIP_COMBINE" != "1" ]]; then rm -rf combined_data_parquet; fi
+if [[ "$RUN_LOCAL_SKIP_PET" != "1" ]]; then rm -rf pet_data_csv; fi
+mkdir -p output_tiles analytics_data_csv combined_data_parquet pet_data_csv
+if [[ "$RUN_LOCAL_SKIP_WEATHER_PULL" != "1" ]]; then rm -rf weather_data_parquet; fi
+if [[ "$RUN_LOCAL_SKIP_MRT_PULL" != "1" ]]; then rm -rf utci_data_parquet; fi
+mkdir -p weather_data_parquet utci_data_parquet
 
-echo "====== Step 1: Compute year ranges + setup locations ======"
-mkdir -p output_tiles pet_data_csv analytics_data_csv
-if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
-    for YEAR in $ALL_YEARS; do rm -rf "pet_data_csv/year=$YEAR"; done
-fi
-rm -rf analytics_data_csv/shard_count=*
-
-python cities.py
+"$PYTHON_BIN" cities.py
 
 CITY_COUNT=$(awk 'END {print (NR > 0 ? NR - 1 : 0)}' cities.csv)
-DEFAULT_ERA5_CITY_SHARD_COUNT=$(( CITY_COUNT < 2 ? CITY_COUNT : 2 ))
-ERA5_CITY_SHARD_COUNT=${RUN_LOCAL_ERA5_CITY_SHARD_COUNT:-$DEFAULT_ERA5_CITY_SHARD_COUNT}
-if (( ERA5_CITY_SHARD_COUNT < 1 )); then ERA5_CITY_SHARD_COUNT=1; fi
-if (( ERA5_CITY_SHARD_COUNT > CITY_COUNT )); then ERA5_CITY_SHARD_COUNT=$CITY_COUNT; fi
+TILE_COUNT=$(awk 'END {print (NR > 0 ? NR - 1 : 0)}' output_tiles/tile_boxes.csv)
+
+DEFAULT_MRT_TILE_SHARD_COUNT=$(( TILE_COUNT < 3 ? TILE_COUNT : 3 ))
+MRT_TILE_SHARD_COUNT=${RUN_LOCAL_MRT_TILE_SHARD_COUNT:-$DEFAULT_MRT_TILE_SHARD_COUNT}
+(( MRT_TILE_SHARD_COUNT < 1 )) && MRT_TILE_SHARD_COUNT=1
+(( MRT_TILE_SHARD_COUNT > TILE_COUNT )) && MRT_TILE_SHARD_COUNT=$TILE_COUNT
 
 if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
-    ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
-    ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-aggressive}
-    ERA5_BATCH_WORKERS=${RUN_LOCAL_ERA5_BATCH_WORKERS:-$(( AVAILABLE_CPUS / ERA5_CITY_SHARD_COUNT ))}
+    DEFAULT_WEATHER_TILE_SHARD_COUNT=$MRT_TILE_SHARD_COUNT
 else
-    DEFAULT_FULL_ERA5_JOB_LIMIT=$(( ERA5_CITY_SHARD_COUNT * 2 ))
-    if (( DEFAULT_FULL_ERA5_JOB_LIMIT > AVAILABLE_CPUS )); then
-        DEFAULT_FULL_ERA5_JOB_LIMIT=$AVAILABLE_CPUS
-    fi
-    ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-$DEFAULT_FULL_ERA5_JOB_LIMIT}
-    ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-balanced}
-    ERA5_BATCH_WORKERS=${RUN_LOCAL_ERA5_BATCH_WORKERS:-1}
+    DEFAULT_WEATHER_TILE_SHARD_COUNT=$(( TILE_COUNT < 4 ? TILE_COUNT : 4 ))
 fi
+WEATHER_TILE_SHARD_COUNT=${RUN_LOCAL_WEATHER_TILE_SHARD_COUNT:-$DEFAULT_WEATHER_TILE_SHARD_COUNT}
+(( WEATHER_TILE_SHARD_COUNT < 1 )) && WEATHER_TILE_SHARD_COUNT=1
+(( WEATHER_TILE_SHARD_COUNT > TILE_COUNT )) && WEATHER_TILE_SHARD_COUNT=$TILE_COUNT
 
+if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
+    DEFAULT_WEATHER_JOB_LIMIT=$WEATHER_TILE_SHARD_COUNT
+else
+    DEFAULT_WEATHER_JOB_LIMIT=$(( WEATHER_TILE_SHARD_COUNT < 2 ? WEATHER_TILE_SHARD_COUNT : 2 ))
+fi
+WEATHER_JOB_LIMIT=${RUN_LOCAL_WEATHER_JOB_LIMIT:-$DEFAULT_WEATHER_JOB_LIMIT}
+MRT_JOB_LIMIT=${RUN_LOCAL_MRT_JOB_LIMIT:-$(( MRT_TILE_SHARD_COUNT < 2 ? MRT_TILE_SHARD_COUNT : 2 ))}
+COMBINE_JOB_LIMIT=${RUN_LOCAL_COMBINE_JOB_LIMIT:-$MRT_TILE_SHARD_COUNT}
+PET_JOB_LIMIT=${RUN_LOCAL_PET_JOB_LIMIT:-$MRT_TILE_SHARD_COUNT}
 ANALYTICS_SHARD_COUNT=$(( CITY_COUNT < COMPUTE_JOB_LIMIT ? CITY_COUNT : COMPUTE_JOB_LIMIT ))
-(( ERA5_BATCH_WORKERS < 1 )) && ERA5_BATCH_WORKERS=1
-if [[ "$RUN_LOCAL_MODE" == "smoke" && "$ERA5_BATCH_WORKERS" -gt 2 ]]; then
-    ERA5_BATCH_WORKERS=2
+
+if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
+    DEFAULT_WEATHER_TILE_WORKERS=2
+    DEFAULT_WEATHER_CONCURRENCY_PROFILE=balanced
+else
+    DEFAULT_WEATHER_TILE_WORKERS=1
+    DEFAULT_WEATHER_CONCURRENCY_PROFILE=conservative
+fi
+WEATHER_TILE_WORKERS=${RUN_LOCAL_WEATHER_TILE_WORKERS:-$DEFAULT_WEATHER_TILE_WORKERS}
+MRT_BATCH_WORKERS=${RUN_LOCAL_MRT_BATCH_WORKERS:-2}
+WEATHER_CONCURRENCY_PROFILE=${RUN_LOCAL_WEATHER_CONCURRENCY_PROFILE:-$DEFAULT_WEATHER_CONCURRENCY_PROFILE}
+export MRT_CDS_REQUEST_CONCURRENCY=${MRT_CDS_REQUEST_CONCURRENCY:-4}
+
+echo "Weather tile shards: $WEATHER_TILE_SHARD_COUNT | weather job limit: $WEATHER_JOB_LIMIT | weather tile workers: $WEATHER_TILE_WORKERS | weather profile: $WEATHER_CONCURRENCY_PROFILE"
+echo "MRT tile shards: $MRT_TILE_SHARD_COUNT | MRT job limit: $MRT_JOB_LIMIT | analytics shards: $ANALYTICS_SHARD_COUNT"
+
+echo "====== Step 2: Pull Google weather by tile bounding boxes ======"
+if [[ "$RUN_LOCAL_SKIP_WEATHER_PULL" != "1" ]]; then
+    for YEAR in $ALL_YEARS; do
+        if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
+            for (( TILE_SHARD=0; TILE_SHARD<WEATHER_TILE_SHARD_COUNT; TILE_SHARD++ )); do
+                _launch "$WEATHER_JOB_LIMIT" "$PYTHON_BIN" pull_weather_tiles.py \
+                    --year "$YEAR" \
+                    --month "$SMOKE_MONTH" \
+                    --start-date "${YEAR}-${SMOKE_MONTH_PAD}-$(printf '%02d' "$SMOKE_START_DAY")" \
+                    --end-date "${YEAR}-${SMOKE_MONTH_PAD}-$(printf '%02d' "$SMOKE_END_DAY")" \
+                    --tile-shard-index "$TILE_SHARD" \
+                    --tile-shard-count "$WEATHER_TILE_SHARD_COUNT" \
+                    --max-workers "$WEATHER_TILE_WORKERS" \
+                    --concurrency-profile "$WEATHER_CONCURRENCY_PROFILE" \
+                    --out-dir .
+            done
+        else
+            for MONTH in "${PIPELINE_MONTHS[@]}"; do
+                for (( TILE_SHARD=0; TILE_SHARD<WEATHER_TILE_SHARD_COUNT; TILE_SHARD++ )); do
+                    _launch "$WEATHER_JOB_LIMIT" "$PYTHON_BIN" pull_weather_tiles.py \
+                        --year "$YEAR" \
+                        --month "$MONTH" \
+                        --tile-shard-index "$TILE_SHARD" \
+                        --tile-shard-count "$WEATHER_TILE_SHARD_COUNT" \
+                        --max-workers "$WEATHER_TILE_WORKERS" \
+                        --concurrency-profile "$WEATHER_CONCURRENCY_PROFILE" \
+                        --out-dir .
+                done
+            done
+        fi
+    done
+    _wait_phase "pull-weather"
 fi
 
-echo "====== Step 2: Compute ERA5 + PET (parallel, CPU-aware) ======"
-if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
+echo "====== Step 3: Pull CDS MRT using tile bounding boxes ======"
+if [[ "$RUN_LOCAL_SKIP_MRT_PULL" != "1" ]]; then
     for YEAR in $ALL_YEARS; do
-        for (( CITY_SHARD=0; CITY_SHARD<ERA5_CITY_SHARD_COUNT; CITY_SHARD++ )); do
-            ERA5_ARGS=(--year "$YEAR" --city-shard-count "$ERA5_CITY_SHARD_COUNT" --city-shard-index "$CITY_SHARD" --max-workers "$ERA5_BATCH_WORKERS" --concurrency-profile "$ERA5_CONCURRENCY_PROFILE" --out-dir .)
-            
-            if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
-                ERA5_ARGS+=(--batch-hours "$ERA5_BATCH_HOURS" --time-shard-index 17 --time-shard-count "$ERA5_TIME_SHARD_COUNT")
-            else
-                ERA5_ARGS+=(--batch-hours "$ERA5_BATCH_HOURS" --time-shard-index 0 --time-shard-count 1)
-                # Apply the months filter if it is set
-                if [ -n "${MONTHS_FILTER:-}" ]; then
-                    ERA5_ARGS+=($MONTHS_FILTER)
-                fi
-            fi
-            
-            _launch "$ERA5_JOB_LIMIT" python google_era5.py "${ERA5_ARGS[@]}"
+        if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
+            for (( TILE_SHARD=0; TILE_SHARD<MRT_TILE_SHARD_COUNT; TILE_SHARD++ )); do
+                _launch "$MRT_JOB_LIMIT" "$PYTHON_BIN" pull_mrt.py \
+                    --year "$YEAR" \
+                    --month "$SMOKE_MONTH" \
+                    --start-date "${YEAR}-${SMOKE_MONTH_PAD}-$(printf '%02d' "$SMOKE_START_DAY")" \
+                    --end-date "${YEAR}-${SMOKE_MONTH_PAD}-$(printf '%02d' "$SMOKE_END_DAY")" \
+                    --tile-shard-index "$TILE_SHARD" \
+                    --tile-shard-count "$MRT_TILE_SHARD_COUNT" \
+                    --max-workers "$MRT_BATCH_WORKERS" \
+                    --out-dir .
+            done
+        else
+            for MONTH in "${PIPELINE_MONTHS[@]}"; do
+                for (( TILE_SHARD=0; TILE_SHARD<MRT_TILE_SHARD_COUNT; TILE_SHARD++ )); do
+                    _launch "$MRT_JOB_LIMIT" "$PYTHON_BIN" pull_mrt.py \
+                        --year "$YEAR" \
+                        --month "$MONTH" \
+                        --tile-shard-index "$TILE_SHARD" \
+                        --tile-shard-count "$MRT_TILE_SHARD_COUNT" \
+                        --max-workers "$MRT_BATCH_WORKERS" \
+                        --out-dir .
+                done
+            done
+        fi
+    done
+    _wait_phase "pull-mrt"
+fi
+
+echo "====== Step 4: Combine hourly weather + MRT shards ======"
+if [[ "$RUN_LOCAL_SKIP_COMBINE" != "1" ]]; then
+    for YEAR in $ALL_YEARS; do
+        for (( TILE_SHARD=0; TILE_SHARD<MRT_TILE_SHARD_COUNT; TILE_SHARD++ )); do
+            _launch "$COMBINE_JOB_LIMIT" "$PYTHON_BIN" combine.py --year "$YEAR" --shard-index "$TILE_SHARD" --shard-count "$MRT_TILE_SHARD_COUNT"
         done
     done
-    _wait_phase "pull-google-era5-pet"
+    _wait_phase "combine-hourly"
 fi
 
-echo "====== Step 3: Generate Analytics (parallel, CPU-aware) ======"
-for (( ANA_SHARD=0; ANA_SHARD<ANALYTICS_SHARD_COUNT; ANA_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" python generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT"
-done
-_wait_phase "generate-analytics"
+echo "====== Step 5: Calculate PET from combined hourly shards ======"
+if [[ "$RUN_LOCAL_SKIP_PET" != "1" ]]; then
+    for YEAR in $ALL_YEARS; do
+        for (( TILE_SHARD=0; TILE_SHARD<MRT_TILE_SHARD_COUNT; TILE_SHARD++ )); do
+            _launch "$PET_JOB_LIMIT" "$PYTHON_BIN" calculate_pet.py --year "$YEAR" --shard-index "$TILE_SHARD" --shard-count "$MRT_TILE_SHARD_COUNT"
+        done
+    done
+    _wait_phase "calculate-pet"
+fi
 
-echo "====== Step 3.5: Save combined pet.csv reference before upload ======"
-python - <<'PY'
+echo "====== Step 6: Generate Analytics (parallel, CPU-aware) ======"
+if [[ "$RUN_LOCAL_SKIP_ANALYTICS" != "1" ]]; then
+    for (( ANA_SHARD=0; ANA_SHARD<ANALYTICS_SHARD_COUNT; ANA_SHARD++ )); do
+        _launch "$COMPUTE_JOB_LIMIT" "$PYTHON_BIN" generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT"
+    done
+    _wait_phase "generate-analytics"
+fi
+
+echo "====== Step 6.5: Save combined pet.csv reference before upload ======"
+"$PYTHON_BIN" - <<'PY'
 import pandas as pd
 from pathlib import Path
+
 pet_root = Path("pet_data_csv")
 all_files = sorted(pet_root.rglob("pet_batch_*.parquet"))
 if all_files:
@@ -171,28 +270,34 @@ else:
     print("No pet batch parquet files found; pet.csv not written.")
 PY
 
-echo "====== Step 4: Prepare DB load ======"
-python - <<'PY'
-import os, sys, psycopg2
+if [[ -z "${SUPABASE_DB_URI:-}" || "$RUN_LOCAL_SKIP_DB_LOAD" == "1" ]]; then
+    echo "====== Pipeline complete! Skipped DB load. ======"
+    exit 0
+fi
+
+echo "====== Step 7: Prepare DB load ======"
+"$PYTHON_BIN" - <<'PY'
+import os
+import psycopg2
 from pathlib import Path
-db_uri = os.environ.get("SUPABASE_DB_URI")
-if not db_uri: sys.exit(0)
-conn = psycopg2.connect(db_uri)
+
+conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
 conn.autocommit = True
 with conn.cursor() as cur:
     cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
     cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
     cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
+conn.close()
 PY
 
-python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+"$PYTHON_BIN" load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 
-echo "====== Step 5: Load shards to DB (parallel, CPU-aware) ======"
+echo "====== Step 8: Load shards to DB (parallel, CPU-aware) ======"
 for (( LOAD_SHARD=0; LOAD_SHARD<ANALYTICS_SHARD_COUNT; LOAD_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count "$ANALYTICS_SHARD_COUNT" --load-shard-index "$LOAD_SHARD" --load-shard-count "$ANALYTICS_SHARD_COUNT"
+    _launch "$COMPUTE_JOB_LIMIT" "$PYTHON_BIN" load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count "$ANALYTICS_SHARD_COUNT" --load-shard-index "$LOAD_SHARD" --load-shard-count "$ANALYTICS_SHARD_COUNT"
 done
 _wait_phase "load-to-db"
 
-echo "====== Step 6: Recreate views ======"
-python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+echo "====== Step 9: Recreate views ======"
+"$PYTHON_BIN" load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 echo "====== Pipeline complete! ======"

@@ -1,0 +1,92 @@
+Selecting variables: ['10u', '10v', '2t', '2d']
+Traceback (most recent call last):
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 3812, in get_loc
+    return self._engine.get_loc(casted_key)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index.pyx", line 175, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index_class_helper.pxi", line 70, in pandas._libs.index.Int64Engine._check_type
+KeyError: datetime.datetime(2024, 1, 1, 0, 0)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 6853, in get_slice_bound
+    slc = self.get_loc(label)
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 3819, in get_loc
+    raise KeyError(key) from err
+KeyError: datetime.datetime(2024, 1, 1, 0, 0)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/kenneth-porter/pet-data/inspect_dims.py", line 47, in <module>
+    main()
+    ~~~~^^
+  File "/home/kenneth-porter/pet-data/inspect_dims.py", line 22, in main
+    subset = ds[ERA5_WEATHER_VARIABLES].sel(time=slice(start_h, end_h))
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/xarray/core/dataset.py", line 2911, in sel
+    query_results = map_index_queries(
+        self, indexers=indexers, method=method, tolerance=tolerance
+    )
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/xarray/core/indexing.py", line 195, in map_index_queries
+    results.append(index.sel(labels, **options))
+                   ~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/xarray/core/indexes.py", line 835, in sel
+    indexer = _query_slice(self.index, label, coord_name, method, tolerance)
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/xarray/core/indexes.py", line 566, in _query_slice
+    indexer = index.slice_indexer(
+        _sanitize_slice_element(label.start),
+        _sanitize_slice_element(label.stop),
+        _sanitize_slice_element(label.step),
+    )
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 6708, in slice_indexer
+    start_slice, end_slice = self.slice_locs(start, end, step=step)
+                             ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 6934, in slice_locs
+    start_slice = self.get_slice_bound(start, "left")
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 6856, in get_slice_bound
+    return self._searchsorted_monotonic(label, side)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 6788, in _searchsorted_monotonic
+    return self.searchsorted(label, side=side)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/base.py", line 1361, in searchsorted
+    return algorithms.searchsorted(
+           ~~~~~~~~~~~~~~~~~~~~~~~^
+        values,
+        ^^^^^^^
+    ...<2 lines>...
+        sorter=sorter,
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/pandas/core/algorithms.py", line 1329, in searchsorted
+    return arr.searchsorted(value, side=side, sorter=sorter)  # type: ignore[arg-type]
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: '<' not supported between instances of 'int' and 'datetime.datetime'
+Traceback (most recent call last):
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/weakref.py", line 666, in _exitfunc
+    f()
+    ~^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/weakref.py", line 590, in __call__
+    return info.func(*info.args, **(info.kwargs or {}))
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/gcsfs/core.py", line 389, in close_session
+    asyn.sync(asyn.loop[0], session.close, timeout=0.1)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/fsspec/asyn.py", line 103, in sync
+    raise return_result
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/fsspec/asyn.py", line 56, in _runner
+    result[0] = await coro
+                ^^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/client.py", line 1349, in close
+    await self._connector.close()
+  File "/home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/connector.py", line 1044, in close
+    await super().close(abort_ssl=abort_ssl or self._ssl_shutdown_timeout == 0)
+RuntimeError: Task <Task pending name='Task-110' coro=<_runner() running at /home/kenneth-porter/miniconda3/lib/python3.13/site-packages/fsspec/asyn.py:56> cb=[_chain_future.<locals>._call_set_state() at /home/kenneth-porter/miniconda3/lib/python3.13/asyncio/futures.py:391]> got Future <Task pending name='Task-111' coro=<_wait_for_close() running at /home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/connector.py:138> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]>> attached to a different loop
+2026-04-19 13:42:00 - ERROR - Task was destroyed but it is pending!
+task: <Task pending name='Task-111' coro=<_wait_for_close() done, defined at /home/kenneth-porter/miniconda3/lib/python3.13/site-packages/aiohttp/connector.py:136> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]>>

@@ -1,6 +1,0 @@
--r requirements.txt
-gcsfs
-zarr
-dask
-xarray
-thermofeel

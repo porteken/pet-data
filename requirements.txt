@@ -5,3 +5,11 @@ tqdm
 psycopg2-binary
 requests
 prophet
+cdsapi
+gcsfs
+zarr
+dask
+xarray
+thermofeel
+netcdf4
+python-dotenv

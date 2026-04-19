@@ -2,6 +2,9 @@
 *.parquet
 .ruff_cache/
 raw_*/
+test_out/
+tmp_*/
+.pytest_cache/
 utci_*/
 weather_*/
 test_*_parquet/

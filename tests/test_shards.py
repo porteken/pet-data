@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import shards
 from shards import (
     ShardKey,
     discover_common_shards,
@@ -154,3 +155,33 @@ class TestReadParquetFiles:
         df = read_parquet_files(tmp_path, [str(file_path)], columns=["a"])
         assert list(df.columns) == ["a"]
         assert len(df) == 2
+
+    def test_retries_transient_file_not_found(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "year=2020" / "tile_id=1"
+        path.mkdir(parents=True)
+        file_path = path / "data.parquet"
+        pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_parquet(file_path)
+
+        real_dataset = shards.dataset_module.dataset
+        call_count = 0
+
+        def flaky_dataset(*args: object, **kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise FileNotFoundError(str(file_path))
+            return real_dataset(*args, **kwargs)
+
+        monkeypatch.setattr(shards.dataset_module, "dataset", flaky_dataset)
+        monkeypatch.setattr(shards, "READ_PARQUET_MAX_ATTEMPTS", 2)
+        monkeypatch.setattr(shards, "READ_PARQUET_RETRY_DELAY_SECONDS", 0.0)
+
+        df = read_parquet_files(tmp_path, [str(file_path)], columns=["a"])
+
+        assert list(df.columns) == ["a"]
+        assert len(df) == 2
+        assert call_count == 2

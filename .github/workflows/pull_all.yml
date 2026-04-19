@@ -7,6 +7,15 @@ on:
     branches: [dev, prd]
   workflow_dispatch:
 
+env:
+  PIPELINE_MONTHS: "5 6 7 8 9"
+  WEATHER_TILE_SHARD_COUNT: "4"
+  WEATHER_MAX_WORKERS: "1"
+  WEATHER_CONCURRENCY_PROFILE: conservative
+  MRT_TILE_SHARD_COUNT: "2"
+  MRT_MAX_WORKERS: "2"
+  MRT_CDS_REQUEST_CONCURRENCY: "4"
+
 jobs:
   build-year-range:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -17,15 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: compute
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          from datetime import datetime, timezone
-          now = datetime.now(tz=timezone.utc)
-          ERA5_END = now.year - 2 if now.month < 4 else now.year - 1
-          print(f"years={json.dumps(list(range(2000, ERA5_END + 1)))}")
-          print(f"analytics_shards={json.dumps(list(range(20)))}")
-          PY
+        run: python build_year_range.py --github >> "$GITHUB_OUTPUT"
 
   setup-locations:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -38,9 +39,8 @@ jobs:
           python-version: "3.10"
       - name: Install Dependencies
         run: pip install -r requirements.txt
-      - name: Run setup
-        run: |
-          python cities.py
+      - name: Generate locations and tile metadata
+        run: python cities.py
       - name: Upload locations data
         uses: actions/upload-artifact@v4
         with:
@@ -78,38 +78,107 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix pet_data_csv/ --max-workers 8
 
-  compute-pet-google-era5:
+  compute-pet-hybrid:
     if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.years != '[]'
-    needs: [setup-locations, clear-pet-output, build-year-range]
+    needs: [build-year-range, setup-locations, clear-pet-output]
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 16
-      fail-fast: true
+      max-parallel: 2
+      fail-fast: false
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
-        time_shard_index: [0, 1, 2, 3]
-    name: ERA5->PET ${{ matrix.year }} time ${{ matrix.time_shard_index }}/4
+    name: Hybrid PET ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v4
-      - name: Authenticate GCP
-        uses: google-github-actions/auth@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-      - name: Pull ERA5 & Compute PET (Writes straight to S3)
+          python-version: "3.10"
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+      - name: Download locations-data
+        uses: actions/download-artifact@v4
+        with:
+          name: locations-data
+          path: .
+      - name: Pull weather, MRT, combine, and PET
+        env:
+          PET_ANALYTICS_USE_DASK: "1"
+          MRT_CDS_REQUEST_CONCURRENCY: ${{ env.MRT_CDS_REQUEST_CONCURRENCY }}
         run: |
-          gcloud run jobs execute era5-worker \
-            --region us-east1 --wait \
-            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
+          set -euo pipefail
+          pids=()
+          wait_all() {
+            local label="$1"
+            for pid in "${pids[@]}"; do
+              wait "$pid"
+            done
+            pids=()
+            echo "Completed $label"
+          }
+
+          rm -rf weather_data_parquet utci_data_parquet combined_data_parquet pet_data_csv
+
+          for month in $PIPELINE_MONTHS; do
+            for (( tile_shard=0; tile_shard<WEATHER_TILE_SHARD_COUNT; tile_shard++ )); do
+              python pull_weather_tiles.py \
+                --year=${{ matrix.year }} \
+                --month="$month" \
+                --tile-shard-index="$tile_shard" \
+                --tile-shard-count="$WEATHER_TILE_SHARD_COUNT" \
+                --max-workers="$WEATHER_MAX_WORKERS" \
+                --concurrency-profile="$WEATHER_CONCURRENCY_PROFILE" \
+                --out-dir=. &
+              pids+=("$!")
+            done
+            wait_all "weather-month-$month"
+          done
+
+          for month in $PIPELINE_MONTHS; do
+            for (( tile_shard=0; tile_shard<MRT_TILE_SHARD_COUNT; tile_shard++ )); do
+              python pull_mrt.py \
+                --year=${{ matrix.year }} \
+                --month="$month" \
+                --tile-shard-index="$tile_shard" \
+                --tile-shard-count="$MRT_TILE_SHARD_COUNT" \
+                --max-workers="$MRT_MAX_WORKERS" \
+                --out-dir=. &
+              pids+=("$!")
+            done
+            wait_all "mrt-month-$month"
+          done
+
+          for (( tile_shard=0; tile_shard<MRT_TILE_SHARD_COUNT; tile_shard++ )); do
+            python combine.py \
+              --year=${{ matrix.year }} \
+              --shard-index="$tile_shard" \
+              --shard-count="$MRT_TILE_SHARD_COUNT" &
+            pids+=("$!")
+          done
+          wait_all combine
+
+          for (( tile_shard=0; tile_shard<MRT_TILE_SHARD_COUNT; tile_shard++ )); do
+            python calculate_pet.py \
+              --year=${{ matrix.year }} \
+              --shard-index="$tile_shard" \
+              --shard-count="$MRT_TILE_SHARD_COUNT" &
+            pids+=("$!")
+          done
+          wait_all pet
+      - name: Sync PET data to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: aws s3 sync ./pet_data_csv/ s3://pet-parquet-files/pet_data_csv/
 
   generate-analytics:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [compute-pet-google-era5, build-year-range]
+    needs: [compute-pet-hybrid, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 20
-      fail-fast: true
+      fail-fast: false
       matrix:
         analytics_shard_index: ${{ fromJSON(needs.build-year-range.outputs.analytics_shards) }}
     name: Analytics shard ${{ matrix.analytics_shard_index }}/20
@@ -128,6 +197,8 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
       - name: Generate Analytics
+        env:
+          PET_ANALYTICS_USE_DASK: "1"
         run: python generate_analytics.py --shard-index ${{ matrix.analytics_shard_index }} --shard-count 20
       - name: Upload Analytics Shard
         uses: actions/upload-artifact@v4
@@ -157,7 +228,7 @@ jobs:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
         run: |
           python - <<'PY'
-          import os, sys, psycopg2
+          import os, psycopg2
           from pathlib import Path
           conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
           conn.autocommit = True
@@ -174,7 +245,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 20
-      fail-fast: true
+      fail-fast: false
       matrix:
         load_shard_index: ${{ fromJSON(needs.build-year-range.outputs.analytics_shards) }}
     name: Load shard ${{ matrix.load_shard_index }}/20

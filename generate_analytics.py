@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeAlias, TypedDict, cast
@@ -11,6 +12,11 @@ from typing import Any, TypeAlias, TypedDict, cast
 DataFrame: TypeAlias = Any
 np: Any = cast("Any", import_module("numpy"))
 pd: Any = cast("Any", import_module("pandas"))
+
+try:
+    dd: Any = import_module("dask.dataframe")
+except ImportError:
+    dd = None
 
 try:
     prophet_module: Any = import_module("prophet")
@@ -255,25 +261,7 @@ def _load_pet_frame(args: argparse.Namespace) -> DataFrame:
 
     all_files = _discover_pet_files(pet_root)
     if all_files:
-        logger.info(
-            "Loading %s PET files for analytics shard %s/%s.",
-            len(all_files),
-            args.shard_index,
-            args.shard_count,
-        )
-        frames = [
-            pd.read_parquet(f, columns=["location_id", "date", "pet"])
-            for f in all_files
-        ]
-        df = pd.concat(frames, ignore_index=True)
-        df["date"] = pd.to_datetime(df["date"])
-        df["year"] = df["date"].dt.year
-
-        if args.shard_count > 1:
-            location_ids = pd.to_numeric(df["location_id"], errors="coerce")
-            df = df[location_ids.mod(args.shard_count).eq(args.shard_index)].copy()
-
-        return df
+        return _load_pet_frame_from_parquet_shards(all_files, args=args)
 
     if pet_csv_path.exists():
         return _load_pet_frame_from_csv(
@@ -288,6 +276,58 @@ def _load_pet_frame(args: argparse.Namespace) -> DataFrame:
 
 def _output_dir(out_dir: Path, *, shard_index: int, shard_count: int) -> Path:
     return out_dir / f"shard_count={shard_count:05d}" / f"shard_index={shard_index:05d}"
+
+
+def _load_pet_frame_from_parquet_shards(
+    all_files: list[Path],
+    *,
+    args: argparse.Namespace,
+) -> DataFrame:
+    logger.info(
+        "Loading %s PET files for analytics shard %s/%s.",
+        len(all_files),
+        args.shard_index,
+        args.shard_count,
+    )
+    use_dask = dd is not None and os.getenv("PET_ANALYTICS_USE_DASK", "1") != "0"
+    if use_dask:
+        return _load_pet_frame_from_parquet_shards_with_dask(all_files, args=args)
+
+    frames = [
+        pd.read_parquet(f, columns=["location_id", "date", "pet"]) for f in all_files
+    ]
+    return _finalize_pet_frame(pd.concat(frames, ignore_index=True), args=args)
+
+
+def _load_pet_frame_from_parquet_shards_with_dask(
+    all_files: list[Path],
+    *,
+    args: argparse.Namespace,
+) -> DataFrame:
+    logger.info("Using Dask to load PET parquet shards.")
+    ddf = dd.read_parquet(
+        [str(file_path) for file_path in all_files],
+        columns=["location_id", "date", "pet"],
+    )
+    ddf["date"] = dd.to_datetime(ddf["date"])
+    ddf["year"] = ddf["date"].dt.year
+
+    if args.shard_count > 1:
+        location_ids = dd.to_numeric(ddf["location_id"], errors="coerce")
+        ddf = ddf[location_ids.mod(args.shard_count).eq(args.shard_index)]
+
+    return ddf.compute()
+
+
+def _finalize_pet_frame(df: DataFrame, *, args: argparse.Namespace) -> DataFrame:
+    df["date"] = pd.to_datetime(df["date"])
+    df["year"] = df["date"].dt.year
+
+    if args.shard_count > 1:
+        location_ids = pd.to_numeric(df["location_id"], errors="coerce")
+        df = df[location_ids.mod(args.shard_count).eq(args.shard_index)].copy()
+
+    return df
 
 
 def main() -> None:
