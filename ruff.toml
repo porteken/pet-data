@@ -1,55 +1,19 @@
-[project]
-name = "pet-data"
-version = "0.1.0"
-description = "PET Data Pipeline"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "numpy",
-    "pandas",
-    "pyarrow",
-    "tqdm",
-    "psycopg2-binary",
-    "requests",
-    "prophet",
-    "cdsapi",
-    "gcsfs",
-    "zarr",
-    "dask",
-    "xarray",
-    "thermofeel",
-    "netcdf4",
-    "python-dotenv",
-]
-
-[dependency-groups]
-dev = [
-    "pytest",
-    "pyright",
-    "ruff",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.ruff]
 line-length = 88
 exclude = ["typings", "venv", ".conda", "archive"]
 
-[tool.ruff.lint]
+[lint]
 select = ["ALL"]
-ignore = ["D203", "D213", "E501", "ANN401", "FBT001", "FBT002"]
+ignore = ["D203", "D213", "E501"]
 
-[tool.ruff.lint.mccabe]
+[lint.mccabe]
 max-complexity = 40
 
-[tool.ruff.lint.pylint]
+[lint.pylint]
 max-args = 12
 max-branches = 40
 max-statements = 300
 
-[tool.ruff.lint.per-file-ignores]
+[lint.per-file-ignores]
 "tests/**" = [
     "S101",     # assert is expected in tests
     "D100", "D101", "D102", "D103", "D104",  # no docstrings needed in tests

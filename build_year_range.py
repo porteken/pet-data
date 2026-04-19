@@ -60,9 +60,9 @@ def main() -> None:
         if "--yearly" in sys.argv:
             target_year = prev_year
             print(f"target_year={target_year}")  # noqa: T201
-            print(f"window_start={target_year}-05-01")  # noqa: T201
-            print(f"window_end={target_year}-09-30")  # noqa: T201
-            print(f"months={json.dumps(list(range(5, 10)))}")  # noqa: T201
+            print(f"window_start={target_year}-01-01")  # noqa: T201
+            print(f"window_end={target_year}-12-31")  # noqa: T201
+            print(f"months={json.dumps(list(range(1, 13)))}")  # noqa: T201
             print(f"analytics_shards={json.dumps(list(range(20)))}")  # noqa: T201
         else:
             print(f"start_year={era5_start}")  # noqa: T201

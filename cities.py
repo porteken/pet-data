@@ -6,8 +6,6 @@ import logging
 from importlib import import_module
 from typing import Any, TypeAlias, cast
 
-from boxes import generate_tile_outputs
-
 GRID_DEG: float = 0.25
 
 DataFrame: TypeAlias = Any
@@ -52,20 +50,15 @@ MAX_CITIES = 500
 def process_cities(df: DataFrame) -> DataFrame:
     """Deduplicate by ERA5 grid cell, cap at 500 cities, and assign location IDs."""
     df = df.copy()
-    sort_columns = ["population", "city", "state"]
-    ascending = [False, True, True]
 
-    # Sort deterministically so the highest-pop city wins each grid cell and
-    # population ties get a stable, reproducible location_id ordering.
-    df = df.sort_values(sort_columns, ascending=ascending, kind="mergesort")
+    # Sort by population descending so the highest-pop city wins each grid cell
+    df = df.sort_values("population", ascending=False)
 
     # Snap to the nearest ERA5 grid centre and keep one city per cell
     df["_snap_lat"] = (pd.to_numeric(df["lat"]) / GRID_DEG).round() * GRID_DEG
     df["_snap_lng"] = (pd.to_numeric(df["lng"]) / GRID_DEG).round() * GRID_DEG
     df = df.drop_duplicates(subset=["_snap_lat", "_snap_lng"], keep="first")
     df = df.drop(columns=["_snap_lat", "_snap_lng"])
-
-    df = df.sort_values(sort_columns, ascending=ascending, kind="mergesort")
 
     df = df.head(MAX_CITIES).reset_index(drop=True).reset_index(names="location_id")
 
@@ -84,8 +77,6 @@ def main() -> None:
 
     df.to_csv("cities.csv", index=False)
     logger.info("Successfully saved %d cities to cities.csv", len(df))
-    generate_tile_outputs("cities.csv")
-    logger.info("Successfully generated CDS tile metadata under output_tiles")
 
 
 if __name__ == "__main__":

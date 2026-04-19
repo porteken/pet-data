@@ -1,478 +1,0 @@
-Running local pipeline in smoke mode: 2024 2025 first week of May.
-====== Step 1: Setup locations, tiles, and clean outputs ======
-2026-04-19 11:07:21,703 - Generating locations dataset...
-2026-04-19 11:07:21,839 - Successfully saved 500 cities to cities.csv
-2026-04-19 11:07:21,849 - Input cities: 500
-2026-04-19 11:07:21,849 - Unique snapped ERA5 cells: 500
-2026-04-19 11:07:21,849 - Occupied adaptive tiles: 10
-2026-04-19 11:07:21,850 - Successfully generated CDS tile metadata under output_tiles
-====== Step 2: Pull Google weather (parallel, Dask-backed) ======
-2026-04-19 11:07:22 - INFO - Google weather year=2024 city_shard=1/2 time_shard=0/1: 2 batch(es)
-Weather 2024:   0%|          | 0/2 [00:00<?, ?it/s]2026-04-19 11:07:22 - INFO - Google weather year=2024 city_shard=0/2 time_shard=0/1: 2 batch(es)
-Weather 2024:   0%|          | 0/2 [00:00<?, ?it/s]2026-04-19 11:07:26 - INFO - Computing Google weather for year 2024 batch 18 over 250 cities.
-2026-04-19 11:07:26 - INFO - Computing Google weather for year 2024 batch 18 over 250 cities.
-2026-04-19 11:07:26 - INFO - Computing Google weather for year 2024 batch 17 over 250 cities.
-2026-04-19 11:07:26 - INFO - Computing Google weather for year 2024 batch 17 over 250 cities.
-Weather 2024:  50%|█████     | 1/2 [00:38<00:38, 38.89s/it]Weather 2024:  50%|█████     | 1/2 [00:43<00:43, 43.10s/it]Weather 2024: 100%|██████████| 2/2 [01:02<00:00, 29.85s/it]Weather 2024: 100%|██████████| 2/2 [01:02<00:00, 31.20s/it]
-2026-04-19 11:08:25 - INFO - Google weather year=2025 city_shard=0/2 time_shard=0/1: 2 batch(es)
-Weather 2025:   0%|          | 0/2 [00:00<?, ?it/s]Weather 2024: 100%|██████████| 2/2 [01:06<00:00, 31.66s/it]Weather 2024: 100%|██████████| 2/2 [01:06<00:00, 33.38s/it]
-2026-04-19 11:08:29 - INFO - Computing Google weather for year 2025 batch 18 over 250 cities.
-2026-04-19 11:08:29 - INFO - Computing Google weather for year 2025 batch 17 over 250 cities.
-2026-04-19 11:08:29 - INFO - Google weather year=2025 city_shard=1/2 time_shard=0/1: 2 batch(es)
-Weather 2025:   0%|          | 0/2 [00:00<?, ?it/s]2026-04-19 11:08:33 - INFO - Computing Google weather for year 2025 batch 17 over 250 cities.
-2026-04-19 11:08:33 - INFO - Computing Google weather for year 2025 batch 18 over 250 cities.
-Weather 2025:  50%|█████     | 1/2 [00:22<00:22, 22.44s/it]Weather 2025:  50%|█████     | 1/2 [00:26<00:26, 26.07s/it]Weather 2025: 100%|██████████| 2/2 [01:01<00:00, 32.30s/it]Weather 2025: 100%|██████████| 2/2 [01:01<00:00, 30.82s/it]
-Weather 2025: 100%|██████████| 2/2 [01:05<00:00, 33.67s/it]Weather 2025: 100%|██████████| 2/2 [01:05<00:00, 32.53s/it]
-====== Step 3: Pull CDS MRT using tile bounding boxes ======
-2026-04-19 11:09:40 - INFO - Using existing tile metadata under output_tiles.
-2026-04-19 11:09:40 - INFO - Using existing tile metadata under output_tiles.
-2026-04-19 11:09:40 - INFO - Processing 3 MRT tiles with 2 worker threads.
-2026-04-19 11:09:40 - INFO - Processing 4 MRT tiles with 2 worker threads.
-MRT tiles:   0%|          | 0/3 [00:00<?, ?tile/s]MRT tiles:   0%|          | 0/4 [00:00<?, ?tile/s]2026-04-19 11:09:41 - INFO - Starting MRT tile 1 for 2024-05.
-2026-04-19 11:09:41 - INFO - Starting MRT tile 2 for 2024-05.
-2026-04-19 11:09:41 - INFO - Starting MRT tile 5 for 2024-05.
-2026-04-19 11:09:41 - INFO - Starting MRT tile 4 for 2024-05.
-2026-04-19 11:09:44,854 INFO Request ID is a6038867-14c4-4f1a-9fc7-34fdd175177e
-2026-04-19 11:09:44 - INFO - Request ID is a6038867-14c4-4f1a-9fc7-34fdd175177e
-2026-04-19 11:09:44,855 INFO Request ID is bc214634-bb76-4e57-8916-cb206d6459eb
-2026-04-19 11:09:44 - INFO - Request ID is bc214634-bb76-4e57-8916-cb206d6459eb
-2026-04-19 11:09:45 - INFO - CDS request bc214634-bb76-4e57-8916-cb206d6459eb for derived-utci-historical is accepted.
-2026-04-19 11:09:45 - INFO - CDS request a6038867-14c4-4f1a-9fc7-34fdd175177e for derived-utci-historical is accepted.
-2026-04-19 11:09:45,250 INFO Request ID is f536fe7c-bc03-451f-85ff-68e59fdc5091
-2026-04-19 11:09:45 - INFO - Request ID is f536fe7c-bc03-451f-85ff-68e59fdc5091
-2026-04-19 11:09:45,316 INFO Request ID is f7868138-4cb2-4b15-ba75-b48c82c2c6b7
-2026-04-19 11:09:45 - INFO - Request ID is f7868138-4cb2-4b15-ba75-b48c82c2c6b7
-2026-04-19 11:09:45 - INFO - CDS request f7868138-4cb2-4b15-ba75-b48c82c2c6b7 for derived-utci-historical is accepted.
-2026-04-19 11:09:49 - INFO - CDS request f536fe7c-bc03-451f-85ff-68e59fdc5091 for derived-utci-historical is accepted.
-2026-04-19 11:10:20 - INFO - CDS request bc214634-bb76-4e57-8916-cb206d6459eb for derived-utci-historical is running.
-2026-04-19 11:10:20 - INFO - CDS request a6038867-14c4-4f1a-9fc7-34fdd175177e for derived-utci-historical is running.
-2026-04-19 11:10:20 - INFO - CDS request f7868138-4cb2-4b15-ba75-b48c82c2c6b7 for derived-utci-historical is completed.
-2026-04-19 11:10:21,090 INFO status has been updated to successful
-2026-04-19 11:10:21 - INFO - status has been updated to successful
-2026-04-19 11:10:21 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-19/ccea9cb00cf5070bcd529b400aba513d.zip
-
-ccea9cb00cf5070bcd529b400aba513d.zip:   0%|          | 0.00/261k [00:00<?, ?B/s][A
-ccea9cb00cf5070bcd529b400aba513d.zip: 100%|██████████| 261k/261k [00:00<00:00, 272kB/s][A
-                                                                                       [A2026-04-19 11:10:24 - INFO - MRT tile 2 completed for 2024.
-MRT tiles:  33%|███▎      | 1/3 [00:43<01:26, 43.26s/tile]2026-04-19 11:10:24 - INFO - Starting MRT tile 8 for 2024-05.
-2026-04-19 11:10:24,579 INFO Request ID is 2a5bc665-1f71-4700-b344-142aac6da344
-2026-04-19 11:10:24 - INFO - Request ID is 2a5bc665-1f71-4700-b344-142aac6da344
-2026-04-19 11:10:24 - INFO - CDS request 2a5bc665-1f71-4700-b344-142aac6da344 for derived-utci-historical is accepted.
-2026-04-19 11:10:25 - INFO - CDS request f536fe7c-bc03-451f-85ff-68e59fdc5091 for derived-utci-historical is completed.
-2026-04-19 11:10:25,290 INFO status has been updated to successful
-2026-04-19 11:10:25 - INFO - status has been updated to successful
-2026-04-19 11:10:25 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-04-19/55582dc701ca709e9750628188655315.zip
-
-55582dc701ca709e9750628188655315.zip:   0%|          | 0.00/1.27M [00:00<?, ?B/s][A
-55582dc701ca709e9750628188655315.zip:  79%|███████▉  | 1.00M/1.27M [00:01<00:00, 708kB/s][A
-                                                                                         [A2026-04-19 11:10:28 - INFO - MRT tile 4 completed for 2024.
-MRT tiles:  25%|██▌       | 1/4 [00:47<02:21, 47.26s/tile]2026-04-19 11:10:28 - INFO - Starting MRT tile 7 for 2024-05.
-2026-04-19 11:10:28,540 INFO Request ID is 96f558c4-d72f-47df-bdbd-e0fe059c65a1
-2026-04-19 11:10:28 - INFO - Request ID is 96f558c4-d72f-47df-bdbd-e0fe059c65a1
-2026-04-19 11:10:28 - INFO - CDS request 96f558c4-d72f-47df-bdbd-e0fe059c65a1 for derived-utci-historical is accepted.
-2026-04-19 11:10:40 - INFO - CDS request 2a5bc665-1f71-4700-b344-142aac6da344 for derived-utci-historical is completed.
-2026-04-19 11:10:40,180 INFO status has been updated to successful
-2026-04-19 11:10:40 - INFO - status has been updated to successful
-2026-04-19 11:10:42 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/a6b6c5bb67947d361d7a80c51db0909f.zip
-
-a6b6c5bb67947d361d7a80c51db0909f.zip:   0%|          | 0.00/248k [00:00<?, ?B/s][A
-a6b6c5bb67947d361d7a80c51db0909f.zip: 100%|██████████| 248k/248k [00:00<00:00, 261kB/s][A
-                                                                                       [A2026-04-19 11:10:43 - INFO - MRT tile 8 completed for 2024.
-MRT tiles:  67%|██████▋   | 2/3 [01:02<00:29, 29.28s/tile]2026-04-19 11:10:43 - INFO - CDS request 96f558c4-d72f-47df-bdbd-e0fe059c65a1 for derived-utci-historical is running.
-2026-04-19 11:11:00 - INFO - CDS request bc214634-bb76-4e57-8916-cb206d6459eb for derived-utci-historical is completed.
-2026-04-19 11:11:00 - INFO - CDS request a6038867-14c4-4f1a-9fc7-34fdd175177e for derived-utci-historical is completed.
-2026-04-19 11:11:00,783 INFO status has been updated to successful
-2026-04-19 11:11:00 - INFO - status has been updated to successful
-2026-04-19 11:11:00,868 INFO status has been updated to successful
-2026-04-19 11:11:00 - INFO - status has been updated to successful
-2026-04-19 11:11:01 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/b6ad7eb94090f9229cb40cc8d1a5cb2f.zip
-2026-04-19 11:11:01 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/9e39195d1f67a54376d2e535674d9801.zip
-
-b6ad7eb94090f9229cb40cc8d1a5cb2f.zip:   0%|          | 0.00/1.45M [00:00<?, ?B/s][A
-9e39195d1f67a54376d2e535674d9801.zip:   0%|          | 0.00/297k [00:00<?, ?B/s][A
-9e39195d1f67a54376d2e535674d9801.zip: 100%|██████████| 297k/297k [00:01<00:00, 284kB/s][A
-                                                                                       [A2026-04-19 11:11:02 - INFO - MRT tile 1 completed for 2024.
-MRT tiles:  50%|█████     | 2/4 [01:21<01:19, 39.80s/tile]2026-04-19 11:11:02 - INFO - Starting MRT tile 10 for 2024-05.
-
-b6ad7eb94090f9229cb40cc8d1a5cb2f.zip:  69%|██████▉   | 1.00M/1.45M [00:01<00:00, 750kB/s][A
-b6ad7eb94090f9229cb40cc8d1a5cb2f.zip: 100%|██████████| 1.45M/1.45M [00:01<00:00, 1.08MB/s][A
-                                                                                          [A2026-04-19 11:11:03,118 INFO Request ID is 200dcd0d-13c4-4c1c-bb2f-b88d4c36b69a
-2026-04-19 11:11:03 - INFO - Request ID is 200dcd0d-13c4-4c1c-bb2f-b88d4c36b69a
-2026-04-19 11:11:03 - INFO - MRT tile 5 completed for 2024.
-MRT tiles: 100%|██████████| 3/3 [01:22<00:00, 24.85s/tile]MRT tiles: 100%|██████████| 3/3 [01:22<00:00, 27.45s/tile]
-2026-04-19 11:11:03 - INFO - MRT processing complete for 3 selected tiles.
-2026-04-19 11:11:03 - INFO - CDS request 200dcd0d-13c4-4c1c-bb2f-b88d4c36b69a for derived-utci-historical is accepted.
-2026-04-19 11:11:04 - INFO - CDS request 96f558c4-d72f-47df-bdbd-e0fe059c65a1 for derived-utci-historical is completed.
-2026-04-19 11:11:04,277 INFO status has been updated to successful
-2026-04-19 11:11:04 - INFO - status has been updated to successful
-2026-04-19 11:11:04 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/c04a687106971861599c61a3ded0f068.zip
-
-c04a687106971861599c61a3ded0f068.zip:   0%|          | 0.00/316k [00:00<?, ?B/s][A
-c04a687106971861599c61a3ded0f068.zip: 100%|██████████| 316k/316k [00:01<00:00, 300kB/s][A
-                                                                                       [A2026-04-19 11:11:06 - INFO - MRT tile 7 completed for 2024.
-MRT tiles:  75%|███████▌  | 3/4 [01:25<00:23, 23.18s/tile]2026-04-19 11:11:09 - INFO - Using existing tile metadata under output_tiles.
-2026-04-19 11:11:09 - INFO - Processing 3 MRT tiles with 2 worker threads.
-MRT tiles:   0%|          | 0/3 [00:00<?, ?tile/s]2026-04-19 11:11:14 - INFO - Starting MRT tile 3 for 2024-05.
-2026-04-19 11:11:14 - INFO - Starting MRT tile 6 for 2024-05.
-2026-04-19 11:11:15,099 INFO Request ID is f1d5138b-767a-4aae-b15c-d38f8ea4e2bb
-2026-04-19 11:11:15 - INFO - Request ID is f1d5138b-767a-4aae-b15c-d38f8ea4e2bb
-2026-04-19 11:11:15,150 INFO Request ID is 8c5cc6ec-df00-4f5d-83fb-111694f6bdf7
-2026-04-19 11:11:15 - INFO - Request ID is 8c5cc6ec-df00-4f5d-83fb-111694f6bdf7
-2026-04-19 11:11:15 - INFO - CDS request f1d5138b-767a-4aae-b15c-d38f8ea4e2bb for derived-utci-historical is accepted.
-2026-04-19 11:11:15 - INFO - CDS request 8c5cc6ec-df00-4f5d-83fb-111694f6bdf7 for derived-utci-historical is accepted.
-2026-04-19 11:11:18 - INFO - CDS request 200dcd0d-13c4-4c1c-bb2f-b88d4c36b69a for derived-utci-historical is running.
-2026-04-19 11:11:30 - INFO - CDS request f1d5138b-767a-4aae-b15c-d38f8ea4e2bb for derived-utci-historical is completed.
-2026-04-19 11:11:30 - INFO - CDS request 8c5cc6ec-df00-4f5d-83fb-111694f6bdf7 for derived-utci-historical is completed.
-2026-04-19 11:11:30,714 INFO status has been updated to successful
-2026-04-19 11:11:30 - INFO - status has been updated to successful
-2026-04-19 11:11:31 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-04-19/b2b7ce7df88595587e2a5b1662914cbb.zip
-2026-04-19 11:11:31,068 INFO status has been updated to successful
-2026-04-19 11:11:31 - INFO - status has been updated to successful
-2026-04-19 11:11:31 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/f6ecf6c4de82b2a483ca10e2b8c6dee.zip
-
-b2b7ce7df88595587e2a5b1662914cbb.zip:   0%|          | 0.00/1.43M [00:00<?, ?B/s][A
-
-f6ecf6c4de82b2a483ca10e2b8c6dee.zip:   0%|          | 0.00/372k [00:00<?, ?B/s][A[A
-
-f6ecf6c4de82b2a483ca10e2b8c6dee.zip: 100%|██████████| 372k/372k [00:01<00:00, 342kB/s][A[A
-
-                                                                                      [A[A
-b2b7ce7df88595587e2a5b1662914cbb.zip:  70%|██████▉   | 1.00M/1.43M [00:01<00:00, 757kB/s][A
-b2b7ce7df88595587e2a5b1662914cbb.zip: 100%|██████████| 1.43M/1.43M [00:01<00:00, 1.07MB/s][A
-                                                                                          [A2026-04-19 11:11:33 - INFO - MRT tile 3 completed for 2024.
-MRT tiles:  33%|███▎      | 1/3 [00:24<00:48, 24.05s/tile]2026-04-19 11:11:33 - INFO - Starting MRT tile 9 for 2024-05.
-2026-04-19 11:11:33 - INFO - MRT tile 6 completed for 2024.
-MRT tiles:  67%|██████▋   | 2/3 [00:24<00:10, 10.02s/tile]2026-04-19 11:11:33,692 INFO Request ID is a851e648-57b8-4380-81b9-11493055d3b6
-2026-04-19 11:11:33 - INFO - Request ID is a851e648-57b8-4380-81b9-11493055d3b6
-2026-04-19 11:11:33 - INFO - CDS request a851e648-57b8-4380-81b9-11493055d3b6 for derived-utci-historical is accepted.
-2026-04-19 11:11:38 - INFO - CDS request 200dcd0d-13c4-4c1c-bb2f-b88d4c36b69a for derived-utci-historical is completed.
-2026-04-19 11:11:38,859 INFO status has been updated to successful
-2026-04-19 11:11:38 - INFO - status has been updated to successful
-2026-04-19 11:11:39 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-19/909ec8eea04d7a9e6bef1bd482d658d2.zip
-
-909ec8eea04d7a9e6bef1bd482d658d2.zip:   0%|          | 0.00/347k [00:00<?, ?B/s][A
-909ec8eea04d7a9e6bef1bd482d658d2.zip: 100%|██████████| 347k/347k [00:01<00:00, 308kB/s][A
-                                                                                       [A2026-04-19 11:11:40 - INFO - MRT tile 10 completed for 2024.
-MRT tiles: 100%|██████████| 4/4 [01:59<00:00, 27.74s/tile]MRT tiles: 100%|██████████| 4/4 [01:59<00:00, 29.99s/tile]
-2026-04-19 11:11:40 - INFO - MRT processing complete for 4 selected tiles.
-2026-04-19 11:11:46 - INFO - Using existing tile metadata under output_tiles.
-2026-04-19 11:11:46 - INFO - Processing 4 MRT tiles with 2 worker threads.
-MRT tiles:   0%|          | 0/4 [00:00<?, ?tile/s]2026-04-19 11:11:49 - INFO - CDS request a851e648-57b8-4380-81b9-11493055d3b6 for derived-utci-historical is completed.
-2026-04-19 11:11:49,335 INFO status has been updated to successful
-2026-04-19 11:11:49 - INFO - status has been updated to successful
-2026-04-19 11:11:49 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-04-19/a09182c3518e47c6d32a755a6c11b020.zip
-
-a09182c3518e47c6d32a755a6c11b020.zip:   0%|          | 0.00/335k [00:00<?, ?B/s][A
-a09182c3518e47c6d32a755a6c11b020.zip: 100%|██████████| 335k/335k [00:01<00:00, 312kB/s][A
-                                                                                       [A2026-04-19 11:11:51 - INFO - MRT tile 9 completed for 2024.
-MRT tiles: 100%|██████████| 3/3 [00:42<00:00, 13.56s/tile]MRT tiles: 100%|██████████| 3/3 [00:42<00:00, 14.01s/tile]
-2026-04-19 11:11:51 - INFO - MRT processing complete for 3 selected tiles.
-2026-04-19 11:11:57 - INFO - Using existing tile metadata under output_tiles.
-2026-04-19 11:11:57 - INFO - Starting MRT tile 4 for 2025-05.
-2026-04-19 11:11:57 - INFO - Processing 3 MRT tiles with 2 worker threads.
-MRT tiles:   0%|          | 0/3 [00:00<?, ?tile/s]2026-04-19 11:11:57 - INFO - Starting MRT tile 1 for 2025-05.
-2026-04-19 11:11:57,565 INFO Request ID is a6b99cf0-1444-4646-bea6-4a48bb0100dd
-2026-04-19 11:11:57 - INFO - Request ID is a6b99cf0-1444-4646-bea6-4a48bb0100dd
-2026-04-19 11:11:57,591 INFO Request ID is ba671553-8046-4c37-a492-752730dc3aa8
-2026-04-19 11:11:57 - INFO - Request ID is ba671553-8046-4c37-a492-752730dc3aa8
-2026-04-19 11:11:57 - INFO - CDS request a6b99cf0-1444-4646-bea6-4a48bb0100dd for derived-utci-historical is accepted.
-2026-04-19 11:11:57 - INFO - CDS request ba671553-8046-4c37-a492-752730dc3aa8 for derived-utci-historical is accepted.
-2026-04-19 11:12:02 - INFO - Starting MRT tile 2 for 2025-05.
-2026-04-19 11:12:02 - INFO - Starting MRT tile 5 for 2025-05.
-2026-04-19 11:12:02,999 INFO Request ID is d7ba3767-a1a3-4be6-8a05-f2c388fbe7df
-2026-04-19 11:12:02 - INFO - Request ID is d7ba3767-a1a3-4be6-8a05-f2c388fbe7df
-2026-04-19 11:12:03,108 INFO Request ID is f87ecb5f-e1e5-4a83-a850-8a1de8e85983
-2026-04-19 11:12:03 - INFO - Request ID is f87ecb5f-e1e5-4a83-a850-8a1de8e85983
-2026-04-19 11:12:03 - INFO - CDS request d7ba3767-a1a3-4be6-8a05-f2c388fbe7df for derived-utci-historical is accepted.
-2026-04-19 11:12:03 - INFO - CDS request f87ecb5f-e1e5-4a83-a850-8a1de8e85983 for derived-utci-historical is accepted.
-2026-04-19 11:12:13 - INFO - CDS request a6b99cf0-1444-4646-bea6-4a48bb0100dd for derived-utci-historical is completed.
-2026-04-19 11:12:13 - INFO - CDS request ba671553-8046-4c37-a492-752730dc3aa8 for derived-utci-historical is completed.
-2026-04-19 11:12:13,156 INFO status has been updated to successful
-2026-04-19 11:12:13 - INFO - status has been updated to successful
-2026-04-19 11:12:13,190 INFO status has been updated to successful
-2026-04-19 11:12:13 - INFO - status has been updated to successful
-2026-04-19 11:12:13 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/1aa00d06c86afad622c4bcda0c90623f.zip
-2026-04-19 11:12:13 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-04-19/1cdd82644fc2760b44765ffbb9153dc5.zip
-
-1aa00d06c86afad622c4bcda0c90623f.zip:   0%|          | 0.00/1.46M [00:00<?, ?B/s][A
-
-1cdd82644fc2760b44765ffbb9153dc5.zip:   0%|          | 0.00/339k [00:00<?, ?B/s][A[A
-
-1cdd82644fc2760b44765ffbb9153dc5.zip: 100%|██████████| 339k/339k [00:01<00:00, 311kB/s][A[A
-
-                                                                                       [A[A2026-04-19 11:12:15 - INFO - MRT tile 1 completed for 2025.
-MRT tiles:  25%|██▌       | 1/4 [00:28<01:26, 28.79s/tile]2026-04-19 11:12:15 - INFO - Starting MRT tile 7 for 2025-05.
-
-1aa00d06c86afad622c4bcda0c90623f.zip:  69%|██████▊   | 1.00M/1.46M [00:01<00:00, 692kB/s][A
-1aa00d06c86afad622c4bcda0c90623f.zip: 100%|██████████| 1.46M/1.46M [00:01<00:00, 1.02MB/s][A
-                                                                                          [A2026-04-19 11:12:15,891 INFO Request ID is 67ed64e5-0cdf-4b52-8308-d5d17e8c0c6b
-2026-04-19 11:12:15 - INFO - Request ID is 67ed64e5-0cdf-4b52-8308-d5d17e8c0c6b
-2026-04-19 11:12:15 - INFO - MRT tile 4 completed for 2025.
-MRT tiles:  50%|█████     | 2/4 [00:29<00:24, 12.07s/tile]2026-04-19 11:12:15 - INFO - Starting MRT tile 10 for 2025-05.
-2026-04-19 11:12:16 - INFO - CDS request 67ed64e5-0cdf-4b52-8308-d5d17e8c0c6b for derived-utci-historical is accepted.
-2026-04-19 11:12:16,301 INFO Request ID is eb1f6454-47ec-4188-805e-644f200e3cb5
-2026-04-19 11:12:16 - INFO - Request ID is eb1f6454-47ec-4188-805e-644f200e3cb5
-2026-04-19 11:12:16 - INFO - CDS request eb1f6454-47ec-4188-805e-644f200e3cb5 for derived-utci-historical is accepted.
-2026-04-19 11:12:18 - INFO - CDS request f87ecb5f-e1e5-4a83-a850-8a1de8e85983 for derived-utci-historical is running.
-2026-04-19 11:12:31 - INFO - CDS request 67ed64e5-0cdf-4b52-8308-d5d17e8c0c6b for derived-utci-historical is completed.
-2026-04-19 11:12:31,501 INFO status has been updated to successful
-2026-04-19 11:12:31 - INFO - status has been updated to successful
-2026-04-19 11:12:31 - INFO - CDS request eb1f6454-47ec-4188-805e-644f200e3cb5 for derived-utci-historical is completed.
-2026-04-19 11:12:31 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-19/d97b0b2e97986dad7a8dc5729cc02968.zip
-2026-04-19 11:12:31,915 INFO status has been updated to successful
-2026-04-19 11:12:31 - INFO - status has been updated to successful
-2026-04-19 11:12:32 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/24549c041333323c8f0d775a1189f749.zip
-
-d97b0b2e97986dad7a8dc5729cc02968.zip:   0%|          | 0.00/358k [00:00<?, ?B/s][A
-
-24549c041333323c8f0d775a1189f749.zip:   0%|          | 0.00/389k [00:00<?, ?B/s][A[A
-d97b0b2e97986dad7a8dc5729cc02968.zip: 100%|██████████| 358k/358k [00:01<00:00, 293kB/s][A
-                                                                                       [A2026-04-19 11:12:33 - INFO - MRT tile 7 completed for 2025.
-MRT tiles:  75%|███████▌  | 3/4 [00:46<00:14, 14.64s/tile]
-
-24549c041333323c8f0d775a1189f749.zip: 100%|██████████| 389k/389k [00:01<00:00, 361kB/s][A[A
-
-                                                                                       [A[A2026-04-19 11:12:33 - INFO - MRT tile 10 completed for 2025.
-MRT tiles: 100%|██████████| 4/4 [00:47<00:00,  8.96s/tile]MRT tiles: 100%|██████████| 4/4 [00:47<00:00, 11.78s/tile]
-2026-04-19 11:12:33 - INFO - MRT processing complete for 4 selected tiles.
-2026-04-19 11:12:38 - INFO - CDS request d7ba3767-a1a3-4be6-8a05-f2c388fbe7df for derived-utci-historical is completed.
-2026-04-19 11:12:38 - INFO - CDS request f87ecb5f-e1e5-4a83-a850-8a1de8e85983 for derived-utci-historical is completed.
-2026-04-19 11:12:38,757 INFO status has been updated to successful
-2026-04-19 11:12:38 - INFO - status has been updated to successful
-2026-04-19 11:12:38,872 INFO status has been updated to successful
-2026-04-19 11:12:38 - INFO - status has been updated to successful
-2026-04-19 11:12:39 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-19/e45efca622a0cbc48a3afea4084ade5.zip
-2026-04-19 11:12:39 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/ee3faadf3274ba0a8efbb1d76e53f2a.zip
-
-e45efca622a0cbc48a3afea4084ade5.zip:   0%|          | 0.00/291k [00:00<?, ?B/s][A
-
-ee3faadf3274ba0a8efbb1d76e53f2a.zip:   0%|          | 0.00/1.69M [00:00<?, ?B/s][A[A2026-04-19 11:12:39 - INFO - Using existing tile metadata under output_tiles.
-2026-04-19 11:12:39 - INFO - Processing 3 MRT tiles with 2 worker threads.
-MRT tiles:   0%|          | 0/3 [00:00<?, ?tile/s]
-e45efca622a0cbc48a3afea4084ade5.zip: 100%|██████████| 291k/291k [00:00<00:00, 308kB/s][A
-                                                                                      [A2026-04-19 11:12:41 - INFO - MRT tile 2 completed for 2025.
-MRT tiles:  33%|███▎      | 1/3 [00:43<01:27, 43.81s/tile]2026-04-19 11:12:41 - INFO - Starting MRT tile 8 for 2025-05.
-
-
-ee3faadf3274ba0a8efbb1d76e53f2a.zip:  59%|█████▉    | 1.00M/1.69M [00:01<00:01, 635kB/s][A[A2026-04-19 11:12:41,368 INFO Request ID is fa8d90c2-f70a-4019-8707-1cf66d76195b
-2026-04-19 11:12:41 - INFO - Request ID is fa8d90c2-f70a-4019-8707-1cf66d76195b
-2026-04-19 11:12:41 - INFO - CDS request fa8d90c2-f70a-4019-8707-1cf66d76195b for derived-utci-historical is accepted.
-
-
-ee3faadf3274ba0a8efbb1d76e53f2a.zip: 100%|██████████| 1.69M/1.69M [00:01<00:00, 1.06MB/s][A[A
-
-                                                                                         [A[A2026-04-19 11:12:41 - INFO - MRT tile 5 completed for 2025.
-MRT tiles:  67%|██████▋   | 2/3 [00:44<00:18, 18.50s/tile]2026-04-19 11:12:50 - INFO - Starting MRT tile 6 for 2025-05.
-2026-04-19 11:12:50 - INFO - Starting MRT tile 3 for 2025-05.
-2026-04-19 11:12:50,671 INFO Request ID is 2f01e943-e05a-4c72-9dc5-9d0fe95b9c44
-2026-04-19 11:12:50 - INFO - Request ID is 2f01e943-e05a-4c72-9dc5-9d0fe95b9c44
-2026-04-19 11:12:50,696 INFO Request ID is 43fb3767-8db8-4801-9c98-fc87b1b24afd
-2026-04-19 11:12:50 - INFO - Request ID is 43fb3767-8db8-4801-9c98-fc87b1b24afd
-2026-04-19 11:12:50 - INFO - CDS request 2f01e943-e05a-4c72-9dc5-9d0fe95b9c44 for derived-utci-historical is accepted.
-2026-04-19 11:12:50 - INFO - CDS request 43fb3767-8db8-4801-9c98-fc87b1b24afd for derived-utci-historical is accepted.
-2026-04-19 11:12:56 - INFO - CDS request fa8d90c2-f70a-4019-8707-1cf66d76195b for derived-utci-historical is completed.
-2026-04-19 11:12:56,975 INFO status has been updated to successful
-2026-04-19 11:12:56 - INFO - status has been updated to successful
-2026-04-19 11:12:57 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-19/31a4c269d8586dee45eee73beb530e69.zip
-
-31a4c269d8586dee45eee73beb530e69.zip:   0%|          | 0.00/275k [00:00<?, ?B/s][A
-31a4c269d8586dee45eee73beb530e69.zip: 100%|██████████| 275k/275k [00:00<00:00, 291kB/s][A
-                                                                                       [A2026-04-19 11:12:58 - INFO - MRT tile 8 completed for 2025.
-MRT tiles: 100%|██████████| 3/3 [01:01<00:00, 17.80s/tile]MRT tiles: 100%|██████████| 3/3 [01:01<00:00, 20.52s/tile]
-2026-04-19 11:12:58 - INFO - MRT processing complete for 3 selected tiles.
-2026-04-19 11:13:26 - INFO - CDS request 43fb3767-8db8-4801-9c98-fc87b1b24afd for derived-utci-historical is completed.
-2026-04-19 11:13:26 - INFO - CDS request 2f01e943-e05a-4c72-9dc5-9d0fe95b9c44 for derived-utci-historical is completed.
-2026-04-19 11:13:26,443 INFO status has been updated to successful
-2026-04-19 11:13:26 - INFO - status has been updated to successful
-2026-04-19 11:13:26,444 INFO status has been updated to successful
-2026-04-19 11:13:26 - INFO - status has been updated to successful
-2026-04-19 11:13:26 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-1/2026-04-19/7247d738f786fb4236a20b3347841d13.zip
-2026-04-19 11:13:26 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-2/2026-04-19/1068c44840ab98ef7a53022dc6727077.zip
-
-7247d738f786fb4236a20b3347841d13.zip:   0%|          | 0.00/1.67M [00:00<?, ?B/s][A
-
-1068c44840ab98ef7a53022dc6727077.zip:   0%|          | 0.00/401k [00:00<?, ?B/s][A[A
-
-1068c44840ab98ef7a53022dc6727077.zip: 100%|██████████| 401k/401k [00:01<00:00, 372kB/s][A[A
-
-                                                                                       [A[A
-7247d738f786fb4236a20b3347841d13.zip:  60%|█████▉    | 1.00M/1.67M [00:01<00:00, 740kB/s][A2026-04-19 11:13:28 - INFO - MRT tile 3 completed for 2025.
-MRT tiles:  33%|███▎      | 1/3 [00:48<01:37, 48.97s/tile]2026-04-19 11:13:28 - INFO - Starting MRT tile 9 for 2025-05.
-
-7247d738f786fb4236a20b3347841d13.zip: 100%|██████████| 1.67M/1.67M [00:01<00:00, 1.28MB/s][A
-                                                                                          [A2026-04-19 11:13:29 - INFO - MRT tile 6 completed for 2025.
-MRT tiles:  67%|██████▋   | 2/3 [00:49<00:20, 20.33s/tile]2026-04-19 11:13:29,236 INFO Request ID is cf6512a5-283b-4b75-b030-bd6732a8a360
-2026-04-19 11:13:29 - INFO - Request ID is cf6512a5-283b-4b75-b030-bd6732a8a360
-2026-04-19 11:13:29 - INFO - CDS request cf6512a5-283b-4b75-b030-bd6732a8a360 for derived-utci-historical is accepted.
-2026-04-19 11:13:44 - INFO - CDS request cf6512a5-283b-4b75-b030-bd6732a8a360 for derived-utci-historical is completed.
-2026-04-19 11:13:44,870 INFO status has been updated to successful
-2026-04-19 11:13:44 - INFO - status has been updated to successful
-2026-04-19 11:13:45 - INFO - Downloading https://object-store.os-api.cci2.ecmwf.int:443/cci2-prod-cache-3/2026-04-19/c405831074f89dac5a4a6c93213ff8c3.zip
-
-c405831074f89dac5a4a6c93213ff8c3.zip:   0%|          | 0.00/373k [00:00<?, ?B/s][A
-c405831074f89dac5a4a6c93213ff8c3.zip: 100%|██████████| 373k/373k [00:01<00:00, 331kB/s][A
-                                                                                       [A2026-04-19 11:13:46 - INFO - MRT tile 9 completed for 2025.
-MRT tiles: 100%|██████████| 3/3 [01:06<00:00, 19.14s/tile]MRT tiles: 100%|██████████| 3/3 [01:06<00:00, 22.33s/tile]
-2026-04-19 11:13:46 - INFO - MRT processing complete for 3 selected tiles.
-====== Step 4: Combine hourly weather + MRT shards ======
-2026-04-19 11:13:47 - INFO - Wrote 2520 rows to combined_data_parquet/year=2024/month=05/tile_id=1/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 4872 rows to combined_data_parquet/year=2024/month=05/tile_id=2/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 6720 rows to combined_data_parquet/year=2024/month=05/tile_id=3/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 13776 rows to combined_data_parquet/year=2024/month=05/tile_id=4/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 16968 rows to combined_data_parquet/year=2024/month=05/tile_id=5/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 27552 rows to combined_data_parquet/year=2024/month=05/tile_id=6/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 6552 rows to combined_data_parquet/year=2024/month=05/tile_id=7/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 2352 rows to combined_data_parquet/year=2024/month=05/tile_id=8/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 1176 rows to combined_data_parquet/year=2024/month=05/tile_id=9/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 1512 rows to combined_data_parquet/year=2024/month=05/tile_id=10/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 4872 rows to combined_data_parquet/year=2025/month=05/tile_id=2/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 2520 rows to combined_data_parquet/year=2025/month=05/tile_id=1/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 6720 rows to combined_data_parquet/year=2025/month=05/tile_id=3/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 13776 rows to combined_data_parquet/year=2025/month=05/tile_id=4/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 16968 rows to combined_data_parquet/year=2025/month=05/tile_id=5/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 27552 rows to combined_data_parquet/year=2025/month=05/tile_id=6/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 2352 rows to combined_data_parquet/year=2025/month=05/tile_id=8/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 6552 rows to combined_data_parquet/year=2025/month=05/tile_id=7/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 1176 rows to combined_data_parquet/year=2025/month=05/tile_id=9/combined.parquet.
-2026-04-19 11:13:47 - INFO - Wrote 1512 rows to combined_data_parquet/year=2025/month=05/tile_id=10/combined.parquet.
-====== Step 5: Calculate PET from combined hourly shards ======
-Processing PET for shard 2024-05-tile-001.
-Processing PET for shard 2024-05-tile-003.
-Processing PET for shard 2024-05-tile-002.
-Computing PET for 2179 unique combinations.
-Computing PET for 5903 unique combinations.
-Computing PET for 4254 unique combinations.
-PET core computation finished in 1.08 seconds.
-Saved 105 rows to pet_data_csv/year=2024/month=05/tile_id=1/pet_batch_001.parquet.
-Processing PET for shard 2024-05-tile-004.
-Computing PET for 12366 unique combinations.
-PET core computation finished in 1.87 seconds.
-Saved 203 rows to pet_data_csv/year=2024/month=05/tile_id=2/pet_batch_002.parquet.
-Processing PET for shard 2024-05-tile-005.
-Computing PET for 14863 unique combinations.
-PET core computation finished in 2.51 seconds.
-Saved 280 rows to pet_data_csv/year=2024/month=05/tile_id=3/pet_batch_003.parquet.
-Processing PET for shard 2024-05-tile-006.
-Computing PET for 24402 unique combinations.
-PET core computation finished in 5.04 seconds.
-Saved 574 rows to pet_data_csv/year=2024/month=05/tile_id=4/pet_batch_004.parquet.
-Processing PET for shard 2024-05-tile-007.
-Computing PET for 5134 unique combinations.
-PET core computation finished in 6.01 seconds.
-Saved 707 rows to pet_data_csv/year=2024/month=05/tile_id=5/pet_batch_005.parquet.
-Processing PET for shard 2024-05-tile-008.
-Computing PET for 1998 unique combinations.
-PET core computation finished in 2.22 seconds.
-Saved 273 rows to pet_data_csv/year=2024/month=05/tile_id=7/pet_batch_007.parquet.
-Processing PET for shard 2024-05-tile-010.
-Computing PET for 1370 unique combinations.
-PET core computation finished in 1.01 seconds.
-Saved 98 rows to pet_data_csv/year=2024/month=05/tile_id=8/pet_batch_008.parquet.
-PET core computation finished in 0.78 seconds.
-Saved 63 rows to pet_data_csv/year=2024/month=05/tile_id=10/pet_batch_010.parquet.
-Processing PET for shard 2025-05-tile-001.
-Computing PET for 2228 unique combinations.
-Processing PET for shard 2025-05-tile-002.
-Computing PET for 4247 unique combinations.
-PET core computation finished in 1.14 seconds.
-Saved 105 rows to pet_data_csv/year=2025/month=05/tile_id=1/pet_batch_001.parquet.
-Processing PET for shard 2025-05-tile-004.
-Computing PET for 12411 unique combinations.
-PET core computation finished in 1.92 seconds.
-Saved 203 rows to pet_data_csv/year=2025/month=05/tile_id=2/pet_batch_002.parquet.
-Processing PET for shard 2025-05-tile-005.
-Computing PET for 14657 unique combinations.
-PET core computation finished in 9.59 seconds.
-Saved 1148 rows to pet_data_csv/year=2024/month=05/tile_id=6/pet_batch_006.parquet.
-Processing PET for shard 2024-05-tile-009.
-Computing PET for 1109 unique combinations.
-PET core computation finished in 0.67 seconds.
-Saved 49 rows to pet_data_csv/year=2024/month=05/tile_id=9/pet_batch_009.parquet.
-Processing PET for shard 2025-05-tile-003.
-Computing PET for 5961 unique combinations.
-PET core computation finished in 5.06 seconds.
-Saved 574 rows to pet_data_csv/year=2025/month=05/tile_id=4/pet_batch_004.parquet.
-Processing PET for shard 2025-05-tile-007.
-Computing PET for 5042 unique combinations.
-PET core computation finished in 2.53 seconds.
-Saved 280 rows to pet_data_csv/year=2025/month=05/tile_id=3/pet_batch_003.parquet.
-Processing PET for shard 2025-05-tile-006.
-Computing PET for 24645 unique combinations.
-PET core computation finished in 5.91 seconds.
-Saved 707 rows to pet_data_csv/year=2025/month=05/tile_id=5/pet_batch_005.parquet.
-Processing PET for shard 2025-05-tile-008.
-Computing PET for 2034 unique combinations.
-PET core computation finished in 2.22 seconds.
-Saved 273 rows to pet_data_csv/year=2025/month=05/tile_id=7/pet_batch_007.parquet.
-Processing PET for shard 2025-05-tile-010.
-Computing PET for 1368 unique combinations.
-PET core computation finished in 1.03 seconds.
-Saved 98 rows to pet_data_csv/year=2025/month=05/tile_id=8/pet_batch_008.parquet.
-PET core computation finished in 0.80 seconds.
-Saved 63 rows to pet_data_csv/year=2025/month=05/tile_id=10/pet_batch_010.parquet.
-PET core computation finished in 9.60 seconds.
-Saved 1148 rows to pet_data_csv/year=2025/month=05/tile_id=6/pet_batch_006.parquet.
-Processing PET for shard 2025-05-tile-009.
-Computing PET for 1130 unique combinations.
-PET core computation finished in 0.69 seconds.
-Saved 49 rows to pet_data_csv/year=2025/month=05/tile_id=9/pet_batch_009.parquet.
-====== Step 6: Generate Analytics (parallel, CPU-aware) ======
-Importing plotly failed. Interactive plots will not work.
-2026-04-19 11:14:15,030 - Loading 20 PET files for analytics shard 4/8.
-2026-04-19 11:14:15,030 - Using Dask to load PET parquet shards.
-Importing plotly failed. Interactive plots will not work.
-Importing plotly failed. Interactive plots will not work.
-2026-04-19 11:14:15,033 - Loading 20 PET files for analytics shard 2/8.
-2026-04-19 11:14:15,033 - Using Dask to load PET parquet shards.
-2026-04-19 11:14:15,034 - Loading 20 PET files for analytics shard 3/8.
-2026-04-19 11:14:15,034 - Using Dask to load PET parquet shards.
-Importing plotly failed. Interactive plots will not work.
-Importing plotly failed. Interactive plots will not work.
-2026-04-19 11:14:15,036 - Loading 20 PET files for analytics shard 0/8.
-2026-04-19 11:14:15,036 - Using Dask to load PET parquet shards.
-2026-04-19 11:14:15,037 - Loading 20 PET files for analytics shard 1/8.
-2026-04-19 11:14:15,037 - Using Dask to load PET parquet shards.
-Importing plotly failed. Interactive plots will not work.
-2026-04-19 11:14:15,039 - Loading 20 PET files for analytics shard 6/8.
-2026-04-19 11:14:15,039 - Using Dask to load PET parquet shards.
-Importing plotly failed. Interactive plots will not work.
-2026-04-19 11:14:15,050 - Loading 20 PET files for analytics shard 7/8.
-2026-04-19 11:14:15,050 - Using Dask to load PET parquet shards.
-Importing plotly failed. Interactive plots will not work.
-2026-04-19 11:14:15,061 - Loading 20 PET files for analytics shard 5/8.
-2026-04-19 11:14:15,061 - Using Dask to load PET parquet shards.
-2026-04-19 11:14:15,159 - Generating analytics_data_csv/shard_count=00008/shard_index=00002/percentiles.parquet...
-2026-04-19 11:14:15,161 - Generating analytics_data_csv/shard_count=00008/shard_index=00004/percentiles.parquet...
-2026-04-19 11:14:15,163 - Generating analytics_data_csv/shard_count=00008/shard_index=00006/percentiles.parquet...
-2026-04-19 11:14:15,165 - Generating analytics_data_csv/shard_count=00008/shard_index=00003/percentiles.parquet...
-2026-04-19 11:14:15,173 - Generating analytics_data_csv/shard_count=00008/shard_index=00001/percentiles.parquet...
-2026-04-19 11:14:15,174 - Generating analytics_data_csv/shard_count=00008/shard_index=00000/percentiles.parquet...
-2026-04-19 11:14:15,188 - Generating analytics_data_csv/shard_count=00008/shard_index=00007/percentiles.parquet...
-2026-04-19 11:14:15,196 - Generating analytics_data_csv/shard_count=00008/shard_index=00005/percentiles.parquet...
-2026-04-19 11:14:15,226 - Generating analytics_data_csv/shard_count=00008/shard_index=00002/forecast.parquet...
-2026-04-19 11:14:15,228 - Generating analytics_data_csv/shard_count=00008/shard_index=00006/forecast.parquet...
-2026-04-19 11:14:15,232 - Generating analytics_data_csv/shard_count=00008/shard_index=00004/forecast.parquet...
-2026-04-19 11:14:15,241 - Generating analytics_data_csv/shard_count=00008/shard_index=00001/forecast.parquet...
-2026-04-19 11:14:15,242 - Generating analytics_data_csv/shard_count=00008/shard_index=00000/forecast.parquet...
-2026-04-19 11:14:15,248 - Generating analytics_data_csv/shard_count=00008/shard_index=00003/forecast.parquet...
-2026-04-19 11:14:15,278 - Generating analytics_data_csv/shard_count=00008/shard_index=00007/forecast.parquet...
-2026-04-19 11:14:15,279 - Generating analytics_data_csv/shard_count=00008/shard_index=00005/forecast.parquet...
-2026-04-19 11:14:20,324 - Generating analytics_data_csv/shard_count=00008/shard_index=00001/change_per_decade.parquet...
-2026-04-19 11:14:20,380 - Generating analytics_data_csv/shard_count=00008/shard_index=00002/change_per_decade.parquet...
-2026-04-19 11:14:20,385 - Generating analytics_data_csv/shard_count=00008/shard_index=00000/change_per_decade.parquet...
-2026-04-19 11:14:20,527 - Generating analytics_data_csv/shard_count=00008/shard_index=00004/change_per_decade.parquet...
-2026-04-19 11:14:20,640 - Generating analytics_data_csv/shard_count=00008/shard_index=00006/change_per_decade.parquet...
-2026-04-19 11:14:20,718 - Generating analytics_data_csv/shard_count=00008/shard_index=00005/change_per_decade.parquet...
-2026-04-19 11:14:20,778 - Generating analytics_data_csv/shard_count=00008/shard_index=00007/change_per_decade.parquet...
-2026-04-19 11:14:20,844 - Generating analytics_data_csv/shard_count=00008/shard_index=00003/change_per_decade.parquet...
-2026-04-19 11:14:25,426 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00001.
-2026-04-19 11:14:25,578 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00002.
-2026-04-19 11:14:25,607 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00000.
-2026-04-19 11:14:25,852 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00004.
-2026-04-19 11:14:26,097 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00006.
-2026-04-19 11:14:26,148 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00005.
-2026-04-19 11:14:26,311 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00007.
-2026-04-19 11:14:26,509 - Analytics generation complete for analytics_data_csv/shard_count=00008/shard_index=00003.
-====== Step 6.5: Save combined pet.csv reference before upload ======
-Saved 7000 rows to pet.csv
-====== Pipeline complete! Skipped DB load. ======

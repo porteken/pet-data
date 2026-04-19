@@ -1,9 +1,6 @@
 # Use an official, lightweight Python 3.10 image
 FROM python:3.10-slim
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
 # Keep Python from buffering stdout/stderr so logs appear instantly in Google Cloud
 ENV PYTHONUNBUFFERED=1
 # Keep Python from writing .pyc files
@@ -17,12 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pyproject.toml first to leverage Docker layer caching
-COPY pyproject.toml ./
+# Copy your requirements files first to leverage Docker layer caching
+COPY requirements.txt requirements-gcs.txt* ./
 
-# Install Python dependencies using uv
-# We use --system to install into the system python since we're in a container
-RUN uv pip install --system --no-cache .
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt && \
+    if [ -f requirements-gcs.txt ]; then pip install --no-cache-dir -r requirements-gcs.txt; fi
 
 # Copy the rest of your local project files into the container
 COPY . .

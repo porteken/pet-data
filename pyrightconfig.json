@@ -14,7 +14,6 @@
     ],
     "venvPath": ".",
     "venv": "venv",
-    "stubPath": "typings",
     "reportMissingImports": false,
     "reportUnknownMemberType": "none",
     "reportUnknownArgumentType": "none",

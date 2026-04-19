@@ -80,19 +80,3 @@ class TestProcessCities:
         )
         result = process_cities(df)
         assert result.iloc[0]["location_id"] == 0
-
-    def test_population_ties_are_broken_stably_by_city_and_state(self) -> None:
-        df = pd.DataFrame(
-            {
-                "city": ["Wichita Falls", "Palm Bay"],
-                "state": ["TX", "FL"],
-                "lat": [33.91, 28.03],
-                "lng": [-98.49, -80.58],
-                "population": [104_898, 104_898],
-            }
-        )
-
-        result = process_cities(df)
-
-        assert result.iloc[0]["city"] == "Palm Bay"
-        assert result.iloc[1]["city"] == "Wichita Falls"

@@ -674,18 +674,18 @@ def _run_pet(
 
 
 def pet_corrected(
-    tair: Any = 21.0,
-    t_mrt: Any = 21.0,
-    v_air: Any = 0.1,
-    rh: Any = 50.0,
-    m_activity: Any = 80.0,
-    icl: Any = 0.9,
-    body_position: Any = "standing",
-    sex: Any = "male",
-    age: Any = 35.0,
-    mbody: Any = 75.0,
-    ht: Any = 1.80,
-) -> Any:
+    tair: object = 21.0,
+    t_mrt: object = 21.0,
+    v_air: object = 0.1,
+    rh: object = 50.0,
+    m_activity: object = 80.0,
+    icl: object = 0.9,
+    body_position: object = "standing",
+    sex: object = "male",
+    age: object = 35.0,
+    mbody: object = 75.0,
+    ht: object = 1.80,
+) -> object | None:
     """Return corrected PET for scalar or vectorized weather/body inputs."""
     ctx, is_scalar = _prepare_context(
         tair,

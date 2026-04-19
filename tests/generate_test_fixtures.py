@@ -15,8 +15,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from boxes import build_tile_artifacts, read_city_records
-
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
@@ -32,31 +30,6 @@ CITIES = [
     {"location_id": 7, "lat": 32.75, "lng": -117.25},
     {"location_id": 116, "lat": 26.0, "lng": -97.5},
 ]
-
-
-def _cities_with_tiles() -> list[dict]:
-    city_records = [
-        {
-            "location_id": city["location_id"],
-            "city": f"City{city['location_id']}",
-            "lat": city["lat"],
-            "lng": city["lng"],
-        }
-        for city in CITIES
-    ]
-    temp_path = Path(".fixture_cities.csv")
-    pd.DataFrame(city_records).to_csv(temp_path, index=False)
-    try:
-        artifacts = build_tile_artifacts(read_city_records(temp_path))
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-    tile_lookup = {
-        int(row["location_id"]): int(row["tile_id"])
-        for row in artifacts.city_to_tile_rows
-        if "location_id" in row
-    }
-    return [{**city, "tile_id": tile_lookup[city["location_id"]]} for city in CITIES]
 
 
 def _generate_era5_combined(out_root: Path | None = None) -> None:
@@ -137,7 +110,7 @@ def generate_mrt_parquet(
     """Write CDS-style MRT parquet files partitioned by year/month/tile_id."""
     out = out_root or MRT_OUT
     rng = np.random.default_rng(77)
-    city_list = cities or _cities_with_tiles()
+    city_list = cities or CITIES
     hours = days * 24
     timestamps = pd.date_range(f"{year}-{month:02d}-01", periods=hours, freq="h")
 

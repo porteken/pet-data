@@ -3,55 +3,13 @@
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast, overload
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-
-
-class FileInfo(Protocol):
-    """Protocol for file info objects."""
-
-    type: int
-    path: str
-
-
-class FileSystem(Protocol):
-    """Protocol for filesystem objects."""
-
-    @overload
-    def get_file_info(self, paths: str) -> FileInfo: ...
-
-    @overload
-    def get_file_info(self, paths: list[str] | object) -> list[FileInfo]: ...
-
-    def get_file_info(
-        self,
-        paths: str | list[str] | object,
-    ) -> FileInfo | list[FileInfo]:
-        """Get info for one or more files."""
-        ...
-
-    def open_input_file(self, path: str) -> Any:
-        """Open a file for reading."""
-        ...
-
-    def open_output_stream(self, path: str) -> Any:
-        """Open a file for writing."""
-        ...
-
-    def create_dir(self, path: str, recursive: bool = True) -> None:
-        """Create a directory."""
-        ...
-
-    def move(self, src: str, dest: str) -> None:
-        """Move a file or directory."""
-        ...
-
 
 pa = cast("Any", import_module("pyarrow"))
 dataset_module = cast("Any", import_module("pyarrow.dataset"))
@@ -60,8 +18,6 @@ fs_module = cast("Any", import_module("pyarrow.fs"))
 DataFrame: TypeAlias = Any
 LOGGER = logging.getLogger(__name__)
 ShardMapping: TypeAlias = dict["ShardKey", list[str]]
-READ_PARQUET_MAX_ATTEMPTS = 3
-READ_PARQUET_RETRY_DELAY_SECONDS = 1.0
 
 
 @dataclass(frozen=True, order=True)
@@ -87,7 +43,7 @@ class ShardKey:
         return f"{self.year}-tile-{self.tile_id:03d}"
 
 
-def resolve_filesystem(base_uri: str | Path) -> tuple[FileSystem, str]:
+def resolve_filesystem(base_uri: str | Path) -> tuple[Any, str]:
     """Return a filesystem object plus normalized root path."""
     uri_text = str(base_uri)
     if "://" in uri_text:
@@ -180,42 +136,13 @@ def read_parquet_files(
 ) -> DataFrame:
     """Read a set of parquet files from a shared filesystem into a DataFrame."""
     filesystem, _ = resolve_filesystem(base_uri)
-    for attempt in range(1, READ_PARQUET_MAX_ATTEMPTS + 1):
-        try:
-            dataset = dataset_module.dataset(
-                file_paths,
-                filesystem=filesystem,
-                format="parquet",
-            )
-            table = dataset.to_table(columns=columns, filter=filters)
-            return table.to_pandas()
-        except FileNotFoundError:  # noqa: PERF203
-            if attempt == READ_PARQUET_MAX_ATTEMPTS:
-                raise
-
-            missing_paths = _missing_file_paths(filesystem, file_paths)
-            LOGGER.warning(
-                "Parquet read hit a transient missing file under %s (attempt %s/%s). "
-                "Missing paths: %s. Retrying in %.1f seconds.",
-                base_uri,
-                attempt,
-                READ_PARQUET_MAX_ATTEMPTS,
-                missing_paths or file_paths,
-                READ_PARQUET_RETRY_DELAY_SECONDS,
-            )
-            time.sleep(READ_PARQUET_RETRY_DELAY_SECONDS)
-
-    msg = f"Unable to read parquet files from {base_uri}: {file_paths}"
-    raise FileNotFoundError(msg)
-
-
-def _missing_file_paths(filesystem: FileSystem, file_paths: list[str]) -> list[str]:
-    file_infos = cast("list[FileInfo]", filesystem.get_file_info(file_paths))
-    return [
-        file_info.path
-        for file_info in file_infos
-        if file_info.type == fs_module.FileType.NotFound
-    ]
+    dataset = dataset_module.dataset(
+        file_paths,
+        filesystem=filesystem,
+        format="parquet",
+    )
+    table = dataset.to_table(columns=columns, filter=filters)
+    return table.to_pandas()
 
 
 def _parse_shard_key(root_path: str, file_path: str) -> ShardKey | None:

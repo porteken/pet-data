@@ -5,15 +5,6 @@ on:
   schedule:
     - cron: '0 5 2 1 *'
 
-env:
-  PIPELINE_MONTHS: "5 6 7 8 9"
-  WEATHER_TILE_SHARD_COUNT: "4"
-  WEATHER_MAX_WORKERS: "1"
-  WEATHER_CONCURRENCY_PROFILE: conservative
-  MRT_TILE_SHARD_COUNT: "2"
-  MRT_MAX_WORKERS: "2"
-  MRT_CDS_REQUEST_CONCURRENCY: "4"
-
 jobs:
   build-target-window:
     runs-on: ubuntu-latest
@@ -27,31 +18,15 @@ jobs:
       - id: compute
         run: python build_year_range.py --github --yearly >> "$GITHUB_OUTPUT"
 
-  setup-locations:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Generate locations and tile metadata
-        run: python cities.py
-      - name: Upload locations-data
-        uses: actions/upload-artifact@v4
-        with:
-          name: locations-data
-          path: |
-            cities.csv
-            output_tiles/
-          retention-days: 1
-
   compute-pet:
-    needs: [build-target-window, setup-locations]
+    needs: build-target-window
     runs-on: ubuntu-latest
-    name: Hybrid PET ${{ needs.build-target-window.outputs.target_year }}
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        time_shard_index: [0, 1, 2, 3]
+    name: ERA5->PET ${{ needs.build-target-window.outputs.target_year }} time ${{ matrix.time_shard_index }}/4
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -60,78 +35,19 @@ jobs:
           python-version: "3.10"
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Download locations-data
-        uses: actions/download-artifact@v4
-        with:
-          name: locations-data
-          path: .
-      - name: Pull weather, MRT, combine, and PET
-        env:
-          MRT_CDS_REQUEST_CONCURRENCY: ${{ env.MRT_CDS_REQUEST_CONCURRENCY }}
+      - name: Compute PET Data
         run: |
-          set -euo pipefail
-          pids=()
-          wait_all() {
-            local label="$1"
-            for pid in "${pids[@]}"; do
-              wait "$pid"
-            done
-            pids=()
-            echo "Completed $label"
-          }
-
-          rm -rf weather_data_parquet utci_data_parquet combined_data_parquet pet_data_csv
-
-          for month in $PIPELINE_MONTHS; do
-            for (( tile_shard=0; tile_shard<WEATHER_TILE_SHARD_COUNT; tile_shard++ )); do
-              python pull_weather_tiles.py \
-                --year=${{ needs.build-target-window.outputs.target_year }} \
-                --month="$month" \
-                --tile-shard-index="$tile_shard" \
-                --tile-shard-count="$WEATHER_TILE_SHARD_COUNT" \
-                --max-workers="$WEATHER_MAX_WORKERS" \
-                --concurrency-profile="$WEATHER_CONCURRENCY_PROFILE" \
-                --out-dir=. &
-              pids+=("$!")
-            done
-            wait_all "weather-month-$month"
-          done
-
-          for month in $PIPELINE_MONTHS; do
-            for (( tile_shard=0; tile_shard<MRT_TILE_SHARD_COUNT; tile_shard++ )); do
-              python pull_mrt.py \
-                --year=${{ needs.build-target-window.outputs.target_year }} \
-                --month="$month" \
-                --tile-shard-index="$tile_shard" \
-                --tile-shard-count="$MRT_TILE_SHARD_COUNT" \
-                --max-workers="$MRT_MAX_WORKERS" \
-                --out-dir=. &
-              pids+=("$!")
-            done
-            wait_all "mrt-month-$month"
-          done
-
-          for (( tile_shard=0; tile_shard<MRT_TILE_SHARD_COUNT; tile_shard++ )); do
-            python combine.py \
-              --year=${{ needs.build-target-window.outputs.target_year }} \
-              --shard-index="$tile_shard" \
-              --shard-count="$MRT_TILE_SHARD_COUNT" &
-            pids+=("$!")
-          done
-          wait_all combine
-
-          for (( tile_shard=0; tile_shard<MRT_TILE_SHARD_COUNT; tile_shard++ )); do
-            python calculate_pet.py \
-              --year=${{ needs.build-target-window.outputs.target_year }} \
-              --shard-index="$tile_shard" \
-              --shard-count="$MRT_TILE_SHARD_COUNT" &
-            pids+=("$!")
-          done
-          wait_all pet
+          python google_era5.py \
+            --year ${{ needs.build-target-window.outputs.target_year }} \
+            --city-shard-count 1 \
+            --time-shard-index ${{ matrix.time_shard_index }} \
+            --time-shard-count 4 \
+            --max-workers 4 \
+            --concurrency-profile aggressive
       - name: Upload PET Parquet
         uses: actions/upload-artifact@v4
         with:
-          name: pet-data
+          name: pet-data-${{ matrix.time_shard_index }}
           path: pet_data_csv/
           retention-days: 1
 
@@ -173,12 +89,13 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
       - name: Download Computed PET Data
         uses: actions/download-artifact@v4
         with:
-          name: pet-data
+          pattern: pet-data-*
           path: pet_data_csv
+          merge-multiple: true
       - name: Download Exported CSV
         uses: actions/download-artifact@v4
         with:
@@ -186,8 +103,6 @@ jobs:
       - name: Build Full PET CSV For Analytics
         run: python historical_pet_update.py merge pet_full.csv existing_pet.csv --dirs pet_data_csv
       - name: Generate Analytics
-        env:
-          PET_ANALYTICS_USE_DASK: "1"
         run: python generate_analytics.py --pet-csv pet_full.csv --shard-index ${{ matrix.shard_index }} --shard-count 20
       - name: Upload analytics shard
         uses: actions/upload-artifact@v4
@@ -233,8 +148,9 @@ jobs:
       - name: Download Computed PET Data
         uses: actions/download-artifact@v4
         with:
-          name: pet-data
+          pattern: pet-data-*
           path: pet_data_csv
+          merge-multiple: true
       - name: Download Analytics Shard
         uses: actions/download-artifact@v4
         with:

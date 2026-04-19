@@ -390,7 +390,8 @@ class _PetCorrectedCallable(Protocol):
         rh: object,
         *,
         icl: float,
-    ) -> Any: ...
+    ) -> Any:  # noqa: ANN401
+        ...
 
 
 try:
@@ -444,9 +445,7 @@ _C = 243.04
 
 EXPECTED_LOCATION_COUNT = 0
 THREE_DIMENSIONAL_ARRAY_NDIMS = 3
-# Google ARCO ERA5 stores integer time coordinates as hours since 1900-01-01.
-# Using the wrong epoch silently shifts every requested hour and timestamp.
-ERA5_TIME_ORIGIN = "1900-01-01"
+ERA5_TIME_ORIGIN = "1959-01-01"
 DEFAULT_BATCH_HOURS = 24 * 30
 ERA5_THREAD_LOCAL = threading.local()
 
