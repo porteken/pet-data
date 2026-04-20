@@ -32,12 +32,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev --extra gcs
       - name: Compute PET Data
         run: |
-          python google_era5.py \
+          uv run python google_era5.py \
             --year ${{ needs.build-target-window.outputs.target_year }} \
             --city-shard-count 1 \
             --time-shard-index ${{ matrix.time_shard_index }} \
@@ -60,13 +64,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Export Existing PET Rows
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: python historical_pet_update.py export "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}" existing_pet.csv
+        run: uv run python historical_pet_update.py export "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}" existing_pet.csv
       - name: Upload Exported CSV
         uses: actions/upload-artifact@v4
         with:
@@ -87,9 +95,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Download Computed PET Data
         uses: actions/download-artifact@v4
         with:
@@ -101,9 +113,9 @@ jobs:
         with:
           name: existing-pet-csv
       - name: Build Full PET CSV For Analytics
-        run: python historical_pet_update.py merge pet_full.csv existing_pet.csv --dirs pet_data_csv
+        run: uv run python historical_pet_update.py merge pet_full.csv existing_pet.csv --dirs pet_data_csv
       - name: Generate Analytics
-        run: python generate_analytics.py --pet-csv pet_full.csv --shard-index ${{ matrix.shard_index }} --shard-count 20
+        run: uv run python generate_analytics.py --pet-csv pet_full.csv --shard-index ${{ matrix.shard_index }} --shard-count 20
       - name: Upload analytics shard
         uses: actions/upload-artifact@v4
         with:
@@ -120,13 +132,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Clean Up Database Window
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: python historical_pet_update.py delete-window "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}"
+        run: uv run python historical_pet_update.py delete-window "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}"
 
   load-to-db:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -142,9 +158,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Download Computed PET Data
         uses: actions/download-artifact@v4
         with:
@@ -159,7 +179,7 @@ jobs:
       - name: Load Shard to Database
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.shard_index }} --load-shard-count 20
+        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -170,10 +190,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+        run: uv run python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change

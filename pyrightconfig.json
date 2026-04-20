@@ -2,6 +2,7 @@
     "include": ["*.py", "tests/**/*.py"],
     "exclude": [
         "venv",
+        ".venv",
         "typings",
         "**/__pycache__",
         ".ruff_cache",
@@ -13,7 +14,7 @@
         "**/node_modules", "**/.*"
     ],
     "venvPath": ".",
-    "venv": "venv",
+    "venv": ".venv",
     "reportMissingImports": false,
     "reportUnknownMemberType": "none",
     "reportUnknownArgumentType": "none",

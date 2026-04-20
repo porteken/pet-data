@@ -1,7 +1,0 @@
-numpy
-pandas
-pyarrow
-tqdm
-psycopg2-binary
-requests
-prophet

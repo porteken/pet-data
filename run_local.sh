@@ -9,6 +9,8 @@ if [ -f .env ]; then
     set +a
 fi
 
+RUN_LOCAL_USE_UV=${RUN_LOCAL_USE_UV:-1}
+UV_BIN=${UV_BIN:-uv}
 PYTHON_BIN=${PYTHON_BIN:-python}
 GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
 AWS_BIN=${AWS_BIN:-aws}
@@ -37,6 +39,15 @@ RUN_LOCAL_CLOUD_RUN_JOB=${RUN_LOCAL_CLOUD_RUN_JOB:-era5-worker}
 RUN_LOCAL_S3_BUCKET=${RUN_LOCAL_S3_BUCKET:-pet-parquet-files}
 RUN_LOCAL_S3_PREFIX=${RUN_LOCAL_S3_PREFIX:-local-run/${USER:-unknown-user}}
 RUN_LOCAL_CLEAR_MAX_WORKERS=${RUN_LOCAL_CLEAR_MAX_WORKERS:-8}
+
+if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" ]]; then
+    echo "WARNING: RUN_LOCAL_SKIP_DB_LOAD=1 means this run will not update Supabase."
+fi
+
+if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+    echo "WARNING: RUN_LOCAL_USE_CLOUD_RUN=1 uses the deployed Cloud Run image, not your local checkout."
+    echo "         Use RUN_LOCAL_PROVISION_CLOUD_RUN=1 to redeploy it first, or RUN_LOCAL_USE_CLOUD_RUN=0 to run local google_era5.py."
+fi
 
 REMOTE_BASE_PREFIX=""
 REMOTE_OUT_DIR=""
@@ -69,6 +80,31 @@ _require_executable() {
 
     echo "Required executable not found: $executable" >&2
     exit 1
+}
+
+_require_python_runner() {
+    if [[ "$RUN_LOCAL_USE_UV" == "1" ]]; then
+        _require_executable "$UV_BIN"
+    else
+        _require_executable "$PYTHON_BIN"
+    fi
+}
+
+_sync_python_environment() {
+    if [[ "$RUN_LOCAL_USE_UV" != "1" ]]; then
+        return
+    fi
+
+    echo "Syncing local project environment with uv..."
+    "$UV_BIN" sync --locked --extra gcs
+}
+
+_run_python() {
+    if [[ "$RUN_LOCAL_USE_UV" == "1" ]]; then
+        "$UV_BIN" run python "$@"
+    else
+        "$PYTHON_BIN" "$@"
+    fi
 }
 
 _join_csv_args() {
@@ -110,7 +146,7 @@ _assert_pet_output_available() {
 
 _materialize_pet_csv() {
     echo "====== Step 2.5: Save combined pet.csv reference before analytics ======"
-    "$PYTHON_BIN" - <<'PY'
+    _run_python - <<'PY'
 import pandas as pd
 from pathlib import Path
 
@@ -128,7 +164,7 @@ PY
 
 _clear_remote_pet_prefix() {
     echo "Clearing remote Cloud Run output at s3://${RUN_LOCAL_S3_BUCKET}/${REMOTE_PET_PREFIX}/"
-    "$PYTHON_BIN" clear_s3_prefix.py \
+    _run_python clear_s3_prefix.py \
         --bucket "$RUN_LOCAL_S3_BUCKET" \
         --prefix "${REMOTE_PET_PREFIX}/" \
         --max-workers "$RUN_LOCAL_CLEAR_MAX_WORKERS"
@@ -261,6 +297,9 @@ fi
 
 export ALL_YEARS
 
+_require_python_runner
+_sync_python_environment
+
 echo "====== Step 1: Compute year ranges + setup locations ======"
 mkdir -p output_tiles pet_data_csv analytics_data_csv
 if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
@@ -268,7 +307,7 @@ if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
 fi
 rm -rf analytics_data_csv/shard_count=*
 
-"$PYTHON_BIN" cities.py
+_run_python cities.py
 
 CITY_COUNT=$(awk 'END {print (NR > 0 ? NR - 1 : 0)}' cities.csv)
 if (( CITY_COUNT < 1 )); then
@@ -320,7 +359,7 @@ fi
 echo "====== Step 2: Compute ERA5 + PET ======"
 if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
     if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
-        _require_executable "$PYTHON_BIN"
+        _require_python_runner
         _require_executable "$GCLOUD_BIN"
         _require_executable "$AWS_BIN"
         echo "Using Cloud Run job ${RUN_LOCAL_CLOUD_RUN_JOB} in ${RUN_LOCAL_GCP_REGION} with output ${REMOTE_OUT_DIR}"
@@ -368,7 +407,7 @@ if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
                     if (( ${#ERA5_MONTHS[@]} > 0 )); then
                         ERA5_ARGS+=(--months "${ERA5_MONTHS[@]}")
                     fi
-                    _launch "$ERA5_JOB_LIMIT" "$PYTHON_BIN" google_era5.py "${ERA5_ARGS[@]}"
+                    _launch "$ERA5_JOB_LIMIT" _run_python google_era5.py "${ERA5_ARGS[@]}"
                 fi
             done
         done
@@ -388,7 +427,7 @@ _materialize_pet_csv
 
 echo "====== Step 3: Generate Analytics (parallel, CPU-aware) ======"
 for (( ANA_SHARD=0; ANA_SHARD<ANALYTICS_SHARD_COUNT; ANA_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" "$PYTHON_BIN" generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT"
+    _launch "$COMPUTE_JOB_LIMIT" _run_python generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT"
 done
 _wait_phase "generate-analytics"
 
@@ -399,7 +438,7 @@ if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
 fi
 
 echo "====== Step 4: Prepare DB load ======"
-"$PYTHON_BIN" - <<'PY'
+_run_python - <<'PY'
 import os, sys, psycopg2
 from pathlib import Path
 db_uri = os.environ.get("SUPABASE_DB_URI")
@@ -412,14 +451,14 @@ with conn.cursor() as cur:
     cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
 PY
 
-"$PYTHON_BIN" load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+_run_python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 
 echo "====== Step 5: Load shards to DB (parallel, CPU-aware) ======"
 for (( LOAD_SHARD=0; LOAD_SHARD<ANALYTICS_SHARD_COUNT; LOAD_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" "$PYTHON_BIN" load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count "$ANALYTICS_SHARD_COUNT" --load-shard-index "$LOAD_SHARD" --load-shard-count "$ANALYTICS_SHARD_COUNT"
+    _launch "$COMPUTE_JOB_LIMIT" _run_python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count "$ANALYTICS_SHARD_COUNT" --load-shard-index "$LOAD_SHARD" --load-shard-count "$ANALYTICS_SHARD_COUNT"
 done
 _wait_phase "load-to-db"
 
 echo "====== Step 6: Recreate views ======"
-"$PYTHON_BIN" load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+_run_python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 echo "====== Pipeline complete! ======"

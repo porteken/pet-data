@@ -7,6 +7,11 @@ on:
     branches: [dev, prd]
   workflow_dispatch:
 
+env:
+  GCP_PROJECT_ID: weather-ai-478502
+  CLOUD_RUN_JOB_NAME: era5-worker
+  CLOUD_RUN_REGION: us-east1
+
 jobs:
   build-year-range:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -35,12 +40,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Run setup
-        run: |
-          python cities.py
+        run: uv run python cities.py
       - name: Upload locations data
         uses: actions/upload-artifact@v4
         with:
@@ -78,9 +86,31 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix pet_data_csv/ --max-workers 8
 
+  provision-cloud-run:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    needs: deploy-infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Build and deploy Cloud Run worker
+        env:
+          GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
+          CLOUD_RUN_JOB_NAME: ${{ env.CLOUD_RUN_JOB_NAME }}
+          CLOUD_RUN_REGION: ${{ env.CLOUD_RUN_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: /bin/bash ./cloudrun_provision.sh
+
   compute-pet-google-era5:
     if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.years != '[]'
-    needs: [setup-locations, clear-pet-output, build-year-range]
+    needs: [setup-locations, clear-pet-output, build-year-range, provision-cloud-run]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 16
@@ -99,8 +129,9 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
-          gcloud run jobs execute era5-worker \
-            --region us-east1 --wait \
+          gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
+            --project "${{ env.GCP_PROJECT_ID }}" \
+            --region "${{ env.CLOUD_RUN_REGION }}" --wait \
             --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   generate-analytics:
@@ -118,9 +149,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Sync Data from S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -128,7 +163,7 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
       - name: Generate Analytics
-        run: python generate_analytics.py --shard-index ${{ matrix.analytics_shard_index }} --shard-count 20
+        run: uv run python generate_analytics.py --shard-index ${{ matrix.analytics_shard_index }} --shard-count 20
       - name: Upload Analytics Shard
         uses: actions/upload-artifact@v4
         with:
@@ -144,9 +179,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Database Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Download locations-data
         uses: actions/download-artifact@v4
         with:
@@ -156,7 +195,7 @@ jobs:
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
         run: |
-          python - <<'PY'
+          uv run python - <<'PY'
           import os, sys, psycopg2
           from pathlib import Path
           conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
@@ -166,7 +205,7 @@ jobs:
               cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
           conn.close()
           PY
-          python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+          uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 
   load-to-db:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -183,9 +222,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Database Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Sync Data from S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -201,7 +244,7 @@ jobs:
       - name: Load shard to Supabase
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
+        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -212,10 +255,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-      - name: Install Database Dependencies
-        run: pip install -r requirements.txt
+          python-version-file: "pyproject.toml"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+        run: uv run python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
