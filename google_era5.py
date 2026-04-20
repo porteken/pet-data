@@ -337,7 +337,7 @@ def _approximate_dsrp(
     thermofeel_module: _ThermofeelModule,
     fdir_flux: ArrayLike,
     cossza: ArrayLike,
-    ssrd_flux: ArrayLike,
+    _ssrd_flux: ArrayLike,
 ) -> ArrayLike:
     np = cast("Any", importlib.import_module("numpy"))
 
@@ -350,7 +350,10 @@ def _approximate_dsrp(
         dtype="float64",
     )
     dsrp = np.where(cossza >= SUNLIT_COSSZA_THRESHOLD, dsrp, 0.0)
-    dsrp = np.minimum(dsrp, np.maximum(ssrd_flux, 0.0))
+    # Keep direct normal radiation on its own geometric scale. DSRP can
+    # legitimately exceed horizontal global shortwave (SSRD) at low solar
+    # elevations, so capping it to SSRD suppresses the direct-beam term and
+    # biases MRT low during daylight.
     return np.clip(dsrp, 0.0, None)
 
 

@@ -15,6 +15,7 @@ import google_era5
 from google_era5 import (
     DEFAULT_BATCH_HOURS,
     ERA5_TIME_ORIGIN,
+    _approximate_dsrp,
     _compute_location_frame,
     _compute_pet_chunk,
     _hourly_flux_from_accumulation,
@@ -139,6 +140,21 @@ class TestHourlyFluxFromAccumulation:
         converted = _hourly_flux_from_accumulation(np.array([3600.0, 7200.0, 1800.0]))
 
         np.testing.assert_allclose(converted, np.array([1.0, 2.0, 0.5]))
+
+
+class TestApproximateDsrp:
+    def test_does_not_cap_direct_normal_radiation_to_ssrd(self) -> None:
+        thermofeel = MagicMock()
+        thermofeel.approximate_dsrp.return_value = np.array([500.0, 300.0, 100.0])
+
+        result = _approximate_dsrp(
+            thermofeel,
+            fdir_flux=np.array([50.0, 60.0, 70.0]),
+            cossza=np.array([0.5, 0.2, 0.05]),
+            _ssrd_flux=np.array([100.0, 80.0, 90.0]),
+        )
+
+        np.testing.assert_allclose(result, np.array([500.0, 300.0, 0.0]))
 
 
 class TestLongitudeNormalization:
