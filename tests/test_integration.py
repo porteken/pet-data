@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from generate_analytics import (
+    _build_forecast_frame,
     _load_pet_frame,
     generate_change_per_decade,
     generate_forecast,
@@ -101,14 +102,15 @@ class TestEndToEndAnalyticsPipeline:
         assert (pct_df["p10"] <= pct_df["p90"]).all()
 
         # Forecast
-        fc_path = generate_forecast(df, out_dir)
+        forecast_df = _build_forecast_frame(df, max_workers=1)
+        fc_path = generate_forecast(forecast_df, out_dir)
         fc_df = pd.read_parquet(fc_path)
         assert int(fc_df["year"].min()) == int(df["year"].max()) + 1  # pyright: ignore[reportArgumentType]
         assert int(fc_df["year"].max()) == 2100  # pyright: ignore[reportArgumentType]
         assert bool(fc_df["pet"].notna().all())
 
         # Change per decade
-        chg_path = generate_change_per_decade(df, out_dir)
+        chg_path = generate_change_per_decade(df, forecast_df, out_dir)
         chg_df = pd.read_parquet(chg_path)
         assert "year" in chg_df.columns
         assert "change" in chg_df.columns

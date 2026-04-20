@@ -16,6 +16,7 @@ import importlib
 import logging
 import multiprocessing
 import os
+import random
 import sys
 import threading
 import time
@@ -290,15 +291,35 @@ def _normalize_longitudes_for_solar_geometry(longitudes: ArrayLike) -> ArrayLike
     )
 
 
-def _calc_cossza(lat: float, lon: float, times: ArrayLike) -> ArrayLike:
+def _calc_cossza(lats: ArrayLike, lons: ArrayLike, times: ArrayLike) -> ArrayLike:
+    """Vectorized solar zenith angle for all (locations x times) in one broadcast.
+
+    Parameters
+    ----------
+    lats:
+        1-D array of latitudes, shape (n_locs,).
+    lons:
+        1-D array of longitudes in the -180..180 convention, shape (n_locs,).
+    times:
+        1-D array of numpy datetime64 timestamps, shape (n_times,).
+
+    Returns
+    -------
+    cossza: ndarray of shape (n_locs, n_times).
+
+    """
     np = cast("Any", importlib.import_module("numpy"))
 
+    # Reshape for broadcasting: lats/lons -> (n_locs, 1), time components -> (1, n_times)
+    lats_2d = np.asarray(lats, dtype="float64").reshape(-1, 1)
+    lons_2d = np.asarray(lons, dtype="float64").reshape(-1, 1)
+
     timestamps = pd.to_datetime(times)
-    day_of_year = timestamps.dayofyear.to_numpy(dtype="float64")
+    day_of_year = timestamps.dayofyear.to_numpy(dtype="float64").reshape(1, -1)
     hour = (
         timestamps.hour.to_numpy(dtype="float64")
         + timestamps.minute.to_numpy(dtype="float64") / 60.0
-    )
+    ).reshape(1, -1)
 
     gamma = 2.0 * np.pi / 365.0 * (day_of_year - 1.0 + (hour - 12.0) / 24.0)
     decl = (
@@ -319,9 +340,10 @@ def _calc_cossza(lat: float, lon: float, times: ArrayLike) -> ArrayLike:
         - 0.040849 * np.sin(2.0 * gamma)
     )
 
-    tst_min = hour * 60.0 + eq_time + 4.0 * lon
+    # tst_min and ha are (n_locs, n_times) due to lons_2d + hour broadcasting
+    tst_min = hour * 60.0 + eq_time + 4.0 * lons_2d
     ha = np.deg2rad(tst_min / 4.0 - 180.0)
-    lat_r = np.deg2rad(lat)
+    lat_r = np.deg2rad(lats_2d)
 
     cossza = np.sin(lat_r) * np.sin(decl) + np.cos(lat_r) * np.cos(decl) * np.cos(ha)
     return np.clip(cossza, 0.0, 1.0)
@@ -455,11 +477,10 @@ def _compute_location_frame(
     times = city_data.time.values
     n_locs, n_times = len(lats), len(times)
 
-    cossza = np.empty((n_locs, n_times), dtype="float64")
-    # Shift by 30 minutes to approximate midpoint of the accumulation hour
+    # Shift by 30 minutes to approximate midpoint of the accumulation hour.
+    # Compute all locations x times in a single vectorized broadcast call.
     cossza_times = pd.to_datetime(times) - pd.Timedelta(minutes=30)
-    for i, (lat, lon) in enumerate(zip(lats, solar_lons, strict=False)):
-        cossza[i, :] = _calc_cossza(float(lat), float(lon), cossza_times.values)
+    cossza = _calc_cossza(lats, solar_lons, cossza_times.values)
 
     temp_c = t2m - 273.15
     dew_c = d2m - 273.15
@@ -523,7 +544,17 @@ def _compute_location_frame(
         for i in range(0, len(df_distinct), CHUNK_SIZE)
     ]
 
-    results = [_compute_pet_chunk(chunk) for chunk in chunks]
+    if not chunks:
+        return pd.DataFrame(columns=["location_id", "date", "pet"])
+
+    # pet_corrected is pure NumPy (GIL-releasing), so threads give real concurrency.
+    n_chunk_workers = max(1, min(compute_workers, len(chunks)))
+    if n_chunk_workers == 1:
+        results = [_compute_pet_chunk(chunk) for chunk in chunks]
+    else:
+        with ThreadPoolExecutor(max_workers=n_chunk_workers) as chunk_executor:
+            results = list(chunk_executor.map(_compute_pet_chunk, chunks))
+
     if not results:
         return pd.DataFrame(columns=["location_id", "date", "pet"])
 
@@ -644,7 +675,10 @@ def _process_era5_batch_with_thread_dataset(
         except Exception:  # noqa: PERF203
             if attempt == GCS_BATCH_MAX_RETRIES:
                 raise
-            time.sleep(GCS_BATCH_RETRY_DELAY_SECONDS * attempt)
+            # Exponential backoff with jitter to prevent thundering-herd retries
+            # when multiple threads hit GCS rate limits simultaneously.
+            jitter = random.uniform(0.0, 2.0)  # noqa: S311
+            time.sleep(GCS_BATCH_RETRY_DELAY_SECONDS * attempt + jitter)
 
     return batch_index
 

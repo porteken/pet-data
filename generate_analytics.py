@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeAlias, TypedDict, cast
@@ -12,11 +14,6 @@ DataFrame: TypeAlias = Any
 np: Any = cast("Any", import_module("numpy"))
 pd: Any = cast("Any", import_module("pandas"))
 
-try:
-    prophet_module: Any = import_module("prophet")
-    Prophet: Any = prophet_module.Prophet
-except (ImportError, AttributeError):
-    Prophet = None
 
 PET_CSV_NAME = "pet.csv"
 PET_BATCH_GLOB = "pet_batch_*.parquet"
@@ -24,6 +21,7 @@ ANALYTICS_ROOT = Path("analytics_data_csv")
 PET_ROOT = Path("pet_data_csv")
 FORECAST_END_YEAR = 2100
 GENERATING_LOG_MESSAGE = "Generating %s..."
+DEFAULT_MAX_WORKERS = -1  # -1 means os.cpu_count()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,8 +47,109 @@ def _empty_forecast_frame() -> DataFrame:
     )
 
 
-def _build_forecast_frame(df: DataFrame) -> DataFrame:
-    if Prophet is None:
+def _forecast_single_location(
+    loc_id: object,
+    loc_df: DataFrame,
+) -> DataFrame | None:
+    """Fit a Prophet model and return forecast rows for one location.
+
+    Designed to be called from a worker process so it must be picklable
+    (top-level function, no closures over non-picklable state).
+    """
+    from importlib import import_module  # noqa: PLC0415 - worker process re-import
+
+    prophet_module = import_module("prophet")
+    prophet_cls = prophet_module.Prophet
+
+    import logging  # noqa: PLC0415
+
+    logging.getLogger("prophet").setLevel(logging.WARNING)
+    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+
+    if len(loc_df) <= 1:
+        return None
+
+    loc_df = loc_df.rename(columns={"year": "ds", "pet": "y"})
+    loc_df["ds"] = pd.to_datetime(loc_df["ds"], format="%Y")
+
+    model = prophet_cls(
+        growth="linear",
+        yearly_seasonality=True,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.01,
+    )
+    model.fit(loc_df)
+
+    last_year = int(loc_df["ds"].dt.year.max())
+    periods_to_forecast = FORECAST_END_YEAR - last_year
+    if periods_to_forecast <= 0:
+        return None
+
+    future_df = model.make_future_dataframe(periods=periods_to_forecast, freq="YS")
+    forecast = model.predict(future_df)
+    forecast["location_id"] = loc_id
+
+    forecast_subset = forecast[
+        ["ds", "location_id", "yhat", "yhat_lower", "yhat_upper"]
+    ].copy()
+    forecast_subset = forecast_subset.rename(
+        columns={
+            "ds": "year",
+            "yhat": "pet",
+            "yhat_lower": "lower",
+            "yhat_upper": "upper",
+        },
+    )
+    forecast_subset["year"] = forecast_subset["year"].dt.year
+    return forecast_subset[forecast_subset["year"] > last_year]
+
+
+def _run_serial_forecasts(
+    loc_frames: list[tuple[object, DataFrame]],
+) -> list[DataFrame]:
+    """Fit Prophet models sequentially (avoids multiprocessing overhead)."""
+    results: list[DataFrame] = []
+    for loc_id, loc_df in loc_frames:
+        result = _forecast_single_location(loc_id, loc_df)
+        if result is not None:
+            results.append(result)
+    return results
+
+
+def _run_parallel_forecasts(
+    loc_frames: list[tuple[object, DataFrame]],
+    n_workers: int,
+) -> list[DataFrame]:
+    """Fit Prophet models across worker processes."""
+    results: list[DataFrame] = []
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {
+            executor.submit(_forecast_single_location, loc_id, loc_df): loc_id
+            for loc_id, loc_df in loc_frames
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
+    return results
+
+
+def _build_forecast_frame(df: DataFrame, *, max_workers: int = 1) -> DataFrame:
+    """Fit Prophet models and return forecast rows for all locations.
+
+    Parameters
+    ----------
+    df:
+        PET frame with columns ``location_id``, ``year``, ``pet``.
+    max_workers:
+        Number of worker *processes* to use. Pass ``1`` to run in-process
+        (avoids multiprocessing overhead when already inside a parallel job).
+
+    """
+    try:
+        import_module("prophet")
+    except ImportError:
         logger.warning("Prophet not found. Forecast outputs will be empty.")
         return _empty_forecast_frame()
 
@@ -58,49 +157,21 @@ def _build_forecast_frame(df: DataFrame) -> DataFrame:
     logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 
     yearly_avg = _yearly_average_pet(df)
-    all_forecasts: list[DataFrame] = []
     location_ids = sorted(yearly_avg["location_id"].unique().tolist())
+    # Build per-location dataframes upfront (lightweight, avoids repeated filtering)
+    loc_frames = [
+        (loc_id, yearly_avg[yearly_avg["location_id"] == loc_id].copy())
+        for loc_id in location_ids
+    ]
 
-    for loc_id in location_ids:
-        loc_df = yearly_avg[yearly_avg["location_id"] == loc_id].copy()
-        if len(loc_df) <= 1:
-            continue
-
-        loc_df = loc_df.rename(columns={"year": "ds", "pet": "y"})
-        loc_df["ds"] = pd.to_datetime(loc_df["ds"], format="%Y")
-
-        model = Prophet(
-            growth="linear",
-            yearly_seasonality=True,
-            weekly_seasonality=False,
-            daily_seasonality=False,
-            changepoint_prior_scale=0.01,
-        )
-        model.fit(loc_df)
-
-        last_year = int(loc_df["ds"].dt.year.max())
-        periods_to_forecast = FORECAST_END_YEAR - last_year
-        if periods_to_forecast <= 0:
-            continue
-
-        future_df = model.make_future_dataframe(periods=periods_to_forecast, freq="YS")
-        forecast = model.predict(future_df)
-        forecast["location_id"] = loc_id
-
-        forecast_subset = forecast[
-            ["ds", "location_id", "yhat", "yhat_lower", "yhat_upper"]
-        ].copy()
-        forecast_subset = forecast_subset.rename(
-            columns={
-                "ds": "year",
-                "yhat": "pet",
-                "yhat_lower": "lower",
-                "yhat_upper": "upper",
-            },
-        )
-        forecast_subset["year"] = forecast_subset["year"].dt.year
-        forecast_subset = forecast_subset[forecast_subset["year"] > last_year]
-        all_forecasts.append(forecast_subset)
+    if max_workers == 1:
+        # Single-process path: no pickling overhead, friendlier inside run_local.sh
+        all_forecasts = _run_serial_forecasts(loc_frames)
+    else:
+        # Multi-process path: each worker fits Prophet independently.
+        # ProcessPoolExecutor is used because Prophet/Stan is not fully GIL-free.
+        n_workers = max_workers if max_workers > 0 else os.cpu_count()
+        all_forecasts = _run_parallel_forecasts(loc_frames, n_workers or 1)
 
     if not all_forecasts:
         logger.warning("No forecasts were generated.")
@@ -125,6 +196,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=str(ANALYTICS_ROOT))
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=20)
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=DEFAULT_MAX_WORKERS,
+        help=(
+            "Worker processes for parallel Prophet fitting. "
+            "-1 = os.cpu_count() (default). 1 = single-process (use inside "
+            "run_local.sh where bash already manages parallelism)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -161,24 +242,27 @@ def generate_percentiles(df: DataFrame, output_dir: Path) -> Path:
     return output_path
 
 
-def generate_forecast(df: DataFrame, output_dir: Path) -> Path:
-    """Generate PET forecasts with lower and upper bounds using Prophet (up to 2100)."""
+def generate_forecast(forecast_df: DataFrame, output_dir: Path) -> Path:
+    """Write the pre-computed Prophet forecast frame to parquet."""
     output_path = output_dir / "forecast.parquet"
     logger.info(GENERATING_LOG_MESSAGE, output_path)
-    final_forecast_df = _build_forecast_frame(df)
 
     tmp_output_path = output_path.with_suffix(".tmp")
-    final_forecast_df.to_parquet(tmp_output_path, index=False, compression="snappy")
+    forecast_df.to_parquet(tmp_output_path, index=False, compression="snappy")
     tmp_output_path.rename(output_path)
     return output_path
 
 
-def generate_change_per_decade(df: DataFrame, output_dir: Path) -> Path:
+def generate_change_per_decade(
+    df: DataFrame,
+    forecast_df: DataFrame,
+    output_dir: Path,
+) -> Path:
     """Calculate the change in average PET between decades."""
     output_path = output_dir / "change_per_decade.parquet"
     logger.info(GENERATING_LOG_MESSAGE, output_path)
     yearly_avg = _yearly_average_pet(df)
-    forecast_df = _build_forecast_frame(df)
+    # forecast_df is passed in from main() — no need to re-fit Prophet models here.
     future_yearly_avg = forecast_df[["location_id", "year", "pet"]].copy()
     frames = [yearly_avg]
     if not future_yearly_avg.empty:
@@ -310,9 +394,18 @@ def main() -> None:
         )
         return
 
+    # Resolve effective worker count: -1 means use all available CPUs.
+    effective_workers = (
+        args.max_workers if args.max_workers > 0 else (os.cpu_count() or 1)
+    )
+
+    # Build the forecast frame once and share it between generate_forecast and
+    # generate_change_per_decade, avoiding double Prophet fitting.
+    forecast_df = _build_forecast_frame(df, max_workers=effective_workers)
+
     generate_percentiles(df, output_dir)
-    generate_forecast(df, output_dir)
-    generate_change_per_decade(df, output_dir)
+    generate_forecast(forecast_df, output_dir)
+    generate_change_per_decade(df, forecast_df, output_dir)
     logger.info("Analytics generation complete for %s.", output_dir)
 
 

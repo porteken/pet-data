@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from generate_analytics import (
+    _build_forecast_frame,
     _discover_pet_files,
     _load_pet_frame,
     _load_pet_frame_from_csv,
@@ -89,7 +90,8 @@ class TestGenerateForecast:
     def test_produces_forecast_decades(
         self, sample_pet_df: pd.DataFrame, tmp_path: Path
     ) -> None:
-        path = generate_forecast(sample_pet_df, tmp_path)
+        forecast_df = _build_forecast_frame(sample_pet_df, max_workers=1)
+        path = generate_forecast(forecast_df, tmp_path)
         assert path.exists()
         df = pd.read_parquet(path)
         assert int(df["year"].min()) == 2022  # pyright: ignore[reportArgumentType]
@@ -99,7 +101,8 @@ class TestGenerateForecast:
     def test_forecast_has_pet_column(
         self, sample_pet_df: pd.DataFrame, tmp_path: Path
     ) -> None:
-        path = generate_forecast(sample_pet_df, tmp_path)
+        forecast_df = _build_forecast_frame(sample_pet_df, max_workers=1)
+        path = generate_forecast(forecast_df, tmp_path)
         df = pd.read_parquet(path)
         assert "pet" in df.columns
         assert bool(df["pet"].notna().all())
@@ -114,7 +117,8 @@ class TestGenerateForecast:
                 "year": [2020] * 10,
             }
         )
-        path = generate_forecast(df, tmp_path)
+        forecast_df = _build_forecast_frame(df, max_workers=1)
+        path = generate_forecast(forecast_df, tmp_path)
         result = pd.read_parquet(path)
         assert len(result) == 0
 
@@ -123,7 +127,8 @@ class TestGenerateChangePerDecade:
     def test_produces_change_column(
         self, sample_pet_df: pd.DataFrame, tmp_path: Path
     ) -> None:
-        path = generate_change_per_decade(sample_pet_df, tmp_path)
+        forecast_df = _build_forecast_frame(sample_pet_df, max_workers=1)
+        path = generate_change_per_decade(sample_pet_df, forecast_df, tmp_path)
         assert path.exists()
         df = pd.read_parquet(path)
         assert "change" in df.columns
@@ -140,7 +145,8 @@ class TestGenerateChangePerDecade:
                 "year": [2024, 2025],
             }
         )
-        path = generate_change_per_decade(df, tmp_path)
+        forecast_df = _build_forecast_frame(df, max_workers=1)
+        path = generate_change_per_decade(df, forecast_df, tmp_path)
         result = pd.read_parquet(path)
         assert len(result) > 0
         assert int(result["year"].min()) == 2030  # pyright: ignore[reportArgumentType]
@@ -154,7 +160,8 @@ class TestGenerateChangePerDecade:
                 "year": [2020] * 365,
             }
         )
-        path = generate_change_per_decade(df, tmp_path)
+        forecast_df = _build_forecast_frame(df, max_workers=1)
+        path = generate_change_per_decade(df, forecast_df, tmp_path)
         result = pd.read_parquet(path)
         assert len(result) == 0
 

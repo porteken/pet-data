@@ -343,8 +343,8 @@ if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
     if (( YEAR_COUNT > 1 && DEFAULT_CLOUD_RUN_JOB_LIMIT < 2 )); then
         DEFAULT_CLOUD_RUN_JOB_LIMIT=2
     fi
-    if (( DEFAULT_CLOUD_RUN_JOB_LIMIT > 4 )); then
-        DEFAULT_CLOUD_RUN_JOB_LIMIT=4
+    if (( DEFAULT_CLOUD_RUN_JOB_LIMIT > 16 )); then
+        DEFAULT_CLOUD_RUN_JOB_LIMIT=16
     fi
     ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-$DEFAULT_CLOUD_RUN_JOB_LIMIT}
     ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-aggressive}
@@ -442,7 +442,7 @@ _materialize_pet_csv
 
 echo "====== Step 3: Generate Analytics (parallel, CPU-aware) ======"
 for (( ANA_SHARD=0; ANA_SHARD<ANALYTICS_SHARD_COUNT; ANA_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" _run_python generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT"
+    _launch "$COMPUTE_JOB_LIMIT" _run_python generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT" --max-workers 1
 done
 _wait_phase "generate-analytics"
 

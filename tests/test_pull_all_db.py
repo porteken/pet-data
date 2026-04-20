@@ -6,6 +6,7 @@ or the database is unreachable.
 
 Run with:
     pytest tests/test_pull_all_db.py -v
+    pytest -m db -v
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
     from psycopg2.extensions import connection
+
+pytestmark = pytest.mark.db  # all tests in this module require a live DB
 
 DB_URI = os.getenv("SUPABASE_DB_URI")
 
