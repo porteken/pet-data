@@ -2,6 +2,7 @@
 
 Key fixes versus the broken MRT/PET wrapper:
 - Use the correct ARCO time epoch (hours since 1900-01-01).
+- Wrap western-hemisphere longitudes into ARCO's 0-360 coordinate system before selection.
 - Convert ERA5 hourly radiation accumulations from J/m^2 to W/m^2 for thermofeel.
 - Use thermofeel's direct-solar helper with a safer low-sun threshold.
 - Drop implausible MRT and PET outputs with sanity checks instead of writing corrupted values.
@@ -42,6 +43,8 @@ Dataset: TypeAlias = Any
 ArrayLike: TypeAlias = Any
 
 GRID_DEG: float = 0.25
+DEGREES_PER_CIRCLE: float = 360.0
+HALF_CIRCLE_DEGREES: float = 180.0
 SAFE_STABLE_DATA_MONTH = 4
 PET_ROUNDING_FACTOR = 2.0
 CHUNK_SIZE = 50000
@@ -270,6 +273,23 @@ def _load_era5_city_shard(city_shard_index: int, city_shard_count: int) -> DataF
     return cities_df.iloc[start:end].copy()
 
 
+def _wrap_longitudes_for_arco_selection(longitudes: ArrayLike) -> ArrayLike:
+    np = cast("Any", importlib.import_module("numpy"))
+
+    return np.mod(np.asarray(longitudes, dtype="float64"), DEGREES_PER_CIRCLE)
+
+
+def _normalize_longitudes_for_solar_geometry(longitudes: ArrayLike) -> ArrayLike:
+    np = cast("Any", importlib.import_module("numpy"))
+
+    normalized = np.asarray(longitudes, dtype="float64")
+    return np.where(
+        normalized > HALF_CIRCLE_DEGREES,
+        normalized - DEGREES_PER_CIRCLE,
+        normalized,
+    )
+
+
 def _calc_cossza(lat: float, lon: float, times: ArrayLike) -> ArrayLike:
     np = cast("Any", importlib.import_module("numpy"))
 
@@ -388,7 +408,14 @@ def _compute_location_frame(
     tf = cast("_ThermofeelModule", importlib.import_module("thermofeel"))
 
     lats = selected_cities["lat"].values.astype(float)
-    lons = selected_cities["lng"].values.astype(float)
+    selection_lons = np.asarray(
+        _wrap_longitudes_for_arco_selection(selected_cities["lng"].values),
+        dtype="float64",
+    )
+    solar_lons = np.asarray(
+        _normalize_longitudes_for_solar_geometry(selection_lons),
+        dtype="float64",
+    )
     loc_ids = selected_cities["location_id"].values
 
     city_selection = (
@@ -396,7 +423,7 @@ def _compute_location_frame(
         .sel(time=slice(start_h, end_h))
         .sel(
             latitude=xr.DataArray(lats, dims="location"),
-            longitude=xr.DataArray(lons, dims="location"),
+            longitude=xr.DataArray(selection_lons, dims="location"),
             method="nearest",
         )
     )
@@ -428,7 +455,7 @@ def _compute_location_frame(
     cossza = np.empty((n_locs, n_times), dtype="float64")
     # Shift by 30 minutes to approximate midpoint of the accumulation hour
     cossza_times = pd.to_datetime(times) - pd.Timedelta(minutes=30)
-    for i, (lat, lon) in enumerate(zip(lats, lons, strict=False)):
+    for i, (lat, lon) in enumerate(zip(lats, solar_lons, strict=False)):
         cossza[i, :] = _calc_cossza(float(lat), float(lon), cossza_times.values)
 
     temp_c = t2m - 273.15

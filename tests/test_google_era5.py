@@ -19,9 +19,11 @@ from google_era5 import (
     _compute_pet_chunk,
     _hourly_flux_from_accumulation,
     _iter_time_batches,
+    _normalize_longitudes_for_solar_geometry,
     _resolve_era5_max_workers,
     _run_era5_batch_jobs,
     _select_time_shard_batches,
+    _wrap_longitudes_for_arco_selection,
     _year_time_slice,
 )
 
@@ -137,6 +139,32 @@ class TestHourlyFluxFromAccumulation:
         converted = _hourly_flux_from_accumulation(np.array([3600.0, 7200.0, 1800.0]))
 
         np.testing.assert_allclose(converted, np.array([1.0, 2.0, 0.5]))
+
+
+class TestLongitudeNormalization:
+    def test_wrap_longitudes_for_arco_selection_maps_negative_us_longitudes(
+        self,
+    ) -> None:
+        wrapped = _wrap_longitudes_for_arco_selection(
+            np.array([-104.75, -80.5, -74.0, 0.0, 179.75, 360.0])
+        )
+
+        np.testing.assert_allclose(
+            wrapped,
+            np.array([255.25, 279.5, 286.0, 0.0, 179.75, 0.0]),
+        )
+
+    def test_normalize_longitudes_for_solar_geometry_restores_western_hemisphere(
+        self,
+    ) -> None:
+        normalized = _normalize_longitudes_for_solar_geometry(
+            np.array([255.25, 279.5, 286.0, 0.0, 179.75, 181.0])
+        )
+
+        np.testing.assert_allclose(
+            normalized,
+            np.array([-104.75, -80.5, -74.0, 0.0, 179.75, -179.0]),
+        )
 
 
 class TestComputePetChunk:
