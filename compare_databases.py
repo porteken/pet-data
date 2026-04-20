@@ -35,6 +35,7 @@ df_merged = df1.merge(
     on=["location_id", "date"],
     how="outer",
     suffixes=("_dev", "_prd"),
+    validate="many_to_many",
 )
 
 # Find differences
@@ -52,6 +53,3 @@ df_merged["diff"] = (df_merged["pet_dev"] - df_merged["pet_prd"]).abs()
 # Check the MAE for just the 7000 rows we expect to be updated
 # Since we only updated 1 week in May, let's filter for dates in May
 df_may = df_merged[df_merged["date"].astype(str).str.contains("-05-")]
-
-if not diff_pet.empty:
-    pass

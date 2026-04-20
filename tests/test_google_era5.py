@@ -16,7 +16,8 @@ from google_era5 import (
     DEFAULT_BATCH_HOURS,
     ERA5_TIME_ORIGIN,
     _compute_location_frame,
-    _era5_partition_path,
+    _compute_pet_chunk,
+    _hourly_flux_from_accumulation,
     _iter_time_batches,
     _resolve_era5_max_workers,
     _run_era5_batch_jobs,
@@ -118,16 +119,6 @@ class TestSelectTimeShardBatches:
             _select_time_shard_batches(batches, time_shard_index=4, time_shard_count=4)
 
 
-class TestEra5PartitionPath:
-    def test_without_batch(self) -> None:
-        result = _era5_partition_path(2024)
-        assert result == "year=2024"
-
-    def test_with_batch_index(self) -> None:
-        result = _era5_partition_path(2024, batch_index=3)
-        assert result == "year=2024/batch_index=0003"
-
-
 class TestResolveEra5MaxWorkers:
     def test_minus_one_returns_cpu_count(self) -> None:
         result = _resolve_era5_max_workers(-1)
@@ -141,6 +132,37 @@ class TestResolveEra5MaxWorkers:
             _resolve_era5_max_workers(0)
 
 
+class TestHourlyFluxFromAccumulation:
+    def test_converts_joules_per_square_meter_to_watts_per_square_meter(self) -> None:
+        converted = _hourly_flux_from_accumulation(np.array([3600.0, 7200.0, 1800.0]))
+
+        np.testing.assert_allclose(converted, np.array([1.0, 2.0, 0.5]))
+
+
+class TestComputePetChunk:
+    def test_discards_pet_values_above_sixty_c(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        df = pd.DataFrame(
+            {
+                "t": [25.0, 26.0, 27.0],
+                "mrt": [30.0, 31.0, 32.0],
+                "v": [1.0, 1.0, 1.0],
+                "rh": [50.0, 50.0, 50.0],
+            }
+        )
+
+        monkeypatch.setattr(
+            google_era5,
+            "pet_corrected",
+            lambda *_args, **_kwargs: np.array([22.0, 61.0, -55.0]),
+        )
+
+        result = _compute_pet_chunk(df)
+
+        assert result["pet"].tolist() == [22.0]
+
+
 class TestRunEra5BatchJobs:
     def test_parallel_branch_uses_threads(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -152,23 +174,15 @@ class TestRunEra5BatchJobs:
                 "lng": [-80.0],
             }
         )
-        batch_frames = {
-            0: shard_df.copy(),
-            1: shard_df.copy(),
-        }
         completed_batches: list[int] = []
 
-        def fake_pending_batch_tiles(
-            _shard: pd.DataFrame,
-            *,
-            era5_root: str,
-            year: int,
-            city_shard_index: int,
-            batch_index: int,
-            force: bool = False,
-        ) -> pd.DataFrame:
-            del era5_root, year, city_shard_index, force
-            return batch_frames[batch_index].copy()
+        def fake_pet_batch_exists(
+            _pet_root: str,
+            _year: int,
+            _city_shard_index: int,
+            _batch_index: int,
+        ) -> bool:
+            return False
 
         def fake_process_batch(**kwargs: object) -> int:
             batch_index = cast("int", kwargs["batch_index"])
@@ -177,8 +191,8 @@ class TestRunEra5BatchJobs:
 
         monkeypatch.setattr(
             google_era5,
-            "_pending_batch_tiles",
-            fake_pending_batch_tiles,
+            "_pet_batch_exists",
+            fake_pet_batch_exists,
         )
         monkeypatch.setattr(
             google_era5,
@@ -238,10 +252,9 @@ class TestComputeLocationFrameAlignment:
         # Wind components: shape (n_times, n_locs)
         np.full((n_times, n_locs), np.sqrt(2.0))  # u=v=√2 → speed=2
 
-        # All radiation zero → MRT driven purely by longwave (strd/str)
-        # strd ≈ σT⁴ for a rough sky estimate; here use a small positive const
-        rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)  # W/m² * 3600 = J/m²
-        rad_net = np.zeros((n_times, n_locs))  # net = 0
+        # Use hourly ERA5-style accumulations (J/m²) that convert to moderate fluxes.
+        rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)
+        rad_net = np.zeros((n_times, n_locs))
 
         # Build xarray-style variables accessible by key
         raw = {
@@ -301,6 +314,7 @@ class TestComputeLocationFrameAlignment:
                 return self
 
             def __exit__(self, *_: object) -> None:
+                # The fake context has no resources to release.
                 pass
 
         monkeypatch.setattr(
@@ -310,9 +324,6 @@ class TestComputeLocationFrameAlignment:
         # Patch xr.DataArray so sel() works — we bypass xarray's sel entirely
         # by replacing city_selection.compute() return value via monkeypatching
         # _compute_location_frame's internal calls.
-
-        def _fake_compute(_self: object) -> object:
-            return fake_ds
 
         # We intercept at the compute() call inside _compute_location_frame.
         # The easiest way: patch the Dataset's sel to return an object whose

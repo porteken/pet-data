@@ -101,7 +101,7 @@ jobs:
         run: |
           gcloud run jobs execute era5-worker \
             --region us-east1 --wait \
-            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
+            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   generate-analytics:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'

@@ -44,35 +44,6 @@ def main() -> None:
     merged = base_filtered.merge(df_db1, on=["location_id", "date"], how="outer")
     merged = merged.merge(df_db2, on=["location_id", "date"], how="outer")
 
-    def diff_count(s1: pd.Series, s2: pd.Series) -> int:
-        mask = s1.notna() & s2.notna() & (s1.round(4) != s2.round(4))
-        return int(mask.sum())
-
-    # Output a few mismatches for Base vs DB2
-    mask_b_db2 = (
-        merged["pet_base"].notna()
-        & merged["pet_db2"].notna()
-        & (merged["pet_base"].round(4) != merged["pet_db2"].round(4))
-    )
-    if mask_b_db2.any():
-        pass
-
-    mask_b_db1 = (
-        merged["pet_base"].notna()
-        & merged["pet_db1"].notna()
-        & (merged["pet_base"].round(4) != merged["pet_db1"].round(4))
-    )
-    if mask_b_db1.any():
-        pass
-
-    mask_db1_db2 = (
-        merged["pet_db1"].notna()
-        & merged["pet_db2"].notna()
-        & (merged["pet_db1"].round(4) != merged["pet_db2"].round(4))
-    )
-    if mask_db1_db2.any():
-        pass
-
 
 if __name__ == "__main__":
     main()

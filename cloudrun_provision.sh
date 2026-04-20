@@ -1,13 +1,32 @@
 #!/usr/bin/env bash
-# 1. Build and push your docker image
-gcloud builds submit --tag gcr.io/weather-ai-478502/era5-worker
+set -euo pipefail
 
-# 2. Create the job, giving it AWS credentials to write to S3
-gcloud run jobs create era5-worker \
-  --image=gcr.io/weather-ai-478502/era5-worker \
-  --region=us-east1 \
-  --cpu=2 \
-  --memory=4Gi \
-  --max-retries=1 \
-  --task-timeout=3600s \
-  --set-env-vars=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+GCP_PROJECT_ID=${GCP_PROJECT_ID:-weather-ai-478502}
+CLOUD_RUN_JOB_NAME=${CLOUD_RUN_JOB_NAME:-era5-worker}
+CLOUD_RUN_REGION=${CLOUD_RUN_REGION:-us-east1}
+CLOUD_RUN_JOB_CPU=${CLOUD_RUN_JOB_CPU:-2}
+CLOUD_RUN_JOB_MEMORY=${CLOUD_RUN_JOB_MEMORY:-4Gi}
+CLOUD_RUN_TASK_TIMEOUT=${CLOUD_RUN_TASK_TIMEOUT:-3600s}
+CLOUD_RUN_MAX_RETRIES=${CLOUD_RUN_MAX_RETRIES:-1}
+CLOUD_RUN_IMAGE=${CLOUD_RUN_IMAGE:-gcr.io/${GCP_PROJECT_ID}/${CLOUD_RUN_JOB_NAME}}
+AWS_CLOUD_RUN_REGION=${AWS_DEFAULT_REGION:-${AWS_REGION:-}}
+
+: "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID must be set}"
+: "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY must be set}"
+: "${AWS_CLOUD_RUN_REGION:?AWS_DEFAULT_REGION or AWS_REGION must be set}"
+
+echo "Building Cloud Run image ${CLOUD_RUN_IMAGE}"
+gcloud builds submit \
+  --project "$GCP_PROJECT_ID" \
+  --tag "$CLOUD_RUN_IMAGE"
+
+echo "Deploying Cloud Run job ${CLOUD_RUN_JOB_NAME} in ${CLOUD_RUN_REGION}"
+gcloud run jobs deploy "$CLOUD_RUN_JOB_NAME" \
+  --project "$GCP_PROJECT_ID" \
+  --image "$CLOUD_RUN_IMAGE" \
+  --region "$CLOUD_RUN_REGION" \
+  --cpu "$CLOUD_RUN_JOB_CPU" \
+  --memory "$CLOUD_RUN_JOB_MEMORY" \
+  --max-retries "$CLOUD_RUN_MAX_RETRIES" \
+  --task-timeout "$CLOUD_RUN_TASK_TIMEOUT" \
+  --set-env-vars="AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION=$AWS_CLOUD_RUN_REGION,AWS_REGION=$AWS_CLOUD_RUN_REGION"

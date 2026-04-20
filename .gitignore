@@ -19,3 +19,4 @@ analytics_data_csv
 era5_data_parquet
 output_tiles
 .conda
+*.log
