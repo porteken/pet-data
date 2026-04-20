@@ -20,3 +20,4 @@ era5_data_parquet
 output_tiles
 .conda
 *.log
+pytest.ini
