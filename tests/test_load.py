@@ -95,11 +95,13 @@ class TestDiscoverCsvInputs:
     def test_shard_root_discovery(self, tmp_path: Path) -> None:
         shard_dir = tmp_path / "analytics" / "shard_count=00020" / "shard_index=00000"
         shard_dir.mkdir(parents=True)
+        from typing import Any, cast
+
         import pandas as pd
 
-        pd.DataFrame(columns=["year", "location_id", "p10", "p90"]).to_parquet(
-            shard_dir / "percentiles.parquet", index=False
-        )
+        pd.DataFrame(
+            columns=cast("Any", ["year", "location_id", "p10", "p90"])
+        ).to_parquet(shard_dir / "percentiles.parquet", index=False)
 
         result = _discover_csv_inputs(
             "percentiles.parquet",

@@ -179,6 +179,20 @@ _sync_pet_from_s3() {
         --delete
 }
 
+_cancel_running_cloud_run_executions() {
+    local cancel_args=(
+        cancel_cloud_run_job_executions.py
+        --job "$RUN_LOCAL_CLOUD_RUN_JOB"
+        --region "$RUN_LOCAL_GCP_REGION"
+    )
+
+    if [[ -n "$RUN_LOCAL_GCP_PROJECT" ]]; then
+        cancel_args+=(--project "$RUN_LOCAL_GCP_PROJECT")
+    fi
+
+    _run_python "${cancel_args[@]}"
+}
+
 _build_cloud_run_args_csv() {
     local year=$1
     local city_shard_index=$2
@@ -362,6 +376,7 @@ if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
         _require_python_runner
         _require_executable "$GCLOUD_BIN"
         _require_executable "$AWS_BIN"
+        _cancel_running_cloud_run_executions
         echo "Using Cloud Run job ${RUN_LOCAL_CLOUD_RUN_JOB} in ${RUN_LOCAL_GCP_REGION} with output ${REMOTE_OUT_DIR}"
         if [[ "$RUN_LOCAL_PROVISION_CLOUD_RUN" == "1" ]]; then
             echo "Refreshing Cloud Run job ${RUN_LOCAL_CLOUD_RUN_JOB} from the current checkout"

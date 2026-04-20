@@ -73,9 +73,28 @@ jobs:
         run: |
           aws cloudformation deploy --template-file template.yml --stack-name "$STACK_NAME" --parameter-overrides BucketName="$BUCKET_NAME" --no-fail-on-empty-changes
 
-  clear-pet-output:
+  cancel-running-cloud-run-executions:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
     needs: deploy-infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Cancel running Cloud Run executions
+        run: |
+          python3 cancel_cloud_run_job_executions.py \
+            --job "${{ env.CLOUD_RUN_JOB_NAME }}" \
+            --region "${{ env.CLOUD_RUN_REGION }}" \
+            --project "${{ env.GCP_PROJECT_ID }}"
+
+  clear-pet-output:
+    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    needs: [deploy-infrastructure, cancel-running-cloud-run-executions]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +107,7 @@ jobs:
 
   provision-cloud-run:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: deploy-infrastructure
+    needs: [deploy-infrastructure, cancel-running-cloud-run-executions]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

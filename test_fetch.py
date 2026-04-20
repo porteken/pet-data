@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportGeneralTypeIssues=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 """Test script for fetching data from the CDS API."""
 
 import sys
@@ -5,7 +6,10 @@ import sys
 sys.path.append(".")
 import tempfile
 
-from google_era5 import create_cds_client, retrieve_with_retry
+from google_era5 import (  # pyright: ignore[reportAttributeAccessIssue]
+    create_cds_client,
+    retrieve_with_retry,
+)
 
 client = create_cds_client()
 request = {
