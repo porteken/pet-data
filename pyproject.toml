@@ -1,0 +1,66 @@
+[project]
+name = "pet-data"
+version = "0.1.0"
+description = "PET data pipeline for ERA5 ingestion, analytics, and Supabase loading."
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "psycopg2-binary",
+    "python-dotenv",
+    "prophet",
+    "requests",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+gcs = [
+    "dask",
+    "gcsfs",
+    "thermofeel",
+    "xarray",
+    "zarr",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 88
+exclude = ["typings", "venv", ".venv", ".conda", "archive"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D203", "D213", "E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 40
+
+[tool.ruff.lint.pylint]
+max-args = 12
+max-branches = 40
+max-statements = 300
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",     # assert is expected in tests
+    "D100", "D101", "D102", "D103", "D104",  # no docstrings needed in tests
+    "D401",     # imperative mood not needed in test docstrings
+    "PLR2004",  # magic values are fine in tests
+    "COM812",   # trailing comma style
+    "PD011",    # .values is fine in tests
+    "RUF003",   # ambiguous unicode
+    "PT001",    # pytest fixture style
+    "TC003",    # Path used at runtime in tests
+    "PERF401",  # micro-optimization not needed in tests
+    "PLC0415",  # local imports in test methods are intentional
+]
