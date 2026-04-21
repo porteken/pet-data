@@ -136,8 +136,8 @@ jobs:
       fail-fast: true
       matrix:
         year: ${{ fromJSON(needs.build-year-range.outputs.years) }}
-        time_shard_index: [0, 1, 2, 3]
-    name: ERA5->PET ${{ matrix.year }} time ${{ matrix.time_shard_index }}/4
+        time_shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    name: ERA5->PET ${{ matrix.year }} time ${{ matrix.time_shard_index }}/13
     steps:
       - uses: actions/checkout@v4
       - name: Authenticate GCP
@@ -148,10 +148,12 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
+          # google_era5 defaults to ~30-day batches, so 13 time shards keeps each
+          # Cloud Run execution to a single batch and avoids per-container OOMs.
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
-            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=4,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
+            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   generate-analytics:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
