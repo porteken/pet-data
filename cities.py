@@ -1,4 +1,4 @@
-"""Get cities used in application and format for Supabase."""
+"""Prepare city data for the application."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ pd: Any = cast("Any", import_module("pandas"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
+CITY_COORD_DECIMALS = 3
 
 
 def load_data(url: str) -> DataFrame:
@@ -51,22 +52,22 @@ def process_cities(df: DataFrame) -> DataFrame:
     """Deduplicate by ERA5 grid cell, cap at 500 cities, and assign location IDs."""
     df = df.copy()
 
-    # Sort by population descending so the highest-pop city wins each grid cell
     df = df.sort_values("population", ascending=False)
 
-    # Snap to the nearest ERA5 grid centre and keep one city per cell
     df["_snap_lat"] = (pd.to_numeric(df["lat"]) / GRID_DEG).round() * GRID_DEG
     df["_snap_lng"] = (pd.to_numeric(df["lng"]) / GRID_DEG).round() * GRID_DEG
     df = df.drop_duplicates(subset=["_snap_lat", "_snap_lng"], keep="first")
     df = df.drop(columns=["_snap_lat", "_snap_lng"])
 
     df = df.head(MAX_CITIES).reset_index(drop=True).reset_index(names="location_id")
+    df["lat"] = pd.to_numeric(df["lat"]).round(CITY_COORD_DECIMALS)
+    df["lng"] = pd.to_numeric(df["lng"]).round(CITY_COORD_DECIMALS)
 
     return df[["location_id", "city", "state", "lat", "lng"]]
 
 
 def main() -> None:
-    """Orchestration function."""
+    """Orchestrate city processing."""
     logger.info("Generating locations dataset...")
     url = (
         "https://raw.githubusercontent.com/plotly/datasets/master/us-cities-top-1k.csv"
@@ -75,7 +76,7 @@ def main() -> None:
     df = filter_bounding_box(df)
     df = process_cities(df)
 
-    df.to_csv("cities.csv", index=False)
+    df.to_csv("cities.csv", index=False, float_format=f"%.{CITY_COORD_DECIMALS}f")
     logger.info("Successfully saved %d cities to cities.csv", len(df))
 
 

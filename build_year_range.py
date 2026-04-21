@@ -1,4 +1,4 @@
-"""Common utility for computing date ranges for PET data pulls."""
+"""Utility for computing PET data date ranges."""
 
 from __future__ import annotations
 
@@ -10,16 +10,15 @@ from shared_config import mrt_available_end_date
 
 
 def main() -> None:
-    """Compute and output the year ranges for PET data processing."""
+    """Output year ranges for PET data processing."""
     now = datetime.now(tz=timezone.utc)
     prev_year = now.year - 1
 
     era5_start = 2000
-    # ARCO ERA5 stable data has ~3-month lag; safe after April of following year
+
     arco_safe_month = 4
     era5_end = now.year - 2 if now.month < arco_safe_month else prev_year
 
-    # Ensure we never exceed prev_year
     era5_end = min(era5_end, prev_year)
 
     era5_years = list(range(era5_start, era5_end + 1))
@@ -45,7 +44,6 @@ def main() -> None:
 
     years = sorted(set(era5_years + cds_years))
 
-    # Output format for shell (eval-able)
     if "--shell" in sys.argv:
         print(f"ERA5_YEARS='{' '.join(map(str, era5_years))}'")  # noqa: T201
         print(f"CDS_YEARS='{' '.join(map(str, cds_years))}'")  # noqa: T201
@@ -55,7 +53,6 @@ def main() -> None:
         print(f"START_YEAR='{era5_start}'")  # noqa: T201
         print(f"END_YEAR='{end_date.year}'")  # noqa: T201
 
-    # Output format for GitHub Actions
     elif "--github" in sys.argv:
         if "--yearly" in sys.argv:
             target_year = prev_year

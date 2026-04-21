@@ -27,7 +27,7 @@ jobs:
           import json
           from datetime import datetime, timezone
           now = datetime.now(tz=timezone.utc)
-          ERA5_END = now.year - 2 if now.month < 4 else now.year - 1
+          ERA5_END = now.year - 1
           print(f"years={json.dumps(list(range(2000, ERA5_END + 1)))}")
           print(f"analytics_shards={json.dumps(list(range(20)))}")
           PY
@@ -221,6 +221,7 @@ jobs:
           conn.autocommit = True
           with conn.cursor() as cur:
               cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
+              cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
               cur.execute("TRUNCATE TABLE locations, pet, pet_percentiles, pet_forecast, pet_change CASCADE")
           conn.close()
           PY
@@ -254,10 +255,16 @@ jobs:
           pattern: analytics-shard-${{ matrix.load_shard_index }}
           merge-multiple: true
           path: analytics_data_csv
+      - name: Sync PET Data from S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
       - name: Load shard to Supabase
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --skip-table pet --analytics-shard-count 20 --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
+        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -278,4 +285,4 @@ jobs:
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+        run: uv run python load.py --append-only --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change

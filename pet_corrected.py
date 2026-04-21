@@ -1,4 +1,4 @@
-"""Correct corrected PET (Physiological Equivalent Temperature) values."""
+"""Compute Physiological Equivalent Temperature (PET) values."""
 
 from __future__ import annotations
 
@@ -686,7 +686,7 @@ def pet_corrected(
     mbody: object = 75.0,
     ht: object = 1.80,
 ) -> object | None:
-    """Return corrected PET for scalar or vectorized weather/body inputs."""
+    """Compute PET for weather and body inputs."""
     ctx, is_scalar = _prepare_context(
         tair,
         t_mrt,

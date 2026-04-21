@@ -1,4 +1,4 @@
-"""Shared configuration values used by weather and MRT pull scripts."""
+"""Shared configuration for weather and MRT scripts."""
 
 from __future__ import annotations
 
@@ -160,5 +160,5 @@ def build_full_date_range(*, start_year: int | None = None) -> str:
 
 
 def shared_area() -> list[float]:
-    """Return a fresh geographic bounding box list for config defaults."""
+    """Return geographic bounding box for defaults."""
     return list(SHARED_AREA)

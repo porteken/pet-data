@@ -1,4 +1,4 @@
-"""Tests for shared_config.py — date range helpers and MRT config."""
+"""Tests for shared configuration."""
 
 from __future__ import annotations
 

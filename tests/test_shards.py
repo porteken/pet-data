@@ -1,4 +1,4 @@
-"""Tests for shards.py — shard discovery, selection, and key parsing."""
+"""Tests for shard management."""
 
 from __future__ import annotations
 
@@ -92,7 +92,6 @@ class TestDiscoverCommonShards:
             shard_dir.mkdir(parents=True)
             pd.DataFrame({"x": [1]}).to_parquet(shard_dir / "data.parquet")
 
-        # Only in root_a
         shard_dir_a_only = root_a / "year=2020" / "tile_id=2"
         shard_dir_a_only.mkdir(parents=True)
         pd.DataFrame({"x": [1]}).to_parquet(shard_dir_a_only / "data.parquet")

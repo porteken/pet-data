@@ -1,13 +1,4 @@
-"""Partial integration tests for the pull_all pipeline DB load.
-
-Verify that the pipeline loads data into the expected tables and
-materialized views.  Tests are skipped when SUPABASE_DB_URI is not set
-or the database is unreachable.
-
-Run with:
-    pytest tests/test_pull_all_db.py -v
-    pytest -m db -v
-"""
+"""Integration tests for the pull_all pipeline database load."""
 
 from __future__ import annotations
 
@@ -21,7 +12,7 @@ if TYPE_CHECKING:
 
     from psycopg2.extensions import connection
 
-pytestmark = pytest.mark.db  # all tests in this module require a live DB
+pytestmark = pytest.mark.db
 
 DB_URI = os.getenv("SUPABASE_DB_URI")
 
@@ -77,25 +68,16 @@ def _row_count(conn: connection, relation: str) -> int:
         return count_row[0]
 
 
-# ── table existence & data checks ────────────────────────────────────
-
-
 @pytest.mark.parametrize("table", REQUIRED_TABLES)
 def test_table_has_rows(db_conn: connection, table: str) -> None:
     count = _row_count(db_conn, table)
     assert count > 0, f"Table {table!r} is empty (0 rows)"
 
 
-# ── materialized view existence & data checks ────────────────────────
-
-
 @pytest.mark.parametrize("view", REQUIRED_MATERIALIZED_VIEWS)
 def test_materialized_view_has_rows(db_conn: connection, view: str) -> None:
     count = _row_count(db_conn, view)
     assert count > 0, f"Materialized view {view!r} is empty (0 rows)"
-
-
-# ── year‑range coverage check ────────────────────────────────────────
 
 
 def test_pet_covers_year_range(db_conn: connection) -> None:
@@ -109,7 +91,7 @@ def test_pet_covers_year_range(db_conn: connection) -> None:
         assert result is not None
         min_year, max_year = result
     assert min_year is not None, "pet table has no date data"
-    # In a full run we expect 2000-2025, but in dev/local we might only have 2024+
+
     assert min_year >= 2000, f"Earliest year {min_year} is before supported start 2000"
     assert max_year <= 2026, f"Latest year {max_year} is beyond expected 2026"
 
@@ -119,53 +101,100 @@ def test_locations_not_empty(db_conn: connection) -> None:
     assert count > 0, "locations table is empty"
 
 
-def test_pet_year_avg_has_seasons(db_conn: connection) -> None:
-    """pet_year_avg should contain the expected season labels based on available data."""
-    with db_conn.cursor() as cur:
-        # Check which months we actually have in the raw pet table
-        cur.execute("SELECT DISTINCT EXTRACT(MONTH FROM date)::int FROM pet")
-        months = {row[0] for row in cur.fetchall()}
+def _get_relation_columns(conn: connection, relation: str) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.attname "
+            "FROM pg_catalog.pg_attribute AS a "
+            "JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' "
+            "AND c.relname = %s "
+            "AND a.attnum > 0 "
+            "AND NOT a.attisdropped "
+            "ORDER BY a.attnum",
+            (relation,),
+        )
+        return [row[0] for row in cur.fetchall()]
 
-        cur.execute("SELECT DISTINCT season FROM pet_year_avg ORDER BY season")
+
+def _assert_year_season_pet_view(
+    db_conn: connection, view: str, aggregate: str
+) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM ("  # noqa: S608
+            "SELECT location_id, year, season, COUNT(*) AS row_count "
+            f"FROM {view} "
+            "GROUP BY location_id, year, season "
+            "HAVING COUNT(*) > 1"
+            ") AS duplicates"
+        )  # noqa: RUF100, S608
+        duplicate_count_row = cur.fetchone()
+        assert duplicate_count_row is not None
+
+        cur.execute(  # noqa: RUF100, S608
+            "WITH pet_with_seasons AS ("  # noqa: S608
+            "SELECT location_id, EXTRACT(YEAR FROM date)::int AS year, 'Annual'::text AS season, pet "
+            "FROM pet "
+            "UNION ALL "
+            "SELECT "
+            "location_id, "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "CASE "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (12, 1, 2) THEN 'Winter' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (3, 4, 5) THEN 'Spring' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (6, 7, 8) THEN 'Summer' "
+            "ELSE 'Fall' "
+            "END AS season, "
+            "pet "
+            "FROM pet"
+            "), expected AS ("
+            "SELECT location_id, year, season, "
+            f"ROUND({aggregate}(pet)::numeric, 1) AS pet "
+            "FROM pet_with_seasons "
+            "GROUP BY location_id, year, season"
+            "), actual AS ("
+            f"SELECT location_id, year, season, pet FROM {view}"
+            "), missing AS ("
+            "SELECT * FROM expected "
+            "EXCEPT "
+            "SELECT * FROM actual"
+            "), extra AS ("
+            "SELECT * FROM actual "
+            "EXCEPT "
+            "SELECT * FROM expected"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM missing), "
+            "(SELECT COUNT(*) FROM extra)"
+        )
+        diff_count_row = cur.fetchone()
+        assert diff_count_row is not None
+
+        cur.execute(
+            f"SELECT DISTINCT season FROM {view} ORDER BY season"  # noqa: S608
+        )
         seasons = {row[0] for row in cur.fetchall()}
 
-    if not months:
-        pytest.skip("No data in pet table to check seasons")
+    columns = _get_relation_columns(db_conn, view)
+    assert columns == ["location_id", "year", "season", "pet"]
 
-    expected = {"Jan-Dec"}
-    if 2 in months:
-        expected.add("Feb")
-    if any(m in months for m in [3, 4, 5]):
-        expected.add("March-May")
-    if any(m in months for m in [6, 7, 8]):
-        expected.add("June-August")
-    if any(m in months for m in [9, 10, 11]):
-        expected.add("September-November")
-
-    assert expected.issubset(seasons), f"Missing seasons: {expected - seasons}"
+    duplicate_count = duplicate_count_row[0]
+    missing_count, extra_count = diff_count_row
+    assert duplicate_count == 0
+    assert seasons
+    assert "Annual" in seasons
+    assert seasons.issubset({"Annual", "Winter", "Spring", "Summer", "Fall"})
+    assert missing_count == 0
+    assert extra_count == 0
 
 
-def test_pet_year_max_has_seasons(db_conn: connection) -> None:
-    """pet_year_max should contain the expected season labels based on available data."""
-    with db_conn.cursor() as cur:
-        # Check which months we actually have in the raw pet table
-        cur.execute("SELECT DISTINCT EXTRACT(MONTH FROM date)::int FROM pet")
-        months = {row[0] for row in cur.fetchall()}
+def test_pet_year_avg_has_annual_and_seasons(db_conn: connection) -> None:
+    """pet_year_avg should expose Annual plus Winter/Spring/Summer/Fall rows."""
+    _assert_year_season_pet_view(db_conn, "pet_year_avg", "AVG")
 
-        cur.execute("SELECT DISTINCT season FROM pet_year_max ORDER BY season")
-        seasons = {row[0] for row in cur.fetchall()}
 
-    if not months:
-        pytest.skip("No data in pet table to check seasons")
-
-    expected = {"Jan-Dec"}
-    if 2 in months:
-        expected.add("Feb")
-    if any(m in months for m in [3, 4, 5]):
-        expected.add("March-May")
-    if any(m in months for m in [6, 7, 8]):
-        expected.add("June-August")
-    if any(m in months for m in [9, 10, 11]):
-        expected.add("September-November")
-
-    assert expected.issubset(seasons), f"Missing seasons: {expected - seasons}"
+def test_pet_year_max_has_annual_and_seasons(db_conn: connection) -> None:
+    """Verify pet_year_max contains annual and seasonal rows."""
+    _assert_year_season_pet_view(db_conn, "pet_year_max", "MAX")

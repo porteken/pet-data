@@ -1,4 +1,4 @@
-"""Load generated parquet inputs into the database and manage views."""
+"""Load parquet data into the database and manage views."""
 
 from __future__ import annotations
 
@@ -50,6 +50,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cities-csv", default="cities.csv")
     parser.add_argument("--pet-csv", default="pet.csv")
     parser.add_argument("--pet-root", default="pet_data_csv")
+    parser.add_argument(
+        "--prefer-pet-csv",
+        action="store_true",
+        help=(
+            "Load the explicit --pet-csv input even when PET parquet shards are "
+            "also present under --pet-root."
+        ),
+    )
     parser.add_argument("--analytics-root", default="analytics_data_csv")
     parser.add_argument("--analytics-shard-count", type=int, default=20)
     parser.add_argument("--load-shard-index", type=int, default=0)
@@ -208,9 +216,6 @@ def _select_partition_shard_paths(
     for csv_path in csv_paths:
         partition_value = _extract_partition_marker(csv_path, root_path, partition_key)
         if partition_value is None:
-            # Fallback to a special value for non-partitioned files.
-            # We include the filename to allow multiple non-partitioned files
-            # to be distributed across shards if there are many of them.
             partition_value = f"__unpartitioned__:{csv_path.name}"
         grouped_paths.setdefault(partition_value, []).append(csv_path)
 
@@ -240,9 +245,6 @@ def _filter_paths_by_partition_value(
     for csv_path in csv_paths:
         marker = _extract_partition_marker(csv_path, root_path, partition_key)
         if marker is None:
-            # If the file is not partitioned, we treat it as belonging to
-            # the first shard (index 0) of that partition key.
-            # This allows single files to be loaded in a sharded environment.
             if partition_value in ("0", "00000"):
                 filtered_paths.append(csv_path)
             continue
@@ -372,6 +374,16 @@ def _discover_locations_csv_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
+    pet_csv_path = Path(args.pet_csv)
+    if args.prefer_pet_csv and pet_csv_path.exists():
+        return _select_partition_shard_paths(
+            [pet_csv_path],
+            root_path=Path(args.pet_root),
+            partition_key="year",
+            shard_index=args.load_shard_index,
+            shard_count=args.load_shard_count,
+        )
+
     pet_paths = _discover_csv_inputs(
         args.pet_csv,
         shard_root=args.pet_root,
@@ -451,7 +463,7 @@ def _load_requested_tables(
 
 
 def main() -> None:
-    """Load all generated CSV datasets and recreate views."""
+    """Load datasets and recreate views."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _parse_args()
     _validate_load_shard_args(args.load_shard_index, args.load_shard_count)

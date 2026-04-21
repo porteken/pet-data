@@ -115,7 +115,7 @@ jobs:
       - name: Build Full PET CSV For Analytics
         run: uv run python historical_pet_update.py merge pet_full.csv existing_pet.csv --dirs pet_data_csv
       - name: Generate Analytics
-        run: uv run python generate_analytics.py --pet-csv pet_full.csv --shard-index ${{ matrix.shard_index }} --shard-count 20
+        run: uv run python generate_analytics.py --pet-csv pet_full.csv --prefer-pet-csv --shard-index ${{ matrix.shard_index }} --shard-count 20
       - name: Upload analytics shard
         uses: actions/upload-artifact@v4
         with:
@@ -200,4 +200,4 @@ jobs:
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+        run: uv run python load.py --append-only --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change

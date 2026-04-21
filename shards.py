@@ -1,4 +1,4 @@
-"""Utilities for discovering and selecting partitioned dataset shards."""
+"""Utilities for managing partitioned dataset shards."""
 
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ def read_parquet_files(
     columns: list[str] | None = None,
     filters: object | None = None,
 ) -> DataFrame:
-    """Read a set of parquet files from a shared filesystem into a DataFrame."""
+    """Read parquet files into a DataFrame."""
     filesystem, _ = resolve_filesystem(base_uri)
     dataset = dataset_module.dataset(
         file_paths,

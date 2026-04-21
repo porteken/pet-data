@@ -1,4 +1,4 @@
-"""Delete all objects under an S3 prefix using batched s3api calls."""
+"""Delete S3 objects under a prefix in batches."""
 
 from __future__ import annotations
 
@@ -284,7 +284,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Delete every object under the requested S3 prefix."""
+    """Delete all objects under the S3 prefix."""
     args = _parse_args()
     if args.max_workers < 1:
         msg = "--max-workers must be >= 1"

@@ -1,13 +1,4 @@
-"""Download Google ARCO ERA5, calculate hourly MRT with thermofeel, and compute daily maximum PET.
-
-Key fixes versus the broken MRT/PET wrapper:
-- Use the correct ARCO time epoch (hours since 1900-01-01).
-- Wrap western-hemisphere longitudes into ARCO's 0-360 coordinate system before selection.
-- Convert ERA5 hourly radiation accumulations from J/m^2 to W/m^2 for thermofeel.
-- Use thermofeel's direct-solar helper with a safer low-sun threshold.
-- Drop implausible MRT and PET outputs with sanity checks instead of writing corrupted values.
-- Do NOT use msdrswrf as a substitute for both fdir and dsrp.
-"""
+"""Download ARCO ERA5 data and compute daily maximum PET."""
 
 from __future__ import annotations
 
@@ -292,25 +283,9 @@ def _normalize_longitudes_for_solar_geometry(longitudes: ArrayLike) -> ArrayLike
 
 
 def _calc_cossza(lats: ArrayLike, lons: ArrayLike, times: ArrayLike) -> ArrayLike:
-    """Vectorized solar zenith angle for all (locations x times) in one broadcast.
-
-    Parameters
-    ----------
-    lats:
-        1-D array of latitudes, shape (n_locs,).
-    lons:
-        1-D array of longitudes in the -180..180 convention, shape (n_locs,).
-    times:
-        1-D array of numpy datetime64 timestamps, shape (n_times,).
-
-    Returns
-    -------
-    cossza: ndarray of shape (n_locs, n_times).
-
-    """
+    """Vectorized solar zenith angle for all (locations x times) in one broadcast."""
     np = cast("Any", importlib.import_module("numpy"))
 
-    # Reshape for broadcasting: lats/lons -> (n_locs, 1), time components -> (1, n_times)
     lats_2d = np.asarray(lats, dtype="float64").reshape(-1, 1)
     lons_2d = np.asarray(lons, dtype="float64").reshape(-1, 1)
 
@@ -340,7 +315,6 @@ def _calc_cossza(lats: ArrayLike, lons: ArrayLike, times: ArrayLike) -> ArrayLik
         - 0.040849 * np.sin(2.0 * gamma)
     )
 
-    # tst_min and ha are (n_locs, n_times) due to lons_2d + hour broadcasting
     tst_min = hour * 60.0 + eq_time + 4.0 * lons_2d
     ha = np.deg2rad(tst_min / 4.0 - 180.0)
     lat_r = np.deg2rad(lats_2d)
@@ -372,10 +346,7 @@ def _approximate_dsrp(
         dtype="float64",
     )
     dsrp = np.where(cossza >= SUNLIT_COSSZA_THRESHOLD, dsrp, 0.0)
-    # Keep direct normal radiation on its own geometric scale. DSRP can
-    # legitimately exceed horizontal global shortwave (SSRD) at low solar
-    # elevations, so capping it to SSRD suppresses the direct-beam term and
-    # biases MRT low during daylight.
+
     return np.clip(dsrp, 0.0, None)
 
 
@@ -460,14 +431,11 @@ def _compute_location_frame(
         time=pd.to_datetime(city_data.time.values, unit="h", origin=ERA5_TIME_ORIGIN),
     )
 
-    # Transpose to (location, time)
     u10 = city_data["10u"].values.T
     v10 = city_data["10v"].values.T
     t2m = city_data["2t"].values.T
     d2m = city_data["2d"].values.T
 
-    # thermofeel expects hourly fluxes in W/m^2, while ERA5 stores hourly
-    # accumulations in J/m^2.
     ssrd = _hourly_flux_from_accumulation(city_data["ssrd"].values.T)
     strd = _hourly_flux_from_accumulation(city_data["strd"].values.T)
     ssr = _hourly_flux_from_accumulation(city_data["ssr"].values.T)
@@ -477,8 +445,6 @@ def _compute_location_frame(
     times = city_data.time.values
     n_locs, n_times = len(lats), len(times)
 
-    # Shift by 30 minutes to approximate midpoint of the accumulation hour.
-    # Compute all locations x times in a single vectorized broadcast call.
     cossza_times = pd.to_datetime(times) - pd.Timedelta(minutes=30)
     cossza = _calc_cossza(lats, solar_lons, cossza_times.values)
 
@@ -547,7 +513,6 @@ def _compute_location_frame(
     if not chunks:
         return pd.DataFrame(columns=["location_id", "date", "pet"])
 
-    # pet_corrected is pure NumPy (GIL-releasing), so threads give real concurrency.
     n_chunk_workers = max(1, min(compute_workers, len(chunks)))
     if n_chunk_workers == 1:
         results = [_compute_pet_chunk(chunk) for chunk in chunks]
@@ -675,8 +640,7 @@ def _process_era5_batch_with_thread_dataset(
         except Exception:  # noqa: PERF203
             if attempt == GCS_BATCH_MAX_RETRIES:
                 raise
-            # Exponential backoff with jitter to prevent thundering-herd retries
-            # when multiple threads hit GCS rate limits simultaneously.
+
             jitter = random.uniform(0.0, 2.0)  # noqa: S311
             time.sleep(GCS_BATCH_RETRY_DELAY_SECONDS * attempt + jitter)
 
@@ -847,7 +811,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Parse arguments and execute the ERA5 processing pipeline."""
+    """Execute the ERA5 processing pipeline."""
     args = _parse_args()
     try:
         process_era5(

@@ -36,7 +36,11 @@ location_id bigint NOT NULL,
 year bigint NOT NULL,
 pet double precision NOT NULL,
 lower double precision,
-upper double precision
+upper double precision,
+model_type text,
+full_years_used bigint,
+warming_rate double precision,
+acceleration double precision
 ) ;
 
 -- Handle migrations for pet_forecast if it already exists
@@ -47,6 +51,18 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='upper') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN upper double precision;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='model_type') THEN
+        ALTER TABLE public.pet_forecast ADD COLUMN model_type text;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='full_years_used') THEN
+        ALTER TABLE public.pet_forecast ADD COLUMN full_years_used bigint;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='warming_rate') THEN
+        ALTER TABLE public.pet_forecast ADD COLUMN warming_rate double precision;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='acceleration') THEN
+        ALTER TABLE public.pet_forecast ADD COLUMN acceleration double precision;
     END IF;
 END $$ ;
 
@@ -64,7 +80,7 @@ BEGIN
         ALTER TABLE public.pet_change DROP COLUMN decade;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_change' AND column_name='year') THEN
-        ALTER TABLE public.pet_change ADD COLUMN year integer;
+        ALTER TABLE public.pet_change ADD COLUMN year bigint;
         -- If we were keeping data we'd need a default, but TRUNCATE is usually called.
     END IF;
 END $$ ;

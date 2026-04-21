@@ -39,6 +39,10 @@ RUN_LOCAL_CLOUD_RUN_JOB=${RUN_LOCAL_CLOUD_RUN_JOB:-era5-worker}
 RUN_LOCAL_S3_BUCKET=${RUN_LOCAL_S3_BUCKET:-pet-parquet-files}
 RUN_LOCAL_S3_PREFIX=${RUN_LOCAL_S3_PREFIX:-local-run/${USER:-unknown-user}}
 RUN_LOCAL_CLEAR_MAX_WORKERS=${RUN_LOCAL_CLEAR_MAX_WORKERS:-8}
+RUN_LOCAL_MERGE_EXISTING_PET_HISTORY=${RUN_LOCAL_MERGE_EXISTING_PET_HISTORY:-1}
+RUN_LOCAL_HISTORY_DB_URI_ENV=${RUN_LOCAL_HISTORY_DB_URI_ENV:-SUPABASE_DB_URI}
+RUN_LOCAL_HISTORY_FALLBACK_DB_URI_ENV=${RUN_LOCAL_HISTORY_FALLBACK_DB_URI_ENV:-SUPABASE_DB_URI_PRD}
+RUN_LOCAL_ALLOW_EMPTY_ANALYTICS=${RUN_LOCAL_ALLOW_EMPTY_ANALYTICS:-0}
 
 if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" ]]; then
     echo "WARNING: RUN_LOCAL_SKIP_DB_LOAD=1 means this run will not update Supabase."
@@ -52,6 +56,11 @@ fi
 REMOTE_BASE_PREFIX=""
 REMOTE_OUT_DIR=""
 REMOTE_PET_PREFIX=""
+HISTORY_EXPORT_CSV="existing_pet.csv"
+FULL_PET_CSV="pet_full.csv"
+DB_LOAD_PET_CSV="pet.csv"
+DB_LOAD_PREFER_PET_CSV=0
+ANALYTICS_GENERATE_ARGS=()
 
 if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
     REMOTE_BASE_PREFIX=${RUN_LOCAL_S3_PREFIX#/}
@@ -160,6 +169,108 @@ combined = pd.concat(dfs, ignore_index=True).sort_values(["location_id", "date"]
 combined.to_csv("pet.csv", index=False)
 print(f"Saved {len(combined)} rows to pet.csv")
 PY
+}
+
+_write_empty_pet_csv() {
+    printf 'location_id,date,pet\n' > "$1"
+}
+
+_count_pet_csv_years() {
+    local csv_path=$1
+    if [[ ! -f "$csv_path" ]]; then
+        echo 0
+        return
+    fi
+
+    awk -F, 'NR > 1 {print substr($2, 1, 4)}' "$csv_path" | sort -u | awk 'END {print NR + 0}'
+}
+
+_export_history_pet_csv() {
+    local env_name=$1
+    local output_csv=$2
+
+    if [[ -z "$env_name" || -z "${!env_name:-}" ]]; then
+        _write_empty_pet_csv "$output_csv"
+        return
+    fi
+
+    SUPABASE_DB_URI="${!env_name}" _run_python historical_pet_update.py export-all "$output_csv"
+}
+
+_prepare_analytics_pet_inputs() {
+    ANALYTICS_GENERATE_ARGS=()
+    DB_LOAD_PET_CSV="pet.csv"
+    DB_LOAD_PREFER_PET_CSV=0
+
+    if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+        return
+    fi
+
+    if [[ "$RUN_LOCAL_MERGE_EXISTING_PET_HISTORY" != "1" ]]; then
+        return
+    fi
+
+    echo "====== Step 2.75: Merge historical PET for analytics + DB load ======"
+    rm -f "$HISTORY_EXPORT_CSV" "$FULL_PET_CSV"
+
+    local primary_env=$RUN_LOCAL_HISTORY_DB_URI_ENV
+    local fallback_env=$RUN_LOCAL_HISTORY_FALLBACK_DB_URI_ENV
+
+    _export_history_pet_csv "$primary_env" "$HISTORY_EXPORT_CSV"
+    _run_python historical_pet_update.py merge "$FULL_PET_CSV" "$HISTORY_EXPORT_CSV" --dirs pet_data_csv
+
+    local merged_year_count
+    merged_year_count=$(_count_pet_csv_years "$FULL_PET_CSV")
+    if (( merged_year_count < 10 )) && [[ -n "$fallback_env" ]] && [[ "$fallback_env" != "$primary_env" ]] && [[ -n "${!fallback_env:-}" ]]; then
+        echo "Primary history source did not provide enough PET history; retrying with ${fallback_env}."
+        _export_history_pet_csv "$fallback_env" "$HISTORY_EXPORT_CSV"
+        _run_python historical_pet_update.py merge "$FULL_PET_CSV" "$HISTORY_EXPORT_CSV" --dirs pet_data_csv
+        merged_year_count=$(_count_pet_csv_years "$FULL_PET_CSV")
+    fi
+
+    if (( merged_year_count < 10 )); then
+        echo "Need at least 10 PET years to generate pet_forecast/pet_change. Found ${merged_year_count} year(s) in ${FULL_PET_CSV}." >&2
+        echo "Either widen the historical source or set RUN_LOCAL_MERGE_EXISTING_PET_HISTORY=0 and accept empty analytics." >&2
+        exit 1
+    fi
+
+    ANALYTICS_GENERATE_ARGS=(--pet-csv "$FULL_PET_CSV" --prefer-pet-csv)
+    DB_LOAD_PET_CSV="$FULL_PET_CSV"
+    DB_LOAD_PREFER_PET_CSV=1
+}
+
+_validate_analytics_outputs() {
+    if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" || "$RUN_LOCAL_ALLOW_EMPTY_ANALYTICS" == "1" ]]; then
+        return
+    fi
+
+    local analytics_counts
+    analytics_counts=$(_run_python - <<'PY'
+from pathlib import Path
+
+import pyarrow.parquet as pq
+
+analytics_root = Path("analytics_data_csv")
+forecast_rows = sum(
+    pq.ParquetFile(str(path)).metadata.num_rows
+    for path in analytics_root.rglob("forecast.parquet")
+)
+change_rows = sum(
+    pq.ParquetFile(str(path)).metadata.num_rows
+    for path in analytics_root.rglob("change_per_decade.parquet")
+)
+print(f"{forecast_rows} {change_rows}")
+PY
+)
+
+    local forecast_rows change_rows
+    read -r forecast_rows change_rows <<< "$analytics_counts"
+
+    if (( forecast_rows == 0 || change_rows == 0 )); then
+        echo "Refusing to load empty analytics into Supabase: forecast rows=${forecast_rows}, change rows=${change_rows}." >&2
+        echo "Provide additional PET history or set RUN_LOCAL_ALLOW_EMPTY_ANALYTICS=1 to override." >&2
+        exit 1
+    fi
 }
 
 _clear_remote_pet_prefix() {
@@ -439,12 +550,14 @@ fi
 
 _assert_pet_output_available
 _materialize_pet_csv
+_prepare_analytics_pet_inputs
 
 echo "====== Step 3: Generate Analytics (parallel, CPU-aware) ======"
 for (( ANA_SHARD=0; ANA_SHARD<ANALYTICS_SHARD_COUNT; ANA_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" _run_python generate_analytics.py --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT" --max-workers 1
+    _launch "$COMPUTE_JOB_LIMIT" _run_python generate_analytics.py "${ANALYTICS_GENERATE_ARGS[@]}" --shard-index "$ANA_SHARD" --shard-count "$ANALYTICS_SHARD_COUNT" --max-workers 1 --allow-incomplete-years
 done
 _wait_phase "generate-analytics"
+_validate_analytics_outputs
 
 if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
     echo "====== Step 4-6: Skipping DB load ======"
@@ -470,10 +583,24 @@ _run_python load.py --append-only --skip-drop-views --skip-create-views --skip-t
 
 echo "====== Step 5: Load shards to DB (parallel, CPU-aware) ======"
 for (( LOAD_SHARD=0; LOAD_SHARD<ANALYTICS_SHARD_COUNT; LOAD_SHARD++ )); do
-    _launch "$COMPUTE_JOB_LIMIT" _run_python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count "$ANALYTICS_SHARD_COUNT" --load-shard-index "$LOAD_SHARD" --load-shard-count "$ANALYTICS_SHARD_COUNT"
+    LOAD_ARGS=(
+        load.py
+        --append-only
+        --skip-drop-views
+        --skip-create-views
+        --skip-table locations
+        --pet-csv "$DB_LOAD_PET_CSV"
+        --analytics-shard-count "$ANALYTICS_SHARD_COUNT"
+        --load-shard-index "$LOAD_SHARD"
+        --load-shard-count "$ANALYTICS_SHARD_COUNT"
+    )
+    if [[ "$DB_LOAD_PREFER_PET_CSV" == "1" ]]; then
+        LOAD_ARGS+=(--prefer-pet-csv)
+    fi
+    _launch "$COMPUTE_JOB_LIMIT" _run_python "${LOAD_ARGS[@]}"
 done
 _wait_phase "load-to-db"
 
 echo "====== Step 6: Recreate views ======"
-_run_python load.py --append-only --skip-drop-views --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
+_run_python load.py --append-only --skip-table locations --skip-table pet --skip-table pet_percentiles --skip-table pet_forecast --skip-table pet_change
 echo "====== Pipeline complete! ======"

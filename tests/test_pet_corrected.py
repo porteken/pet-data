@@ -1,4 +1,4 @@
-"""Tests for pet_corrected.py — PET thermodynamic model."""
+"""Tests for the PET thermodynamic model."""
 
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ class TestC2K:
 
 class TestSvpMurray:
     def test_at_20c(self) -> None:
-        # SVP at 20°C ≈ 23.4 hPa
         result = svp_murray(c2k(20.0))
         assert 20 < _as_float(result) < 30
 
@@ -50,16 +49,16 @@ class TestPetCorrected:
 
     def test_comfortable_conditions(self) -> None:
         result = pet_corrected(22.0, 22.0, 0.5, 50.0, icl=0.5)
-        # Comfortable conditions should give PET roughly near air temp
+
         assert 10 < _as_float(result) < 40
 
     def test_hot_conditions(self) -> None:
         result = pet_corrected(40.0, 60.0, 0.5, 70.0, icl=0.5)
-        assert _as_float(result) > 30  # Should be warm
+        assert _as_float(result) > 30
 
     def test_cold_conditions(self) -> None:
         result = pet_corrected(0.0, -5.0, 3.0, 60.0, icl=0.9)
-        assert _as_float(result) < 10  # Should be cold
+        assert _as_float(result) < 10
 
     def test_vector_input(self) -> None:
         tair = np.array([20.0, 25.0, 30.0])
@@ -70,7 +69,7 @@ class TestPetCorrected:
         assert len(result) == 3
 
     def test_vector_output_monotonic_with_temperature(self) -> None:
-        """Higher air temp and MRT should yield higher PET, all else equal."""
+        """Verify PET increases with temperature and MRT."""
         tair = np.array([15.0, 25.0, 35.0])
         t_mrt = np.array([20.0, 30.0, 40.0])
         v_air = np.array([1.0, 1.0, 1.0])

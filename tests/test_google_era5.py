@@ -1,4 +1,4 @@
-"""Tests for google_era5.py — ERA5 batch/shard helpers and constants."""
+"""Tests for ERA5 batch/shard helpers."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class TestYearTimeSlice:
 
     def test_year_span_is_correct(self) -> None:
         start_h, end_h = _year_time_slice(2024)
-        # 2024 is a leap year: 8784 hours
+
         assert end_h - start_h + 1 == 8784
 
     def test_starts_at_beginning_of_year(self) -> None:
@@ -67,7 +67,7 @@ class TestIterTimeBatches:
 
     def test_batch_count_monthly(self) -> None:
         batches = _iter_time_batches(2024, batch_hours=720)
-        # 8784 / 720 = 12.2 → 13 batches
+
         assert len(batches) == 13
 
     def test_no_gaps_between_batches(self) -> None:
@@ -95,7 +95,7 @@ class TestSelectTimeShardBatches:
                 batches, time_shard_index=shard_index, time_shard_count=4
             )
             all_assigned.extend(selected)
-        # Every batch should be assigned to exactly one shard
+
         assert sorted(b[0] for b in all_assigned) == sorted(b[0] for b in batches)
 
     def test_single_shard_returns_all(self) -> None:
@@ -113,7 +113,7 @@ class TestSelectTimeShardBatches:
                 batches, time_shard_index=shard_index, time_shard_count=4
             )
             shard_sizes.append(len(selected))
-        # No shard should differ by more than 1 from another
+
         assert max(shard_sizes) - min(shard_sizes) <= 1
 
     def test_raises_on_invalid_index(self) -> None:
@@ -263,15 +263,7 @@ class TestRunEra5BatchJobs:
 
 
 class TestComputeLocationFrameAlignment:
-    """Verify that weather values are correctly aligned to (location, time) pairs.
-
-    ERA5 xarray selection produces (n_times, n_locs) arrays.  Without a .T
-    transpose those arrays are raveled in time-first order, which mismatches the
-    DataFrame's loc-first row ordering (np.repeat / np.tile).  The test below
-    constructs two synthetic cities whose daily-max PET ranks should be strictly
-    ordered (hot city always > cold city) - a property that breaks when loc/time
-    data is scrambled.
-    """
+    """Verify weather value alignment to location and time."""
 
     def _make_fake_dataset(
         self,
@@ -280,27 +272,17 @@ class TestComputeLocationFrameAlignment:
         hot_temp_k: float,
         cold_temp_k: float,
     ) -> MagicMock:
-        """Return a minimal xarray-like Dataset mock with two distinct temperature profiles.
-
-        City 0 (hot): constant ``hot_temp_k``, dew-point 10 K below.
-        City 1 (cold): constant ``cold_temp_k``, dew-point 10 K below.
-        All radiation variables are zero (night-time → no solar MRT boost).
-        Wind speed is fixed at 2 m/s (> 0 so the filter keeps all rows).
-        """
-        # Temperatures: shape (n_times, n_locs) — xarray returns time-first
+        """Return a minimal xarray-like Dataset mock with two distinct temperature profiles."""
         temps = np.empty((n_times, n_locs), dtype=float)
         temps[:, 0] = hot_temp_k
         temps[:, 1] = cold_temp_k
-        dew = temps - 10.0  # dew-point 10 K below air temp
+        dew = temps - 10.0
 
-        # Wind components: shape (n_times, n_locs)
-        np.full((n_times, n_locs), np.sqrt(2.0))  # u=v=√2 → speed=2
+        np.full((n_times, n_locs), np.sqrt(2.0))
 
-        # Use hourly ERA5-style accumulations (J/m²) that convert to moderate fluxes.
         rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)
         rad_net = np.zeros((n_times, n_locs))
 
-        # Build xarray-style variables accessible by key
         raw = {
             "10u": temps * 0 + np.sqrt(2.0),
             "10v": temps * 0 + np.sqrt(2.0),
@@ -314,7 +296,6 @@ class TestComputeLocationFrameAlignment:
             "msdrswrf": rad_net.copy(),
         }
 
-        # time coordinate: integer hours since ERA5_TIME_ORIGIN for a Jan week
         epoch = pd.Timestamp(ERA5_TIME_ORIGIN)
         start_h = int((pd.Timestamp("2010-01-01") - epoch).total_seconds() // 3600)
         time_vals = np.arange(start_h, start_h + n_times, dtype=int)
@@ -343,14 +324,13 @@ class TestComputeLocationFrameAlignment:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """City 0 (hot) should consistently produce higher daily max PET than city 1 (cold)."""
-        n_times = 24  # one day of hourly data
+        n_times = 24
         n_locs = 2
-        hot_k = 308.15  # 35 °C
-        cold_k = 278.15  # 5 °C
+        hot_k = 308.15
+        cold_k = 278.15
 
         fake_ds = self._make_fake_dataset(n_times, n_locs, hot_k, cold_k)
 
-        # Patch dask so compute() returns the mock object unchanged
         import dask as _dask
 
         class _FakeDaskCtx:
@@ -358,20 +338,12 @@ class TestComputeLocationFrameAlignment:
                 return self
 
             def __exit__(self, *_: object) -> None:
-                # The fake context has no resources to release.
                 pass
 
         monkeypatch.setattr(
             _dask, "config", MagicMock(set=lambda **_kw: _FakeDaskCtx())
         )
 
-        # Patch xr.DataArray so sel() works — we bypass xarray's sel entirely
-        # by replacing city_selection.compute() return value via monkeypatching
-        # _compute_location_frame's internal calls.
-
-        # We intercept at the compute() call inside _compute_location_frame.
-        # The easiest way: patch the Dataset's sel to return an object whose
-        # .compute() returns our fake dataset.
         class _FakeSel:
             def sel(self, *_args: object, **_kw: object) -> _FakeSel:
                 return self
@@ -405,7 +377,7 @@ class TestComputeLocationFrameAlignment:
         )
 
         assert not result.empty, "Expected non-empty PET result"
-        # After the transposition fix each city should receive its own temperature
+
         pet_hot = result.loc[result["location_id"] == 0, "pet"].max()
         pet_cold = result.loc[result["location_id"] == 1, "pet"].max()
         assert pet_hot > pet_cold, (

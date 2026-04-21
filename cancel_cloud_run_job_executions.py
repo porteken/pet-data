@@ -1,4 +1,4 @@
-"""Cancel any currently running Cloud Run job executions for a given job."""
+"""Cancel running Cloud Run job executions."""
 
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ def cancel_running_executions(
     region: str,
     project: str | None,
 ) -> list[str]:
-    """Cancel any currently running Cloud Run job executions for a given job."""
+    """Cancel running Cloud Run job executions."""
     executions = _list_executions(
         gcloud_bin=gcloud_bin,
         job=job,

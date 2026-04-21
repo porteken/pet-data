@@ -1,7 +1,8 @@
-"""Tests for load.py — CSV discovery and DB loading helpers."""
+"""Tests for CSV discovery and DB loading."""
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from load import (
     TABLE_NAMES,
     _discover_csv_inputs,
+    _discover_pet_csv_paths,
     _extract_partition_marker,
     _filter_paths_by_partition_value,
     _select_partition_shard_paths,
@@ -40,13 +42,11 @@ class TestFilterPathsByPartitionValue:
         p1 = tmp_path / "data.parquet"
         p1.touch()
 
-        # Matches shard 0
         result0 = _filter_paths_by_partition_value(
             [p1], root_path=root, partition_key="shard_index", partition_value="00000"
         )
         assert result0 == [p1]
 
-        # Does not match shard 1
         result1 = _filter_paths_by_partition_value(
             [p1], root_path=root, partition_key="shard_index", partition_value="00001"
         )
@@ -117,6 +117,27 @@ class TestDiscoverCsvInputs:
         assert result == []
 
 
+class TestDiscoverPetCsvPaths:
+    def test_prefers_direct_csv_when_requested(self, tmp_path: Path) -> None:
+        pet_root = tmp_path / "pet_data_csv"
+        shard_dir = pet_root / "year=2024"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / "pet_batch_0000_00.parquet").touch()
+
+        pet_csv = tmp_path / "pet_full.csv"
+        pet_csv.write_text("location_id,date,pet\n1,2024-05-01,25.0\n")
+
+        args = argparse.Namespace(
+            pet_root=str(pet_root),
+            pet_csv=str(pet_csv),
+            load_shard_index=0,
+            load_shard_count=1,
+            prefer_pet_csv=True,
+        )
+
+        assert _discover_pet_csv_paths(args) == [pet_csv]
+
+
 class TestSelectPartitionShardPaths:
     def test_shards_partitioned_files(self, tmp_path: Path) -> None:
         root = tmp_path / "pet_data"
@@ -127,13 +148,11 @@ class TestSelectPartitionShardPaths:
         p1.touch()
         p2.touch()
 
-        # Shard 0 should get 2020
         shard0 = _select_partition_shard_paths(
             [p1, p2], root_path=root, partition_key="year", shard_index=0, shard_count=2
         )
         assert shard0 == [p1]
 
-        # Shard 1 should get 2021
         shard1 = _select_partition_shard_paths(
             [p1, p2], root_path=root, partition_key="year", shard_index=1, shard_count=2
         )
@@ -145,13 +164,11 @@ class TestSelectPartitionShardPaths:
         p1 = tmp_path / "pet.csv"
         p1.touch()
 
-        # Shard 0 should get the unpartitioned file
         shard0 = _select_partition_shard_paths(
             [p1], root_path=root, partition_key="year", shard_index=0, shard_count=2
         )
         assert shard0 == [p1]
 
-        # Shard 1 should get nothing
         shard1 = _select_partition_shard_paths(
             [p1], root_path=root, partition_key="year", shard_index=1, shard_count=2
         )
@@ -165,7 +182,6 @@ class TestSelectPartitionShardPaths:
         p1.touch()
         p2.touch()
 
-        # They should be sorted and distributed
         shard0 = _select_partition_shard_paths(
             [p1, p2], root_path=root, partition_key="year", shard_index=0, shard_count=2
         )
@@ -173,7 +189,6 @@ class TestSelectPartitionShardPaths:
             [p1, p2], root_path=root, partition_key="year", shard_index=1, shard_count=2
         )
 
-        # Depending on sort order (pet_1.csv, pet_2.csv)
         assert len(shard0) == 1
         assert len(shard1) == 1
         assert shard0 != shard1

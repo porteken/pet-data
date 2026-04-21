@@ -1,4 +1,4 @@
-"""Tests for cancel_cloud_run_job_executions.py."""
+"""Tests for Cloud Run job cancellation."""
 
 from __future__ import annotations
 
@@ -57,7 +57,6 @@ class TestRunningExecutionNames:
 def test_cancel_running_executions_integration(mock_run: MagicMock) -> None:
     from cancel_cloud_run_job_executions import cancel_running_executions
 
-    # Mock _list_executions output
     mock_run.return_value.stdout = '[{"metadata": {"name": "era5-worker-running"}, "status": {}}, {"metadata": {"name": "era5-worker-running-2"}, "status": {}}]'
 
     cancelled = cancel_running_executions(

@@ -1,53 +1,36 @@
-set statement_timeout = '5s' ;
+set statement_timeout = '0' ;
 set lock_timeout = '1s' ;
 CREATE MATERIALIZED VIEW public.pet_year_avg AS
+WITH pet_with_seasons AS (
 SELECT
 p.location_id,
 EXTRACT (YEAR FROM p.date)::int AS year,
-s.season_name AS season,
-ROUND (AVG (p.pet)::numeric, 1) AS pet
+'Annual'::text AS season,
+p.pet
 FROM public.pet AS p
-JOIN (
-VALUES
-(1,
-'Jan-Dec'),
-(2,
-'Jan-Dec'),
-(3,
-'Jan-Dec'),
-(4,
-'Jan-Dec'),
-(5,
-'Jan-Dec'),
-(6,
-'Jan-Dec'),
-(7,
-'Jan-Dec'),
-(8,
-'Jan-Dec'),
-(9,
-'Jan-Dec'),
-(10,
-'Jan-Dec'),
-(11,
-'Jan-Dec'),
-(12,
-'Jan-Dec'),
-(2, 'Feb'),
-(3, 'March-May'), (4, 'March-May'), (5, 'March-May'),
-(6, 'June-August'), (7, 'June-August'), (8, 'June-August'),
-(9,
-'September-November'),
-(10,
-'September-November'),
-(11,
-'September-November')
-) AS s (month, season_name)
-ON EXTRACT (MONTH FROM p.date)::int = s.month
-GROUP BY
+UNION ALL
+SELECT
 p.location_id,
-EXTRACT (YEAR FROM p.date)::int,
-s.season_name ;
+EXTRACT (YEAR FROM p.date)::int AS year,
+CASE
+WHEN EXTRACT (MONTH FROM p.date)::int IN (12, 1, 2) THEN 'Winter'
+WHEN EXTRACT (MONTH FROM p.date)::int IN (3, 4, 5) THEN 'Spring'
+WHEN EXTRACT (MONTH FROM p.date)::int IN (6, 7, 8) THEN 'Summer'
+ELSE 'Fall'
+END AS season,
+p.pet
+FROM public.pet AS p
+)
+SELECT
+location_id,
+year,
+season,
+ROUND (AVG (pet)::numeric, 1) AS pet
+FROM pet_with_seasons
+GROUP BY
+location_id,
+year,
+season ;
 
 CREATE UNIQUE INDEX if not exists
 pet_year_avg_location_year_season_uidx
@@ -60,53 +43,36 @@ CREATE INDEX if not exists pet_year_avg_season_idx
 ON public.pet_year_avg (season) ;
 
 CREATE MATERIALIZED VIEW public.pet_year_max AS
+WITH pet_with_seasons AS (
 SELECT
 p.location_id,
 EXTRACT (YEAR FROM p.date)::int AS year,
-s.season_name AS season,
-ROUND (MAX (p.pet)::numeric, 1) AS pet
+'Annual'::text AS season,
+p.pet
 FROM public.pet AS p
-JOIN (
-VALUES
-(1,
-'Jan-Dec'),
-(2,
-'Jan-Dec'),
-(3,
-'Jan-Dec'),
-(4,
-'Jan-Dec'),
-(5,
-'Jan-Dec'),
-(6,
-'Jan-Dec'),
-(7,
-'Jan-Dec'),
-(8,
-'Jan-Dec'),
-(9,
-'Jan-Dec'),
-(10,
-'Jan-Dec'),
-(11,
-'Jan-Dec'),
-(12,
-'Jan-Dec'),
-(2, 'Feb'),
-(3, 'March-May'), (4, 'March-May'), (5, 'March-May'),
-(6, 'June-August'), (7, 'June-August'), (8, 'June-August'),
-(9,
-'September-November'),
-(10,
-'September-November'),
-(11,
-'September-November')
-) AS s (month, season_name)
-ON EXTRACT (MONTH FROM p.date)::int = s.month
-GROUP BY
+UNION ALL
+SELECT
 p.location_id,
-EXTRACT (YEAR FROM p.date)::int,
-s.season_name ;
+EXTRACT (YEAR FROM p.date)::int AS year,
+CASE
+WHEN EXTRACT (MONTH FROM p.date)::int IN (12, 1, 2) THEN 'Winter'
+WHEN EXTRACT (MONTH FROM p.date)::int IN (3, 4, 5) THEN 'Spring'
+WHEN EXTRACT (MONTH FROM p.date)::int IN (6, 7, 8) THEN 'Summer'
+ELSE 'Fall'
+END AS season,
+p.pet
+FROM public.pet AS p
+)
+SELECT
+location_id,
+year,
+season,
+ROUND (MAX (pet)::numeric, 1) AS pet
+FROM pet_with_seasons
+GROUP BY
+location_id,
+year,
+season ;
 
 CREATE UNIQUE INDEX if not exists
 pet_year_max_location_year_season_uidx

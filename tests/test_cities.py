@@ -1,11 +1,11 @@
-"""Tests for cities.py — city loading, filtering, and processing."""
+"""Tests for city data processing."""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from cities import filter_bounding_box, process_cities
+from cities import CITY_COORD_DECIMALS, filter_bounding_box, process_cities
 
 
 class TestFilterBoundingBox:
@@ -17,7 +17,7 @@ class TestFilterBoundingBox:
             }
         )
         result = filter_bounding_box(df)
-        assert len(result) == 2  # 40/-90 and 35/-100 are inside
+        assert len(result) == 2
 
     def test_excludes_outside_bounds(self) -> None:
         df = pd.DataFrame({"lat": [10.0], "lng": [-130.0]})
@@ -54,13 +54,12 @@ class TestProcessCities:
         assert set(result.columns) == {"location_id", "city", "state", "lat", "lng"}
 
     def test_keeps_highest_population_per_grid_cell(self) -> None:
-        # Two cities that snap to the same grid cell
         df = pd.DataFrame(
             {
                 "city": ["Small", "Big"],
                 "state": ["ST", "ST"],
-                "lat": [30.01, 30.02],  # Both snap to 30.0
-                "lng": [-90.01, -90.02],  # Both snap to -90.0
+                "lat": [30.01, 30.02],
+                "lng": [-90.01, -90.02],
                 "population": [1000, 5000],
             }
         )
@@ -80,3 +79,19 @@ class TestProcessCities:
         )
         result = process_cities(df)
         assert result.iloc[0]["location_id"] == 0
+
+    def test_rounds_coordinates_to_configured_precision(self) -> None:
+        df = pd.DataFrame(
+            {
+                "city": ["A"],
+                "state": ["X"],
+                "lat": [30.12341],
+                "lng": [-90.98761],
+                "population": [100000],
+            }
+        )
+
+        result = process_cities(df)
+
+        assert result.iloc[0]["lat"] == round(30.12341, CITY_COORD_DECIMALS)
+        assert result.iloc[0]["lng"] == round(-90.98761, CITY_COORD_DECIMALS)

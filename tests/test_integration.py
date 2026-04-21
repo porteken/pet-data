@@ -1,4 +1,4 @@
-"""Integration test: full analytics pipeline with synthetic data."""
+"""Integration tests for the analytics pipeline."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _write_shard_csv(
 
 
 class TestEndToEndAnalyticsPipeline:
-    """Simulate the CI generate-analytics job with synthetic PET shards."""
+    """Tests for the end-to-end analytics pipeline."""
 
     @pytest.fixture()
     def pipeline_dirs(self, tmp_path: Path) -> dict[str, Path]:
@@ -36,8 +36,7 @@ class TestEndToEndAnalyticsPipeline:
         out_dir = tmp_path / "analytics_data_csv"
         rng = np.random.default_rng(0)
 
-        # Create multi-year PET shards (2 city groups per year)
-        for year in [2000, 2001, 2010, 2011]:
+        for year in range(2000, 2015):
             for city_shard, loc_ids in enumerate([[10, 11], [20, 21]]):
                 dates = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
                 rows = [
@@ -63,7 +62,7 @@ class TestEndToEndAnalyticsPipeline:
         df = _load_pet_frame(args)
         assert not df.empty
         assert "year" in df.columns
-        assert set(df["year"].unique()) == {2000, 2001, 2010, 2011}
+        assert set(df["year"].unique()) == set(range(2000, 2015))
 
     def test_sharded_load_splits_files(self, pipeline_dirs: dict[str, Path]) -> None:
         args_0 = argparse.Namespace(
@@ -80,7 +79,7 @@ class TestEndToEndAnalyticsPipeline:
         )
         df0 = _load_pet_frame(args_0)
         df1 = _load_pet_frame(args_1)
-        # Together they should cover all 4 location IDs
+
         combined_ids = set(df0["location_id"]).union(set(df1["location_id"]))
         assert len(combined_ids) == 4
 
@@ -95,13 +94,11 @@ class TestEndToEndAnalyticsPipeline:
         out_dir = pipeline_dirs["out_dir"]
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Percentiles
         pct_path = generate_percentiles(df, out_dir)
         pct_df = pd.read_parquet(pct_path)
         assert len(pct_df) > 0
         assert (pct_df["p10"] <= pct_df["p90"]).all()
 
-        # Forecast
         forecast_df = _build_forecast_frame(df, max_workers=1)
         fc_path = generate_forecast(forecast_df, out_dir)
         fc_df = pd.read_parquet(fc_path)
@@ -109,7 +106,6 @@ class TestEndToEndAnalyticsPipeline:
         assert int(fc_df["year"].max()) == 2100  # pyright: ignore[reportArgumentType]
         assert bool(fc_df["pet"].notna().all())
 
-        # Change per decade
         chg_path = generate_change_per_decade(df, forecast_df, out_dir)
         chg_df = pd.read_parquet(chg_path)
         assert "year" in chg_df.columns
@@ -119,7 +115,6 @@ class TestEndToEndAnalyticsPipeline:
         self, pipeline_dirs: dict[str, Path]
     ) -> None:
         """Requesting a shard index beyond available files returns an empty frame."""
-        # With 8 files total and shard_count=100, shard_index=99 gets 0 files
         args = argparse.Namespace(
             pet_root=str(pipeline_dirs["pet_root"]),
             pet_csv="nonexistent.csv",

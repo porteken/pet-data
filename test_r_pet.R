@@ -1,5 +1,0 @@
-source("/home/kenneth-porter/pet_files/pet_corrected.R")
-res <- PETcorrected(Tair=25, Tmrt=25, v_air=0.1, rh=50, icl=0.9)
-print(paste("R result with icl 0.9:", res))
-res2 <- PETcorrected(Tair=25, Tmrt=25, v_air=0.1, rh=50, icl=0.5)
-print(paste("R result with icl 0.5:", res2))
