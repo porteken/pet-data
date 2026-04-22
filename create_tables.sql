@@ -24,12 +24,8 @@ date date NOT NULL,
 pet double precision NOT NULL
 ) ;
 
-CREATE TABLE IF NOT EXISTS public.pet_percentiles (
-year bigint NOT NULL,
-location_id bigint NOT NULL,
-p10 double precision NOT NULL,
-p90 double precision NOT NULL
-) ;
+CREATE INDEX if not exists id
+ON public.pet (location_id, date) ;
 
 CREATE TABLE IF NOT EXISTS public.pet_forecast (
 location_id bigint NOT NULL,
@@ -45,42 +41,29 @@ acceleration double precision
 
 -- Handle migrations for pet_forecast if it already exists
 DO $$ 
+DECLARE
+    forecast_table_name constant text := 'pet_forecast';
 BEGIN 
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='lower') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=forecast_table_name AND column_name='lower') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN lower double precision;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='upper') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=forecast_table_name AND column_name='upper') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN upper double precision;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='model_type') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=forecast_table_name AND column_name='model_type') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN model_type text;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='full_years_used') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=forecast_table_name AND column_name='full_years_used') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN full_years_used bigint;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='warming_rate') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=forecast_table_name AND column_name='warming_rate') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN warming_rate double precision;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_forecast' AND column_name='acceleration') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=forecast_table_name AND column_name='acceleration') THEN
         ALTER TABLE public.pet_forecast ADD COLUMN acceleration double precision;
     END IF;
 END $$ ;
 
-CREATE TABLE IF NOT EXISTS public.pet_change (
-location_id bigint NOT NULL,
-year bigint NOT NULL,
-change double precision NOT NULL
-) ;
-
--- Handle migrations for pet_change if it already exists
--- (remove decade, add year)
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_change' AND column_name='decade') THEN
-        ALTER TABLE public.pet_change DROP COLUMN decade;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pet_change' AND column_name='year') THEN
-        ALTER TABLE public.pet_change ADD COLUMN year bigint;
-        -- If we were keeping data we'd need a default, but TRUNCATE is usually called.
-    END IF;
-END $$ ;
+-- Derived analytics now live in create_views.sql as materialized views:
+--   public.pet_percentiles
+--   public.pet_change

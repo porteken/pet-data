@@ -15,11 +15,7 @@ if TYPE_CHECKING:
     from psycopg2.extensions import connection, cursor
 
 PET_CSV_HEADER = "location_id,date,pet\n"
-ANALYTICS_TABLES = (
-    "pet_percentiles",
-    "pet_forecast",
-    "pet_change",
-)
+ANALYTICS_TABLES = ("pet_forecast",)
 
 
 def _write_empty_pet_csv(output_path: str | Path) -> None:

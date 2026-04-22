@@ -22,9 +22,7 @@ COPY_BATCH_SIZE = 50_000
 TABLE_NAMES = [
     "locations",
     "pet",
-    "pet_percentiles",
     "pet_forecast",
-    "pet_change",
 ]
 
 
@@ -429,10 +427,6 @@ def _discover_forecast_csv_paths(args: argparse.Namespace) -> list[Path]:
     return _discover_analytics_csv_paths(args, "forecast.parquet")
 
 
-def _discover_pet_change_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "change_per_decade.parquet")
-
-
 def _load_requested_tables(
     conn: connection,
     args: argparse.Namespace,
@@ -443,9 +437,7 @@ def _load_requested_tables(
     table_csv_resolvers = (
         ("locations", _discover_locations_csv_paths),
         ("pet", _discover_pet_csv_paths),
-        ("pet_percentiles", _discover_percentiles_csv_paths),
         ("pet_forecast", _discover_forecast_csv_paths),
-        ("pet_change", _discover_pet_change_csv_paths),
     )
 
     for table_name, csv_resolver in table_csv_resolvers:

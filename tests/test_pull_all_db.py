@@ -19,12 +19,12 @@ DB_URI = os.getenv("SUPABASE_DB_URI")
 REQUIRED_TABLES = [
     "locations",
     "pet",
-    "pet_change",
     "pet_forecast",
-    "pet_percentiles",
 ]
 
 REQUIRED_MATERIALIZED_VIEWS = [
+    "pet_change",
+    "pet_percentiles",
     "pet_year",
     "pet_year_avg",
     "pet_year_max",
@@ -101,6 +101,11 @@ def test_locations_not_empty(db_conn: connection) -> None:
     assert count > 0, "locations table is empty"
 
 
+def test_pet_has_id_index(db_conn: connection) -> None:
+    """Pet should expose the requested id index for location/date access."""
+    assert _get_index_columns(db_conn, "id") == ["location_id", "date"]
+
+
 def _get_relation_columns(conn: connection, relation: str) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
@@ -114,6 +119,25 @@ def _get_relation_columns(conn: connection, relation: str) -> list[str]:
             "AND NOT a.attisdropped "
             "ORDER BY a.attnum",
             (relation,),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def _get_index_columns(conn: connection, index_name: str) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.attname "
+            "FROM pg_catalog.pg_class AS i "
+            "JOIN pg_catalog.pg_index AS ix ON ix.indexrelid = i.oid "
+            "JOIN pg_catalog.pg_class AS t ON t.oid = ix.indrelid "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = i.relnamespace "
+            "JOIN pg_catalog.pg_attribute AS a ON a.attrelid = t.oid "
+            "AND a.attnum = ANY(ix.indkey) "
+            "WHERE n.nspname = 'public' "
+            "AND i.relname = %s "
+            "AND t.relname = 'pet' "
+            "ORDER BY array_position(ix.indkey, a.attnum)",
+            (index_name,),
         )
         return [row[0] for row in cur.fetchall()]
 
@@ -198,3 +222,115 @@ def test_pet_year_avg_has_annual_and_seasons(db_conn: connection) -> None:
 def test_pet_year_max_has_annual_and_seasons(db_conn: connection) -> None:
     """Verify pet_year_max contains annual and seasonal rows."""
     _assert_year_season_pet_view(db_conn, "pet_year_max", "MAX")
+
+
+def test_pet_percentiles_match_pet_quantiles(db_conn: connection) -> None:
+    """pet_percentiles should match yearly 10th/90th quantiles from pet."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "WITH expected AS ("
+            "SELECT "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "location_id, "
+            "ROUND((PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY pet))::numeric, 1) AS p10, "
+            "ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY pet))::numeric, 1) AS p90 "
+            "FROM pet "
+            "GROUP BY EXTRACT(YEAR FROM date)::int, location_id"
+            "), actual AS ("
+            "SELECT year, location_id, p10, p90 FROM pet_percentiles"
+            "), missing AS ("
+            "SELECT * FROM expected "
+            "EXCEPT "
+            "SELECT * FROM actual"
+            "), extra AS ("
+            "SELECT * FROM actual "
+            "EXCEPT "
+            "SELECT * FROM expected"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM missing), "
+            "(SELECT COUNT(*) FROM extra), "
+            "(SELECT COUNT(*) FROM ("
+            "SELECT year, location_id, COUNT(*) AS row_count "
+            "FROM pet_percentiles "
+            "GROUP BY year, location_id "
+            "HAVING COUNT(*) > 1"
+            ") AS duplicates)"
+        )
+        diff_count_row = cur.fetchone()
+        assert diff_count_row is not None
+
+    columns = _get_relation_columns(db_conn, "pet_percentiles")
+    assert columns == ["year", "location_id", "p10", "p90"]
+
+    missing_count, extra_count, duplicate_count = diff_count_row
+    assert missing_count == 0
+    assert extra_count == 0
+    assert duplicate_count == 0
+
+
+def test_pet_change_matches_decade_deltas(db_conn: connection) -> None:
+    """pet_change should match decade-to-decade deltas from pet + pet_forecast."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "WITH daily_pet AS ("
+            "SELECT location_id, date, AVG(pet) AS pet "
+            "FROM pet "
+            "GROUP BY location_id, date"
+            "), historical_yearly_avg AS ("
+            "SELECT "
+            "location_id, "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "AVG(pet) AS pet, "
+            "0 AS source_order "
+            "FROM daily_pet "
+            "GROUP BY location_id, EXTRACT(YEAR FROM date)::int"
+            "), combined_yearly_avg AS ("
+            "SELECT location_id, year, pet, source_order FROM historical_yearly_avg "
+            "UNION ALL "
+            "SELECT location_id, year::int AS year, pet, 1 AS source_order FROM pet_forecast"
+            "), deduplicated_yearly_avg AS ("
+            "SELECT DISTINCT ON (location_id, year) location_id, year, pet "
+            "FROM combined_yearly_avg "
+            "ORDER BY location_id, year, source_order"
+            "), decade_avg AS ("
+            "SELECT location_id, (year / 10) * 10 AS year, AVG(pet) AS pet "
+            "FROM deduplicated_yearly_avg "
+            "GROUP BY location_id, (year / 10) * 10"
+            "), expected AS ("
+            "SELECT "
+            "location_id, "
+            "year, "
+            "ROUND((pet - LAG(pet) OVER (PARTITION BY location_id ORDER BY year))::numeric, 2) AS change "
+            "FROM decade_avg"
+            "), actual AS ("
+            "SELECT location_id, year, change FROM pet_change"
+            "), missing AS ("
+            "SELECT location_id, year, change FROM expected WHERE change IS NOT NULL "
+            "EXCEPT "
+            "SELECT * FROM actual"
+            "), extra AS ("
+            "SELECT * FROM actual "
+            "EXCEPT "
+            "SELECT location_id, year, change FROM expected WHERE change IS NOT NULL"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM missing), "
+            "(SELECT COUNT(*) FROM extra), "
+            "(SELECT COUNT(*) FROM ("
+            "SELECT location_id, year, COUNT(*) AS row_count "
+            "FROM pet_change "
+            "GROUP BY location_id, year "
+            "HAVING COUNT(*) > 1"
+            ") AS duplicates)"
+        )
+        diff_count_row = cur.fetchone()
+        assert diff_count_row is not None
+
+    columns = _get_relation_columns(db_conn, "pet_change")
+    assert columns == ["location_id", "year", "change"]
+
+    missing_count, extra_count, duplicate_count = diff_count_row
+    assert missing_count == 0
+    assert extra_count == 0
+    assert duplicate_count == 0

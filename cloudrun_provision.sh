@@ -17,7 +17,7 @@ AWS_CLOUD_RUN_REGION=${AWS_DEFAULT_REGION:-${AWS_REGION:-}}
 
 echo "Building Cloud Run image ${CLOUD_RUN_IMAGE}"
 gcloud auth configure-docker --quiet
-docker build -t "$CLOUD_RUN_IMAGE" .
+docker build --pull -t "$CLOUD_RUN_IMAGE" .
 docker push "$CLOUD_RUN_IMAGE"
 
 echo "Deploying Cloud Run job ${CLOUD_RUN_JOB_NAME} in ${CLOUD_RUN_REGION}"

@@ -198,6 +198,6 @@ class TestTableNames:
     def test_expected_tables(self) -> None:
         assert "locations" in TABLE_NAMES
         assert "pet" in TABLE_NAMES
-        assert "pet_percentiles" in TABLE_NAMES
         assert "pet_forecast" in TABLE_NAMES
-        assert "pet_change" in TABLE_NAMES
+        assert "pet_percentiles" not in TABLE_NAMES
+        assert "pet_change" not in TABLE_NAMES
