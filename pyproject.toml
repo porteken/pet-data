@@ -64,4 +64,5 @@ max-statements = 300
     "TC003",    # Path used at runtime in tests
     "PERF401",  # micro-optimization not needed in tests
     "PLC0415",  # local imports in test methods are intentional
+    "SLF001",   # tests may exercise internal helpers directly
 ]

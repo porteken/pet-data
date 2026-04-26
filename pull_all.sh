@@ -153,7 +153,8 @@ _progress_display() {
 }
 
 _progress_note() {
-    _progress_display "$1" 1
+    local message=$1
+    _progress_display "${message}" 1
     return $?
 }
 
@@ -301,7 +302,8 @@ PY
 }
 
 _write_empty_pet_csv() {
-    printf 'location_id,date,pet\n' > "$1"
+    local output_path=$1
+    printf 'location_id,date,pet\n' > "${output_path}"
     return $?
 }
 
@@ -461,7 +463,10 @@ _cleanup() {
         sleep 1
         for pid in "${_PIDS[@]}"; do _kill_tree "${pid}" KILL; done
     fi
-    exit "${exit_code}"
+    if (( exit_code != 0 )); then
+        exit "${exit_code}"
+    fi
+    return 0
 }
 # Catch all abort signals AND script exits to ensure cleanup fires safely
 trap _cleanup SIGINT SIGTERM ERR EXIT

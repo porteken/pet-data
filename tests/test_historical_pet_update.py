@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
 
 import historical_pet_update as hpu
+
+FetchoneValue = tuple[str | None] | None
 
 
 class FakeCopy:
@@ -30,16 +33,19 @@ class FakeCopy:
 
 
 class FakeCursor:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        fetchone_values: list[FetchoneValue] | None = None,
+    ) -> None:
         """Initialize the fake cursor."""
         self.copy_query = ""
         self.copy_params: tuple[str, str] | None = None
-        self._fetchone_values = [("public.pet",)]
+        self._fetchone_values = list(fetchone_values or [("public.pet",)])
 
     def execute(self, query: object, params: object | None = None) -> None:
         _ = (query, params)
 
-    def fetchone(self) -> tuple[str] | None:
+    def fetchone(self) -> FetchoneValue:
         if not self._fetchone_values:
             return None
         return self._fetchone_values.pop(0)
@@ -59,15 +65,66 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        fetchone_values: list[FetchoneValue] | None = None,
+    ) -> None:
         """Initialize fake connection."""
-        self.cursor_instance = FakeCursor()
+        self.cursor_instance = FakeCursor(fetchone_values)
 
     def cursor(self) -> FakeCursor:
         return self.cursor_instance
 
     def close(self) -> None:
         return None
+
+
+class RecordingCursor:
+    def __init__(
+        self,
+        execute_calls: list[tuple[object, object | None]],
+        fetchone_values: list[FetchoneValue] | None = None,
+    ) -> None:
+        """Initialize a cursor that records execute calls."""
+        self.execute_calls = execute_calls
+        self._fetchone_values = list(fetchone_values or [])
+
+    def execute(self, query: object, params: object | None = None) -> None:
+        self.execute_calls.append((query, params))
+
+    def fetchone(self) -> FetchoneValue:
+        if not self._fetchone_values:
+            return None
+        return self._fetchone_values.pop(0)
+
+    def __enter__(self) -> RecordingCursor:  # noqa: PYI034
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit context manager."""
+        _ = (exc_type, exc, tb)
+
+
+class RecordingConnection:
+    def __init__(self, cursor_fetchone_values: list[list[FetchoneValue]]) -> None:
+        """Initialize connection with deterministic cursor responses."""
+        self.execute_calls: list[tuple[object, object | None]] = []
+        self.cursors = [
+            RecordingCursor(self.execute_calls, fetchone_values)
+            for fetchone_values in cursor_fetchone_values
+        ]
+        self._cursor_index = 0
+        self.autocommit = False
+        self.closed = False
+
+    def cursor(self) -> RecordingCursor:
+        cursor = self.cursors[self._cursor_index]
+        self._cursor_index += 1
+        return cursor
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_export_all_writes_pet_rows(
@@ -114,3 +171,179 @@ def test_merge_csvs_prefers_later_sources_for_duplicates(tmp_path: Path) -> None
             "pet",
         ].iloc[0],
     ) == pytest.approx(25.0)
+
+
+def test_build_export_copy_query_with_window_filters_out_target_range() -> None:
+    query, params = hpu._build_export_copy_query(
+        window_start="2024-01-01",
+        window_end="2024-01-31",
+    )
+
+    assert "WHERE date < %s::date OR date > %s::date" in query
+    assert params == ("2024-01-01", "2024-01-31")
+
+
+def test_export_pet_without_database_uri_writes_empty_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("SUPABASE_DB_URI", raising=False)
+
+    output_path = tmp_path / "existing_pet.csv"
+    hpu.export_pet(None, None, str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == hpu.PET_CSV_HEADER
+    assert "SUPABASE_DB_URI not set" in capsys.readouterr().out
+
+
+def test_export_pet_writes_empty_csv_when_pet_table_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_conn = FakeConnection(fetchone_values=[(None,)])
+    monkeypatch.setattr(hpu.psycopg, "connect", lambda _: fake_conn)
+    monkeypatch.setenv("SUPABASE_DB_URI", "postgresql://example")
+
+    output_path = tmp_path / "existing_pet.csv"
+    hpu.export_pet(None, None, str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == hpu.PET_CSV_HEADER
+    assert fake_conn.cursor_instance.copy_query == ""
+    assert "Table 'pet' does not exist" in capsys.readouterr().out
+
+
+def test_merge_csvs_writes_empty_csv_when_sources_are_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output_path = tmp_path / "pet_full.csv"
+
+    hpu.merge_csvs([], [str(tmp_path / "missing.csv")], str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == hpu.PET_CSV_HEADER
+    captured = capsys.readouterr().out
+    assert "Merging PET data into" in captured
+    assert "No source data found; wrote empty CSV." in captured
+
+
+def test_delete_window_without_database_uri_skips_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("SUPABASE_DB_URI", raising=False)
+
+    hpu.delete_window("2024-01-01", "2024-01-31")
+
+    assert (
+        "SUPABASE_DB_URI not set, skipping database cleanup." in capsys.readouterr().out
+    )
+
+
+def test_delete_window_rebuilds_views_and_truncates_analytics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn = RecordingConnection([[("public.pet",)], []])
+    monkeypatch.setattr(hpu.psycopg, "connect", lambda _: conn)
+    monkeypatch.setattr(hpu, "_existing_public_tables", lambda *_args: ["pet_forecast"])
+    monkeypatch.setenv("SUPABASE_DB_URI", "postgresql://example")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "drop_views.sql").write_text(
+        "DROP VIEW IF EXISTS pet_year;", encoding="utf-8"
+    )
+    (tmp_path / "create_tables.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS pet(id int);", encoding="utf-8"
+    )
+
+    hpu.delete_window("2024-01-01", "2024-01-31")
+
+    assert conn.autocommit is True
+    assert conn.closed is True
+    assert any(
+        call[0] == "DROP VIEW IF EXISTS pet_year;" for call in conn.execute_calls
+    )
+    assert any(
+        call[0] == "DELETE FROM public.pet WHERE date BETWEEN %s::date AND %s::date"
+        and call[1] == ("2024-01-01", "2024-01-31")
+        for call in conn.execute_calls
+    )
+    assert any(call[0].__class__.__name__ == "Composed" for call in conn.execute_calls)
+    captured = capsys.readouterr().out
+    assert "Deleting PET data in window [2024-01-01, 2024-01-31]..." in captured
+    assert "Truncating analytics tables..." in captured
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_call"),
+    [
+        (
+            [
+                "historical_pet_update.py",
+                "export",
+                "2024-01-01",
+                "2024-01-31",
+                "out.csv",
+            ],
+            ("export", ("2024-01-01", "2024-01-31", "out.csv")),
+        ),
+        (
+            ["historical_pet_update.py", "export-all", "out.csv"],
+            ("export", (None, None, "out.csv")),
+        ),
+        (
+            [
+                "historical_pet_update.py",
+                "merge",
+                "pet_full.csv",
+                "existing.csv",
+                "incoming.csv",
+                "--dirs",
+                "pet_data_csv",
+                "more_data",
+            ],
+            (
+                "merge",
+                (
+                    ["pet_data_csv", "more_data"],
+                    ["existing.csv", "incoming.csv"],
+                    "pet_full.csv",
+                ),
+            ),
+        ),
+        (
+            ["historical_pet_update.py", "delete-window", "2024-01-01", "2024-01-31"],
+            ("delete", ("2024-01-01", "2024-01-31")),
+        ),
+    ],
+)
+def test_main_dispatches_supported_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    expected_call: tuple[str, tuple[Any, ...]],
+) -> None:
+    recorded_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    monkeypatch.setattr(
+        hpu, "export_pet", lambda *args: recorded_calls.append(("export", args))
+    )
+    monkeypatch.setattr(
+        hpu, "merge_csvs", lambda *args: recorded_calls.append(("merge", args))
+    )
+    monkeypatch.setattr(
+        hpu, "delete_window", lambda *args: recorded_calls.append(("delete", args))
+    )
+    monkeypatch.setattr(hpu.sys, "argv", argv)
+
+    hpu.main()
+
+    assert recorded_calls == [expected_call]
+
+
+def test_main_rejects_unknown_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hpu.sys, "argv", ["historical_pet_update.py", "mystery"])
+
+    with pytest.raises(SystemExit, match="Unknown command: mystery"):
+        hpu.main()
