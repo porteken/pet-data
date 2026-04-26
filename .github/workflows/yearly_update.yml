@@ -13,7 +13,7 @@ env:
 
 jobs:
   build-target-window:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     runs-on: ubuntu-latest
     outputs:
       target_year: ${{ steps.compute.outputs.target_year }}
@@ -26,7 +26,7 @@ jobs:
         run: python build_year_range.py --github --yearly >> "$GITHUB_OUTPUT"
 
   deploy-infrastructure:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     runs-on: ubuntu-latest
     env:
       STACK_NAME: pet-data-infrastructure
@@ -42,7 +42,7 @@ jobs:
           aws cloudformation deploy --template-file template.yml --stack-name "$STACK_NAME" --parameter-overrides BucketName="$BUCKET_NAME" --no-fail-on-empty-changes
 
   cancel-running-cloud-run-executions:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +61,7 @@ jobs:
             --project "${{ env.GCP_PROJECT_ID }}"
 
   clear-pet-output:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     needs: [build-target-window, deploy-infrastructure, cancel-running-cloud-run-executions]
     runs-on: ubuntu-latest
     steps:
@@ -74,7 +74,7 @@ jobs:
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/ --max-workers 8
 
   provision-cloud-run:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     needs: [deploy-infrastructure, cancel-running-cloud-run-executions]
     runs-on: ubuntu-latest
     steps:
@@ -96,7 +96,7 @@ jobs:
         run: /bin/bash ./cloudrun_provision.sh
 
   compute-pet-google-era5-a:
-    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-target-window.outputs.target_year != ''
+    if: github.ref_name == 'prd' && needs.build-target-window.outputs.target_year != ''
     needs: [build-target-window, clear-pet-output, provision-cloud-run]
     runs-on: ubuntu-latest
     strategy:
@@ -124,7 +124,7 @@ jobs:
             --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   compute-pet-google-era5-b:
-    if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-target-window.outputs.target_year != ''
+    if: github.ref_name == 'prd' && needs.build-target-window.outputs.target_year != ''
     needs: [build-target-window, clear-pet-output, provision-cloud-run]
     runs-on: ubuntu-latest
     strategy:
@@ -152,7 +152,7 @@ jobs:
             --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   prepare-db-load:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     needs: [build-target-window, compute-pet-google-era5-a, compute-pet-google-era5-b]
     runs-on: ubuntu-latest
     steps:
@@ -169,11 +169,11 @@ jobs:
         run: uv sync --locked --no-dev
       - name: Clean Up Database Window
         env:
-          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: uv run python historical_pet_update.py delete-window "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}"
 
   load-to-db:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     needs: [prepare-db-load, build-target-window]
     runs-on: ubuntu-latest
     strategy:
@@ -207,11 +207,11 @@ jobs:
           aws s3 sync "s3://pet-parquet-files/${PREFIX}" "./${PREFIX}"
       - name: Load shard to Supabase
         env:
-          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
 
   finalize-db-load:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
+    if: github.ref_name == 'prd'
     needs: load-to-db
     runs-on: ubuntu-latest
     steps:
@@ -228,5 +228,5 @@ jobs:
         run: uv sync --locked --no-dev
       - name: Recreate Views
         env:
-          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
+          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: uv run python load.py --append-only --skip-table locations --skip-table pet
