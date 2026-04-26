@@ -10,11 +10,18 @@ RETURNS double precision
 LANGUAGE SQL
 IMMUTABLE
 AS $$
+WITH sorted AS (
+SELECT ARRAY (
+SELECT unnest ($1)
+ORDER BY 1
+) AS sorted_years
+)
 SELECT CASE
-WHEN array_length($1, 1) IS NULL OR array_length($1, 1) = 0 THEN NULL
-WHEN MOD(array_length($1, 1), 2) = 1 THEN $1[(array_length($1, 1) + 1) / 2]::double precision
-ELSE ($1[array_length($1, 1) / 2] + $1[(array_length($1, 1) / 2) + 1]) / 2.0
+WHEN array_length (sorted_years, 1) IS NULL OR array_length (sorted_years, 1) = 0 THEN NULL
+WHEN MOD (array_length (sorted_years, 1), 2) = 1 THEN sorted_years[(array_length (sorted_years, 1) + 1) / 2]::double precision
+ELSE (sorted_years[array_length (sorted_years, 1) / 2] + sorted_years[(array_length (sorted_years, 1) / 2) + 1]) / 2.0
 END
+FROM sorted
 $$ ;
 
 CREATE OR REPLACE FUNCTION public.pet_infinity ()
@@ -51,7 +58,7 @@ RETURNS boolean
 LANGUAGE SQL
 IMMUTABLE
 AS $$
-SELECT $1 IS NOT NULL AND $1 = $1 AND abs($1) < public.pet_infinity()
+SELECT $1 IS NOT NULL AND $1 = $1 AND abs ($1) < 'Infinity'::double precision
 $$ ;
 
 DO $$
@@ -182,9 +189,11 @@ sx := sx + x ;
 sy := sy + y ;
 sxx := sxx + (x * x) ;
 sxy := sxy + (x * y) ;
+IF degree = 2 THEN
 sxxx := sxxx + (x * x * x) ;
 sxxxx := sxxxx + (x * x * x * x) ;
 sxxy := sxxy + (x * x * y) ;
+END IF ;
 END LOOP ;
 
 result.degree := degree ;
@@ -404,6 +413,9 @@ base_rmse double precision ;
 horizon double precision ;
 quadratic_term double precision ;
 sigma double precision ;
+out_model_type text ;
+out_full_years_used smallint ;
+out_acceleration numeric (6, 3) ;
 BEGIN
 IF n = 0 OR n <> COALESCE(array_length(pet_values, 1), 0) OR n < 10 THEN
 RETURN ;
@@ -426,6 +438,15 @@ WHEN public.pet_is_finite(model.cv_rmse) THEN model.cv_rmse
 ELSE 0.0
 END
 ) ;
+out_model_type := CASE
+WHEN model.degree = quadratic_degree THEN 'quadratic'
+ELSE 'linear'
+END ;
+out_full_years_used := n::smallint ;
+out_acceleration := ROUND(
+public.pet_model_acceleration(model.degree, model.coef2)::numeric,
+3
+)::numeric(6, 3) ;
 
 FOR future_year IN (last_year + 1)..forecast_end_year LOOP
 raw_pet := public.pet_model_predict(
@@ -482,11 +503,8 @@ year := future_year::smallint ;
 pet := ROUND(future_pet::numeric, 1)::numeric(5, 1) ;
 lower := ROUND((future_pet - (prediction_interval_z * sigma))::numeric, 1)::numeric(5, 1) ;
 upper := ROUND((future_pet + (prediction_interval_z * sigma))::numeric, 1)::numeric(5, 1) ;
-model_type := CASE
-WHEN model.degree = quadratic_degree THEN 'quadratic'
-ELSE 'linear'
-END ;
-full_years_used := n::smallint ;
+model_type := out_model_type ;
+full_years_used := out_full_years_used ;
 warming_rate := ROUND(
 public.pet_model_slope(
 model.degree,
@@ -497,10 +515,7 @@ future_year::double precision
 )::numeric,
 2
 )::numeric(5, 2) ;
-acceleration := ROUND(
-public.pet_model_acceleration(model.degree, model.coef2)::numeric,
-3
-)::numeric(6, 3) ;
+acceleration := out_acceleration ;
 RETURN NEXT ;
 END LOOP ;
 END
@@ -547,16 +562,14 @@ WITH pet_with_seasons AS (
 SELECT
 p.location_id::smallint AS location_id,
 EXTRACT (YEAR FROM p.date)::smallint AS year,
-public.pet_annual_season () AS season,
+p_seasons.season,
 p.pet::real AS pet
 FROM public.pet AS p
-UNION ALL
-SELECT
-p.location_id::smallint AS location_id,
-EXTRACT (YEAR FROM p.date)::smallint AS year,
-public.pet_season (p.date) AS season,
-p.pet::real AS pet
-FROM public.pet AS p
+CROSS JOIN LATERAL (
+VALUES
+(public.pet_annual_season ()),
+(public.pet_season (p.date))
+) AS p_seasons (season)
 )
 SELECT
 location_id::integer AS location_id,
@@ -584,16 +597,14 @@ WITH pet_with_seasons AS (
 SELECT
 p.location_id::smallint AS location_id,
 EXTRACT (YEAR FROM p.date)::smallint AS year,
-public.pet_annual_season () AS season,
+p_seasons.season,
 p.pet::real AS pet
 FROM public.pet AS p
-UNION ALL
-SELECT
-p.location_id::smallint AS location_id,
-EXTRACT (YEAR FROM p.date)::smallint AS year,
-public.pet_season (p.date) AS season,
-p.pet::real AS pet
-FROM public.pet AS p
+CROSS JOIN LATERAL (
+VALUES
+(public.pet_annual_season ()),
+(public.pet_season (p.date))
+) AS p_seasons (season)
 )
 SELECT
 location_id::smallint AS location_id,
@@ -664,16 +675,14 @@ WITH pet_with_seasons AS (
 SELECT
 p.location_id::smallint AS location_id,
 p.date,
-public.pet_annual_season () AS season,
+p_seasons.season,
 p.pet::real AS pet
 FROM public.pet AS p
-UNION ALL
-SELECT
-p.location_id::smallint AS location_id,
-p.date,
-public.pet_season (p.date) AS season,
-p.pet::real AS pet
-FROM public.pet AS p
+CROSS JOIN LATERAL (
+VALUES
+(public.pet_annual_season ()),
+(public.pet_season (p.date))
+) AS p_seasons (season)
 ), daily_pet AS (
 SELECT
 p.location_id::smallint AS location_id,
@@ -704,6 +713,8 @@ y.year::smallint AS year,
 y.season,
 y.pet::real AS pet
 FROM yearly_pet AS y
+-- Seasons are grouped by the calendar year of each date, matching
+-- public.pet_season() (for example: Winter 2024 = Jan/Feb/Dec 2024).
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
 WHEN MOD (y.year, 4) = 0
@@ -832,7 +843,6 @@ f.upper::real AS future_upper,
 c.change::real AS change_per_decade
 FROM public.pet_year_avg AS a
 JOIN public.locations AS l ON l.id = a.location_id
-AND l.id > 0
 JOIN public.pet_year_max AS m ON m.location_id = a.location_id
 AND m.year = a.year
 AND m.season = a.season
@@ -852,3 +862,6 @@ ON public.city_rankings_view (location_id, year) ;
 
 CREATE INDEX if not exists city_rankings_view_year_idx
 ON public.city_rankings_view (year) ;
+
+RESET statement_timeout ;
+RESET lock_timeout ;
