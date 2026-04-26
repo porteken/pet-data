@@ -11,6 +11,7 @@ env:
   GCP_PROJECT_ID: weather-ai-478502
   CLOUD_RUN_JOB_NAME: era5-worker
   CLOUD_RUN_REGION: us-east1
+  ERA5_BATCH_HOURS: '720'
 
 jobs:
   build-year-range:
@@ -148,13 +149,13 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
-          # google_era5 defaults to ~30-day batches, so 13 time shards keeps each
-          # Cloud Run execution to a single batch and avoids per-container OOMs.
+          # Keep batch-hours explicit so CI stays aligned with the local runner.
+          # 13 time shards x 720 hours keeps each Cloud Run execution to one batch.
           # Split across two jobs to stay under GitHub's 256-matrix limit.
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
-            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
+            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   compute-pet-google-era5-b:
     if: (github.ref_name == 'dev' || github.ref_name == 'prd') && needs.build-year-range.outputs.years != '[]'
@@ -177,13 +178,13 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
-          # google_era5 defaults to ~30-day batches, so 13 time shards keeps each
-          # Cloud Run execution to a single batch and avoids per-container OOMs.
+          # Keep batch-hours explicit so CI stays aligned with the local runner.
+          # 13 time shards x 720 hours keeps each Cloud Run execution to one batch.
           # Split across two jobs to stay under GitHub's 256-matrix limit.
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
-            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
+            --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   prepare-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -245,12 +246,48 @@ jobs:
           enable-cache: true
       - name: Sync runtime dependencies
         run: uv sync --locked --no-dev
-      - name: Sync PET Data from S3
+      - name: Select PET year prefixes for shard
+        id: pet-prefixes
+        env:
+          LOAD_SHARD_INDEX: ${{ matrix.load_shard_index }}
+          LOAD_SHARD_COUNT: '20'
+          YEARS_JSON: ${{ needs.build-year-range.outputs.years }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          years = sorted(json.loads(os.environ["YEARS_JSON"]))
+          shard_index = int(os.environ["LOAD_SHARD_INDEX"])
+          shard_count = int(os.environ["LOAD_SHARD_COUNT"])
+
+          selected_years = [
+              str(year)
+              for position, year in enumerate(years)
+              if position % shard_count == shard_index
+          ]
+
+          print(f"selected_years={json.dumps(selected_years)}")
+          print("prefixes<<EOF")
+          for year in selected_years:
+              print(f"pet_data_csv/year={year}/")
+          print("EOF")
+          PY
+      - name: Sync shard PET data from S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
+          PET_YEAR_PREFIXES: ${{ steps.pet-prefixes.outputs.prefixes }}
+          PET_SELECTED_YEARS: ${{ steps.pet-prefixes.outputs.selected_years }}
+        run: |
+          echo "Syncing PET data for shard years: ${PET_SELECTED_YEARS}"
+          mkdir -p pet_data_csv
+          while IFS= read -r prefix; do
+            [[ -n "$prefix" ]] || continue
+            echo "Syncing s3://pet-parquet-files/${prefix}"
+            aws s3 sync "s3://pet-parquet-files/${prefix}" "./${prefix}"
+          done <<< "$PET_YEAR_PREFIXES"
       - name: Load shard to Supabase
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}

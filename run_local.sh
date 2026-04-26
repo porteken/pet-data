@@ -62,6 +62,7 @@ HISTORY_EXPORT_CSV="existing_pet.csv"
 FULL_PET_CSV="pet_full.csv"
 DB_LOAD_PET_CSV="pet.csv"
 DB_LOAD_PREFER_PET_CSV=0
+MIN_PET_YEARS_FOR_FORECAST=10
 
 if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
     REMOTE_BASE_PREFIX=${RUN_LOCAL_S3_PREFIX#/}
@@ -207,11 +208,29 @@ _join_csv_args() {
 
 _s3_prefix_has_objects() {
     local uri=$1
-    local first_line
-    first_line=$(
-        "$AWS_BIN" s3 ls "$uri" --recursive 2>/dev/null | awk 'NR==1 {print; exit}' || true
+    local stripped_uri bucket prefix first_key
+
+    stripped_uri=${uri#s3://}
+    if [[ "$stripped_uri" == "$uri" || -z "$stripped_uri" ]]; then
+        return 1
+    fi
+
+    bucket=${stripped_uri%%/*}
+    prefix=""
+    if [[ "$stripped_uri" == */* ]]; then
+        prefix=${stripped_uri#*/}
+    fi
+
+    first_key=$(
+        "$AWS_BIN" s3api list-objects-v2 \
+            --bucket "$bucket" \
+            --prefix "$prefix" \
+            --max-keys 1 \
+            --query 'Contents[0].Key' \
+            --output text \
+            2>/dev/null || true
     )
-    [[ -n "$first_line" ]]
+    [[ -n "$first_key" && "$first_key" != "None" ]]
 }
 
 _local_pet_output_exists() {
@@ -244,12 +263,13 @@ import pandas as pd
 from pathlib import Path
 
 pet_root = Path("pet_data_csv")
-all_files = sorted(pet_root.rglob("pet_batch_*.parquet"))
-if not all_files:
+if not any(pet_root.rglob("pet_batch_*.parquet")):
     raise SystemExit("No pet batch parquet files found; cannot materialize pet.csv.")
 
-dfs = [pd.read_parquet(f, columns=["location_id", "date", "pet"]) for f in all_files]
-combined = pd.concat(dfs, ignore_index=True).sort_values(["location_id", "date"])
+combined = pd.read_parquet(
+    pet_root,
+    columns=["location_id", "date", "pet"],
+).sort_values(["location_id", "date"])
 combined.to_csv("pet.csv", index=False)
 print(f"Saved {len(combined)} rows to pet.csv")
 PY
@@ -266,7 +286,20 @@ _count_pet_csv_years() {
         return
     fi
 
-    awk -F, 'NR > 1 {print substr($2, 1, 4)}' "$csv_path" | sort -u | awk 'END {print NR + 0}'
+    awk -F, '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "date") {
+                    date_col = i
+                    break
+                }
+            }
+            next
+        }
+        date_col && $date_col ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ {
+            print substr($date_col, 1, 4)
+        }
+    ' "$csv_path" | sort -u | awk 'END {print NR + 0}'
 }
 
 _export_history_pet_csv() {
@@ -304,15 +337,15 @@ _prepare_analytics_pet_inputs() {
 
     local merged_year_count
     merged_year_count=$(_count_pet_csv_years "$FULL_PET_CSV")
-    if (( merged_year_count < 10 )) && [[ -n "$fallback_env" ]] && [[ "$fallback_env" != "$primary_env" ]] && [[ -n "${!fallback_env:-}" ]]; then
+    if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "$fallback_env" ]] && [[ "$fallback_env" != "$primary_env" ]] && [[ -n "${!fallback_env:-}" ]]; then
         echo "Primary history source did not provide enough PET history; retrying with ${fallback_env}."
         _export_history_pet_csv "$fallback_env" "$HISTORY_EXPORT_CSV"
         _run_python historical_pet_update.py merge "$FULL_PET_CSV" "$HISTORY_EXPORT_CSV" --dirs pet_data_csv
         merged_year_count=$(_count_pet_csv_years "$FULL_PET_CSV")
     fi
 
-    if (( merged_year_count < 10 )); then
-        echo "Need at least 10 PET years to derive pet_forecast (and the downstream city_rankings_view change fields). Found ${merged_year_count} year(s) in ${FULL_PET_CSV}." >&2
+    if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
+        echo "Need at least ${MIN_PET_YEARS_FOR_FORECAST} PET years to derive pet_forecast (and the downstream city_rankings_view change fields). Found ${merged_year_count} year(s) in ${FULL_PET_CSV}." >&2
         echo "Either widen the historical source or set RUN_LOCAL_MERGE_EXISTING_PET_HISTORY=0 and accept empty analytics." >&2
         exit 1
     fi
@@ -409,7 +442,10 @@ _remove_pid_from_tracking() {
         fi
     done
 
-    _PIDS=("${active_pids[@]}")
+    _PIDS=()
+    if (( ${#active_pids[@]} > 0 )); then
+        _PIDS=("${active_pids[@]}")
+    fi
 }
 
 _wait_for_any_pid() {
@@ -453,6 +489,12 @@ _launch() {
 }
 
 _wait_phase() {
+    local label=${1:-background jobs}
+
+    if (( ${#_PIDS[@]} > 0 )); then
+        echo "Waiting for ${label} (${#_PIDS[@]} task(s) remaining)..."
+    fi
+
     while (( ${#_PIDS[@]} > 0 )); do
         _wait_for_any_pid
     done
@@ -554,20 +596,17 @@ if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
     ERA5_TIME_SHARD_COUNT=${RUN_LOCAL_ERA5_TIME_SHARD_COUNT:-53}
     ERA5_TIME_SHARDS=("${RUN_LOCAL_SMOKE_TIME_SHARD_INDEX:-17}")
     echo "Running local pipeline in smoke mode: ${ALL_YEARS} ERA5 week only."
-elif [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
-    ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-720}
-    ERA5_TIME_SHARD_COUNT=${RUN_LOCAL_ERA5_TIME_SHARD_COUNT:-13}
-    for (( TIME_SHARD=0; TIME_SHARD<ERA5_TIME_SHARD_COUNT; TIME_SHARD++ )); do
-        ERA5_TIME_SHARDS+=("$TIME_SHARD")
-    done
-    echo "Running local pipeline in full mode via Cloud Run: ${ALL_YEARS} (full year)."
 else
     ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-720}
     ERA5_TIME_SHARD_COUNT=${RUN_LOCAL_ERA5_TIME_SHARD_COUNT:-13}
     for (( TIME_SHARD=0; TIME_SHARD<ERA5_TIME_SHARD_COUNT; TIME_SHARD++ )); do
         ERA5_TIME_SHARDS+=("$TIME_SHARD")
     done
-    echo "Running local pipeline in full mode via local compute fallback: ${ALL_YEARS} (full year)."
+    full_mode_label="local compute fallback"
+    if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+        full_mode_label="Cloud Run"
+    fi
+    echo "Running local pipeline in full mode via ${full_mode_label}: ${ALL_YEARS} (full year)."
 fi
 
 export ALL_YEARS
@@ -647,7 +686,6 @@ _progress_advance 1 "Prepared locations"
 echo "====== Step 2: Compute ERA5 + PET ======"
 if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
     if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
-        _require_python_runner
         _require_executable "$GCLOUD_BIN"
         _require_executable "$AWS_BIN"
         _cancel_running_cloud_run_executions
@@ -734,12 +772,12 @@ import os, sys, psycopg
 from pathlib import Path
 db_uri = os.environ.get("SUPABASE_DB_URI")
 if not db_uri: sys.exit(0)
-conn = psycopg.connect(db_uri)
-conn.autocommit = True
-with conn.cursor() as cur:
-    cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
-    cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
-    cur.execute("TRUNCATE TABLE locations, pet CASCADE")
+with psycopg.connect(db_uri) as conn:
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
+        cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
+        cur.execute("TRUNCATE TABLE locations, pet CASCADE")
 PY
 
 _run_python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet
