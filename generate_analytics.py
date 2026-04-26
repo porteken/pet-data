@@ -214,29 +214,9 @@ def _select_best_model(loc_df: DataFrame) -> TrendModel | None:
         degree=1,
         min_train_years=MIN_BACKTEST_TRAIN_YEARS_LINEAR,
     )
-
-    if len(loc_df) < MIN_FULL_YEARS_FOR_ACCELERATION:
-        return linear_model
-
-    quadratic_model = _fit_polynomial_model(years, values, degree=2)
-    if quadratic_model is None:
-        return linear_model
-    quadratic_model["cv_rmse"] = _rolling_origin_rmse(
-        years,
-        values,
-        degree=2,
-        min_train_years=MIN_BACKTEST_TRAIN_YEARS_QUADRATIC,
-    )
-
-    linear_cv = float(linear_model["cv_rmse"])
-    quadratic_cv = float(quadratic_model["cv_rmse"])
-
-    if math.isfinite(quadratic_cv) and (
-        (not math.isfinite(linear_cv))
-        or quadratic_cv <= (linear_cv * QUADRATIC_RMSE_IMPROVEMENT)
-    ):
-        return quadratic_model
-
+    # Option C from forecast_analysis.md: long-range quadratic extrapolation from
+    # the available history is too unstable, so forecasts intentionally stay
+    # linear-only even when a quadratic fit would score well in-sample.
     return linear_model
 
 

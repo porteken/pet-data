@@ -301,10 +301,10 @@ def _make_daily_pet(
 
 
 class TestModelSelection:
-    """Quadratic vs. linear model selection with controlled synthetic data."""
+    """Forecast model selection is intentionally linear-only."""
 
     def test_linear_city_selects_linear_model(self) -> None:
-        """A city with a pure linear trend should not select quadratic."""
+        """A city with a pure linear trend should select linear."""
         df = _make_daily_pet(loc_id=1, n_years=25, annual_trend=0.1, seed=1)
         yearly = df.copy()
         yearly["year"] = pd.to_datetime(yearly["date"]).dt.year.astype("int32")
@@ -315,8 +315,8 @@ class TestModelSelection:
 
         assert model["degree"] == 1
 
-    def test_25_years_triggers_quadratic_evaluation(self) -> None:
-        """Cities with exactly 25 years must reach the quadratic evaluation branch."""
+    def test_25_years_still_selects_linear_model(self) -> None:
+        """Even with 25 full years, forecasts should remain linear-only."""
         df = _make_daily_pet(loc_id=2, n_years=25, annual_trend=0.05, seed=2)
         yearly = df.copy()
         yearly["year"] = pd.to_datetime(yearly["date"]).dt.year.astype("int32")
@@ -325,15 +325,31 @@ class TestModelSelection:
 
         model = _select_best_model(yearly_avg)
         assert model is not None
-        assert model["degree"] in (1, 2)
+        assert model["degree"] == 1
+
+    def test_strong_quadratic_history_still_selects_linear_model(self) -> None:
+        """Option C should hold even when the historical series is curved."""
+        years = np.arange(2000, 2026, dtype="int32")
+        x = years.astype("float64") - 2012.0
+        yearly_avg = pd.DataFrame(
+            {
+                "location_id": 3,
+                "year": years,
+                "pet": 20.0 + (0.05 * x) + (0.02 * np.square(x)),
+            }
+        )
+
+        model = _select_best_model(yearly_avg)
+        assert model is not None
+        assert model["degree"] == 1
 
     def test_fewer_than_25_years_never_selects_quadratic(self) -> None:
-        """Cities with < 25 complete years must always get a linear model."""
-        df = _make_daily_pet(loc_id=3, n_years=24, annual_trend=0.15, seed=3)
+        """Cities with shorter histories should also stay linear-only."""
+        df = _make_daily_pet(loc_id=4, n_years=24, annual_trend=0.15, seed=3)
         yearly = df.copy()
         yearly["year"] = pd.to_datetime(yearly["date"]).dt.year.astype("int32")
         yearly_avg = yearly.groupby("year")["pet"].mean().reset_index()
-        yearly_avg["location_id"] = 3
+        yearly_avg["location_id"] = 4
         model = _select_best_model(yearly_avg)
         assert model is not None
         assert model["degree"] == 1
@@ -443,8 +459,8 @@ class TestCitySpecificWarmingRates:
             f"({fast_rate:.4f} vs {slow_rate:.4f})"
         )
 
-    def test_cities_get_independent_model_types(self) -> None:
-        """model_type column must be present and contain valid values for every row."""
+    def test_cities_use_linear_model_type(self) -> None:
+        """Forecast rows should advertise the linear-only policy explicitly."""
         df = pd.concat(
             [
                 self._make_full_year_df(i, 15, trend=0.1 * i, seed=i)
@@ -454,7 +470,8 @@ class TestCitySpecificWarmingRates:
         )
         forecast = _build_forecast_frame(df, max_workers=1)
         assert not forecast.empty
-        assert forecast["model_type"].isin(["linear", "quadratic"]).all()
+        assert forecast["model_type"].eq("linear").all()
+        assert forecast["acceleration"].eq(0).all()
 
 
 class TestUncertaintyBands:

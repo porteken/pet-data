@@ -338,7 +338,6 @@ AS $$
 DECLARE
 n integer := COALESCE(array_length(years, 1), 0) ;
 linear_model public.pet_trend_model ;
-quadratic_model public.pet_trend_model ;
 BEGIN
 linear_model := public.pet_fit_polynomial_model(years, pet_values, 1) ;
 IF linear_model IS NULL THEN
@@ -346,26 +345,7 @@ RETURN NULL ;
 END IF ;
 
 linear_model.cv_rmse := public.pet_rolling_origin_rmse(years, pet_values, 1, 12) ;
-
-IF n < 25 THEN
-RETURN linear_model ;
-END IF ;
-
-quadratic_model := public.pet_fit_polynomial_model(years, pet_values, 2) ;
-IF quadratic_model IS NULL THEN
-RETURN linear_model ;
-END IF ;
-
-quadratic_model.cv_rmse := public.pet_rolling_origin_rmse(years, pet_values, 2, 20) ;
-
-IF public.pet_is_finite(quadratic_model.cv_rmse)
-AND (
-NOT public.pet_is_finite(linear_model.cv_rmse)
-OR quadratic_model.cv_rmse <= (linear_model.cv_rmse * 0.98)
-) THEN
-RETURN quadratic_model ;
-END IF ;
-
+-- Option C from forecast_analysis.md: keep the public forecast linear-only.
 RETURN linear_model ;
 END
 $$ ;
