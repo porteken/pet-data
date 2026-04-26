@@ -13,6 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from functools import cache
 from typing import Any, Protocol, TypeAlias, cast
 
 from tqdm.auto import tqdm
@@ -22,6 +23,7 @@ from shards import resolve_filesystem
 pa = cast("Any", importlib.import_module("pyarrow"))
 pd = cast("Any", importlib.import_module("pandas"))
 pq = cast("Any", importlib.import_module("pyarrow.parquet"))
+np = cast("Any", importlib.import_module("numpy"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +46,7 @@ ERA5_TIME_ORIGIN = "1900-01-01"
 DEFAULT_BATCH_HOURS = 24 * 30
 ERA5_THREAD_LOCAL = threading.local()
 SECONDS_PER_HOUR = 3600.0
+PET_INPUT_COLUMNS = ["v", "t", "rh", "mrt"]
 
 GCS_BATCH_MAX_RETRIES = 3
 GCS_BATCH_RETRY_DELAY_SECONDS = 10
@@ -148,11 +151,17 @@ def _resolve_store_variables(array_names: set[str]) -> dict[str, str]:
     return resolved
 
 
+@cache
+def _import_optional_module(module_name: str) -> object:
+    """Import an optional dependency once and reuse the module object."""
+    return importlib.import_module(module_name)
+
+
 def _open_zarr_store() -> Dataset:
-    gcsfs = cast("Any", importlib.import_module("gcsfs"))
-    xr = cast("Any", importlib.import_module("xarray"))
-    dask_array = cast("Any", importlib.import_module("dask.array"))
-    zarr = cast("Any", importlib.import_module("zarr"))
+    gcsfs = cast("Any", _import_optional_module("gcsfs"))
+    xr = cast("Any", _import_optional_module("xarray"))
+    dask_array = cast("Any", _import_optional_module("dask.array"))
+    zarr = cast("Any", _import_optional_module("zarr"))
 
     fs = gcsfs.GCSFileSystem(
         token="anon",  # noqa: S106
@@ -179,8 +188,8 @@ def _open_zarr_store() -> Dataset:
 
 
 def _configure_concurrency(profile: str) -> None:
-    zarr = cast("Any", importlib.import_module("zarr"))
-    dask = cast("Any", importlib.import_module("dask"))
+    zarr = cast("Any", _import_optional_module("zarr"))
+    dask = cast("Any", _import_optional_module("dask"))
     configs = {
         "conservative": {"zarr_concurrency": 16},
         "balanced": {"zarr_concurrency": 64},
@@ -266,14 +275,10 @@ def _load_era5_city_shard(city_shard_index: int, city_shard_count: int) -> DataF
 
 
 def _wrap_longitudes_for_arco_selection(longitudes: ArrayLike) -> ArrayLike:
-    np = cast("Any", importlib.import_module("numpy"))
-
     return np.mod(np.asarray(longitudes, dtype="float64"), DEGREES_PER_CIRCLE)
 
 
 def _normalize_longitudes_for_solar_geometry(longitudes: ArrayLike) -> ArrayLike:
-    np = cast("Any", importlib.import_module("numpy"))
-
     normalized = np.asarray(longitudes, dtype="float64")
     return np.where(
         normalized > HALF_CIRCLE_DEGREES,
@@ -284,8 +289,6 @@ def _normalize_longitudes_for_solar_geometry(longitudes: ArrayLike) -> ArrayLike
 
 def _calc_cossza(lats: ArrayLike, lons: ArrayLike, times: ArrayLike) -> ArrayLike:
     """Vectorized solar zenith angle for all (locations x times) in one broadcast."""
-    np = cast("Any", importlib.import_module("numpy"))
-
     lats_2d = np.asarray(lats, dtype="float64").reshape(-1, 1)
     lons_2d = np.asarray(lons, dtype="float64").reshape(-1, 1)
 
@@ -324,8 +327,6 @@ def _calc_cossza(lats: ArrayLike, lons: ArrayLike, times: ArrayLike) -> ArrayLik
 
 
 def _hourly_flux_from_accumulation(accumulated_radiation: ArrayLike) -> ArrayLike:
-    np = cast("Any", importlib.import_module("numpy"))
-
     return np.asarray(accumulated_radiation, dtype="float64") / SECONDS_PER_HOUR
 
 
@@ -335,8 +336,6 @@ def _approximate_dsrp(
     cossza: ArrayLike,
     _ssrd_flux: ArrayLike,
 ) -> ArrayLike:
-    np = cast("Any", importlib.import_module("numpy"))
-
     dsrp = np.asarray(
         thermofeel_module.approximate_dsrp(
             fdir_flux,
@@ -351,8 +350,6 @@ def _approximate_dsrp(
 
 
 def _compute_pet_chunk(df_chunk: DataFrame) -> DataFrame:
-    np = cast("Any", importlib.import_module("numpy"))
-
     t_vals = df_chunk["t"].to_numpy(dtype="float64")
     mrt_vals = df_chunk["mrt"].to_numpy(dtype="float64")
     v_vals = df_chunk["v"].to_numpy(dtype="float64")
@@ -398,10 +395,9 @@ def _compute_location_frame(
     end_h: int,
     compute_workers: int,
 ) -> DataFrame:
-    np = cast("Any", importlib.import_module("numpy"))
-    dask = cast("Any", importlib.import_module("dask"))
-    xr = cast("Any", importlib.import_module("xarray"))
-    tf = cast("_ThermofeelModule", importlib.import_module("thermofeel"))
+    dask = cast("Any", _import_optional_module("dask"))
+    xr = cast("Any", _import_optional_module("xarray"))
+    tf = cast("_ThermofeelModule", _import_optional_module("thermofeel"))
 
     lats = selected_cities["lat"].values.astype(float)
     selection_lons = np.asarray(
@@ -495,16 +491,22 @@ def _compute_location_frame(
         },
     ).dropna()
 
-    df = (
-        frame[(frame["rh"] >= MIN_RH) & (frame["rh"] <= MAX_RH) & (frame["v"] > 0.0)]
-        .dropna(subset=["mrt"])
-        .copy()
-    )
+    df = frame[
+        (frame["rh"] >= MIN_RH) & (frame["rh"] <= MAX_RH) & (frame["v"] > 0.0)
+    ].copy()
 
-    for col in ["v", "t", "rh", "mrt"]:
-        df[col] = (df[col] * PET_ROUNDING_FACTOR).round() / PET_ROUNDING_FACTOR
+    df.loc[:, PET_INPUT_COLUMNS] = (
+        df[PET_INPUT_COLUMNS] * PET_ROUNDING_FACTOR
+    ).round() / PET_ROUNDING_FACTOR
+    df["_pet_key"] = pd.factorize(
+        pd.MultiIndex.from_frame(df[PET_INPUT_COLUMNS]),
+        sort=False,
+    )[0]
 
-    df_distinct = df[["v", "t", "rh", "mrt"]].drop_duplicates().reset_index(drop=True)
+    df_distinct = df.loc[
+        ~df["_pet_key"].duplicated(),
+        ["_pet_key", *PET_INPUT_COLUMNS],
+    ].reset_index(drop=True)
     chunks = [
         df_distinct.iloc[i : i + CHUNK_SIZE]
         for i in range(0, len(df_distinct), CHUNK_SIZE)
@@ -524,7 +526,8 @@ def _compute_location_frame(
         return pd.DataFrame(columns=["location_id", "date", "pet"])
 
     df_pet_unique = pd.concat(results, ignore_index=True)
-    df = df.merge(df_pet_unique, on=["v", "t", "rh", "mrt"], how="inner")
+    df = df.merge(df_pet_unique[["_pet_key", "pet"]], on="_pet_key", how="inner")
+    df = df.drop(columns="_pet_key")
     df["date"] = pd.to_datetime(df["time"]).dt.date
 
     return df.groupby(["location_id", "date"], as_index=False)["pet"].max()
@@ -536,10 +539,15 @@ def _write_pet_partition(
     city_shard_index: int,
     frame: DataFrame,
     batch_index: int,
+    *,
+    filesystem: object | None = None,
+    base_path: str | None = None,
 ) -> None:
-    filesystem, base_path = resolve_filesystem(pet_root)
+    if filesystem is None or base_path is None:
+        filesystem, base_path = resolve_filesystem(pet_root)
+    fs: Any = filesystem
     partition_dir = f"{base_path}/year={year}"
-    filesystem.create_dir(partition_dir, recursive=True)
+    fs.create_dir(partition_dir, recursive=True)
 
     output_path = (
         f"{partition_dir}/pet_batch_{batch_index:04d}_{city_shard_index:02d}.parquet"
@@ -550,7 +558,7 @@ def _write_pet_partition(
         frame[float_cols] = frame[float_cols].astype("float32")
 
     table = pa.Table.from_pandas(frame, preserve_index=False)
-    with filesystem.open_output_stream(output_path) as out_stream:
+    with fs.open_output_stream(output_path) as out_stream:
         pq.write_table(table, out_stream, compression="snappy")
 
 
@@ -559,11 +567,16 @@ def _pet_batch_exists(
     year: int,
     city_shard_index: int,
     batch_index: int,
+    *,
+    filesystem: object | None = None,
+    base_path: str | None = None,
 ) -> bool:
-    filesystem, base_path = resolve_filesystem(pet_root)
+    if filesystem is None or base_path is None:
+        filesystem, base_path = resolve_filesystem(pet_root)
+    fs: Any = filesystem
     path = f"{base_path}/year={year}/pet_batch_{batch_index:04d}_{city_shard_index:02d}.parquet"
     try:
-        return filesystem.get_file_info(path).type != 0
+        return fs.get_file_info(path).type != 0
     except OSError:
         return False
 
@@ -580,6 +593,8 @@ def _process_era5_batch_job(
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
+    filesystem: object | None = None,
+    base_path: str | None = None,
 ) -> int:
     LOGGER.info(
         "Computing ERA5->PET for year %s batch %s over %s cities.",
@@ -600,7 +615,15 @@ def _process_era5_batch_job(
     if frame.empty:
         return batch_index
 
-    _write_pet_partition(pet_root, year, city_shard_index, frame, batch_index)
+    _write_pet_partition(
+        pet_root,
+        year,
+        city_shard_index,
+        frame,
+        batch_index,
+        filesystem=filesystem,
+        base_path=base_path,
+    )
     return batch_index
 
 
@@ -615,6 +638,8 @@ def _process_era5_batch_with_thread_dataset(
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
+    filesystem: object | None = None,
+    base_path: str | None = None,
 ) -> int:
     for attempt in range(1, GCS_BATCH_MAX_RETRIES + 1):
         try:
@@ -636,6 +661,8 @@ def _process_era5_batch_with_thread_dataset(
                 pending_batch_df=pending_batch_df,
                 compute_workers=compute_workers,
                 allowed_months=allowed_months,
+                filesystem=filesystem,
+                base_path=base_path,
             )
         except Exception:  # noqa: PERF203
             if attempt == GCS_BATCH_MAX_RETRIES:
@@ -669,6 +696,7 @@ def _run_era5_batch_jobs(
     else:
         dask_workers = 4
 
+    filesystem, base_path = resolve_filesystem(era5_root)
     batch_jobs: list[tuple[int, int, int, DataFrame]] = []
     for batch_index, start_h, end_h in selected_batches:
         if force or not _pet_batch_exists(
@@ -676,8 +704,10 @@ def _run_era5_batch_jobs(
             year,
             city_shard_index,
             batch_index,
+            filesystem=filesystem,
+            base_path=base_path,
         ):
-            batch_jobs.append((batch_index, start_h, end_h, shard_df.copy()))
+            batch_jobs.append((batch_index, start_h, end_h, shard_df))
 
     if not batch_jobs:
         return False
@@ -711,6 +741,8 @@ def _run_era5_batch_jobs(
                 pending_batch_df=pending_df,
                 compute_workers=dask_workers,
                 allowed_months=allowed_months,
+                filesystem=filesystem,
+                base_path=base_path,
             )
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -726,6 +758,8 @@ def _run_era5_batch_jobs(
                     pending_batch_df=pending_df,
                     compute_workers=dask_workers,
                     allowed_months=allowed_months,
+                    filesystem=filesystem,
+                    base_path=base_path,
                 )
                 for batch_index, start_h, end_h, pending_df in batch_jobs
             ]
@@ -812,8 +846,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """Execute the ERA5 processing pipeline."""
-    args = _parse_args()
+    exit_code = 0
     try:
+        args = _parse_args()
         process_era5(
             year=args.year,
             out_dir=args.out_dir,
@@ -826,10 +861,18 @@ def main() -> None:
             concurrency_profile=args.concurrency_profile,
             months=args.months,
         )
-    finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
+    except KeyboardInterrupt:
+        exit_code = 130
+        LOGGER.warning("ERA5 processing interrupted by user.")
+    except SystemExit:
+        raise
+    except Exception:
+        exit_code = 1
+        LOGGER.exception("ERA5 processing failed.")
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

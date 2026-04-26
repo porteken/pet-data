@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 from typing import cast
 from unittest.mock import MagicMock
@@ -219,18 +220,15 @@ class TestRunEra5BatchJobs:
             }
         )
         completed_batches: list[int] = []
+        pending_frames: list[pd.DataFrame] = []
 
-        def fake_pet_batch_exists(
-            _pet_root: str,
-            _year: int,
-            _city_shard_index: int,
-            _batch_index: int,
-        ) -> bool:
+        def fake_pet_batch_exists(*_args: object, **_kwargs: object) -> bool:
             return False
 
         def fake_process_batch(**kwargs: object) -> int:
             batch_index = cast("int", kwargs["batch_index"])
             completed_batches.append(batch_index)
+            pending_frames.append(cast("pd.DataFrame", kwargs["pending_batch_df"]))
             return batch_index
 
         monkeypatch.setattr(
@@ -260,6 +258,56 @@ class TestRunEra5BatchJobs:
 
         assert wrote_batches is True
         assert sorted(completed_batches) == [0, 1]
+        assert all(frame is shard_df for frame in pending_frames)
+
+
+class TestMainExitCodes:
+    @staticmethod
+    def _make_args() -> argparse.Namespace:
+        return argparse.Namespace(
+            year=2024,
+            months=None,
+            out_dir=".",
+            city_shard_index=0,
+            city_shard_count=1,
+            time_shard_index=0,
+            time_shard_count=1,
+            max_workers=1,
+            batch_hours=DEFAULT_BATCH_HOURS,
+            concurrency_profile="balanced",
+        )
+
+    def test_successful_main_exits_zero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(google_era5, "_parse_args", self._make_args)
+        monkeypatch.setattr(google_era5, "process_era5", lambda **_kwargs: None)
+
+        with pytest.raises(SystemExit) as exc:
+            google_era5.main()
+
+        assert exc.value.code == 0
+
+    def test_failed_main_exits_nonzero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        logger = MagicMock()
+        message = "boom"
+
+        def fail_process_era5(**_kwargs: object) -> None:
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(google_era5, "_parse_args", self._make_args)
+        monkeypatch.setattr(google_era5, "process_era5", fail_process_era5)
+        monkeypatch.setattr(google_era5, "LOGGER", logger)
+
+        with pytest.raises(SystemExit) as exc:
+            google_era5.main()
+
+        assert exc.value.code == 1
+        logger.exception.assert_called_once_with("ERA5 processing failed.")
 
 
 class TestComputeLocationFrameAlignment:
@@ -338,6 +386,7 @@ class TestComputeLocationFrameAlignment:
                 return self
 
             def __exit__(self, *_: object) -> None:
+                # Fake context manager has no teardown; the test only needs enter/exit hooks.
                 pass
 
         monkeypatch.setattr(
