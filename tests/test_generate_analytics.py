@@ -475,7 +475,13 @@ class TestCitySpecificWarmingRates:
 
 
 class TestUncertaintyBands:
-    """Forecast uncertainty bands must widen monotonically with the horizon."""
+    """Forecast uncertainty bands widen until the 25-year cap, then plateau."""
+
+    def test_prediction_interval_uses_80_percent_band(self) -> None:
+        """The public forecast should expose an 80% planning interval."""
+        from generate_analytics import PREDICTION_INTERVAL_Z
+
+        assert pytest.approx(1.2816) == PREDICTION_INTERVAL_Z
 
     def test_bands_widen_with_horizon_linear_model(self) -> None:
         """For a linear-model city, upper - lower must be non-decreasing over time."""
@@ -493,23 +499,54 @@ class TestUncertaintyBands:
         diffs = np.diff(widths)
         assert (diffs >= -0.012).all(), "Uncertainty bands must not narrow over time"
 
+    def test_bands_plateau_after_25_years_linear_model(self) -> None:
+        """Linear-model bands should stop widening once the 25-year cap is reached."""
+        from generate_analytics import UNCERTAINTY_GROWTH_CAP_YEARS
+
+        df = _make_daily_pet(loc_id=1, n_years=15, annual_trend=0.1, seed=21)
+        forecast = _build_forecast_frame(df, max_workers=1)
+        assert not forecast.empty
+
+        loc_fc = (
+            forecast[forecast["location_id"] == 1]
+            .sort_values("year")
+            .reset_index(drop=True)
+        )
+        cap_year = int(df["date"].dt.year.max()) + int(UNCERTAINTY_GROWTH_CAP_YEARS)
+        width_at_cap = float(
+            (
+                loc_fc.loc[loc_fc["year"] == cap_year, "upper"]
+                - loc_fc.loc[loc_fc["year"] == cap_year, "lower"]
+            ).iloc[0]
+        )
+        width_at_2100 = float(
+            (
+                loc_fc.loc[loc_fc["year"] == 2100, "upper"]
+                - loc_fc.loc[loc_fc["year"] == 2100, "lower"]
+            ).iloc[0]
+        )
+
+        assert width_at_2100 == pytest.approx(width_at_cap, abs=0.012)
+
     def test_quadratic_bands_wider_than_linear_at_long_horizons(self) -> None:
-        """At 50+ year horizons quadratic uncertainty exceeds linear (extra h^2 term)."""
+        """Even with capped growth, quadratic uncertainty stays above linear."""
         from generate_analytics import (
             QUADRATIC_UNCERTAINTY_DENOMINATOR,
+            UNCERTAINTY_GROWTH_CAP_YEARS,
             UNCERTAINTY_GROWTH_DENOMINATOR,
         )
 
         base_rmse = 1.0
         horizons = np.array([50, 60, 70, 75], dtype="float64")
+        capped_horizons = np.minimum(horizons, UNCERTAINTY_GROWTH_CAP_YEARS)
 
         sigma_linear = base_rmse * np.sqrt(
-            1.0 + horizons / UNCERTAINTY_GROWTH_DENOMINATOR
+            1.0 + capped_horizons / UNCERTAINTY_GROWTH_DENOMINATOR
         )
         sigma_quadratic = base_rmse * np.sqrt(
             1.0
-            + horizons / UNCERTAINTY_GROWTH_DENOMINATOR
-            + (horizons / QUADRATIC_UNCERTAINTY_DENOMINATOR) ** 2
+            + capped_horizons / UNCERTAINTY_GROWTH_DENOMINATOR
+            + (capped_horizons / QUADRATIC_UNCERTAINTY_DENOMINATOR) ** 2
         )
         assert (sigma_quadratic > sigma_linear).all(), (
             "Quadratic uncertainty must exceed linear at long horizons"

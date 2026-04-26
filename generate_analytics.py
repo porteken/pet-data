@@ -32,8 +32,9 @@ MIN_BACKTEST_TEST_POINTS = 5
 QUADRATIC_RMSE_IMPROVEMENT = 0.98
 ACCELERATION_DAMPING_START_YEARS = 15
 ACCELERATION_DAMPING_END_YEARS = 35
-PREDICTION_INTERVAL_Z = 1.96
+PREDICTION_INTERVAL_Z = 1.2816
 UNCERTAINTY_GROWTH_DENOMINATOR = 10.0
+UNCERTAINTY_GROWTH_CAP_YEARS = 25.0
 QUADRATIC_UNCERTAINTY_DENOMINATOR = 30.0
 
 QUADRATIC_DEGREE = 2
@@ -281,14 +282,17 @@ def _forecast_single_location(
         float(model["rmse"]),
         float(model["cv_rmse"]) if math.isfinite(float(model["cv_rmse"])) else 0.0,
     )
-    horizons = future_years - last_year
+    horizons = (future_years - last_year).astype("float64")
+    capped_horizons = np.minimum(horizons, UNCERTAINTY_GROWTH_CAP_YEARS)
 
     is_quadratic = model["degree"] == QUADRATIC_DEGREE
     quadratic_term = (
-        (horizons / QUADRATIC_UNCERTAINTY_DENOMINATOR) ** 2 if is_quadratic else 0.0
+        (capped_horizons / QUADRATIC_UNCERTAINTY_DENOMINATOR) ** 2
+        if is_quadratic
+        else 0.0
     )
     sigma = base_rmse * np.sqrt(
-        1.0 + (horizons / UNCERTAINTY_GROWTH_DENOMINATOR) + quadratic_term,
+        1.0 + (capped_horizons / UNCERTAINTY_GROWTH_DENOMINATOR) + quadratic_term,
     )
     lower = future_pet - (PREDICTION_INTERVAL_Z * sigma)
     upper = future_pet + (PREDICTION_INTERVAL_Z * sigma)

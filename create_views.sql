@@ -377,8 +377,9 @@ future_year integer ;
 forecast_end_year constant integer := 2100 ;
 acceleration_damping_start_years constant integer := 15 ;
 acceleration_damping_end_years constant integer := 35 ;
-prediction_interval_z constant double precision := 1.96 ;
+prediction_interval_z constant double precision := 1.2816 ;
 uncertainty_growth_denominator constant double precision := 10.0 ;
+uncertainty_growth_cap_years constant double precision := 25.0 ;
 quadratic_uncertainty_denominator constant double precision := 30.0 ;
 quadratic_degree constant integer := 2 ;
 start_year integer ;
@@ -391,6 +392,7 @@ linear_tail double precision ;
 weight double precision ;
 base_rmse double precision ;
 horizon double precision ;
+capped_horizon double precision ;
 quadratic_term double precision ;
 sigma double precision ;
 out_model_type text ;
@@ -472,11 +474,12 @@ END IF ;
 END IF ;
 
 horizon := (future_year - last_year)::double precision ;
+capped_horizon := LEAST(horizon, uncertainty_growth_cap_years) ;
 quadratic_term := CASE
-WHEN model.degree = quadratic_degree THEN POWER(horizon / quadratic_uncertainty_denominator, 2)
+WHEN model.degree = quadratic_degree THEN POWER(capped_horizon / quadratic_uncertainty_denominator, 2)
 ELSE 0.0
 END ;
-sigma := base_rmse * SQRT(1.0 + (horizon / uncertainty_growth_denominator) + quadratic_term) ;
+sigma := base_rmse * SQRT(1.0 + (capped_horizon / uncertainty_growth_denominator) + quadratic_term) ;
 
 location_id := input_location_id ;
 year := future_year::smallint ;
