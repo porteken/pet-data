@@ -155,6 +155,7 @@ def test_compact_schema_types(db_conn: Connection[Any]) -> None:
     assert _get_relation_column_types(db_conn, "city_rankings_view") == {
         "location_id": "integer",
         "year": "smallint",
+        "season": "text",
         "avg_pet": "numeric(5,1)",
         "max_pet": "numeric(5,1)",
         "city": "text",
@@ -359,44 +360,41 @@ def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
 def test_city_rankings_view_matches_expected_projection(
     db_conn: Connection[Any],
 ) -> None:
-    """city_rankings_view should inline annual stats, forecast bounds, and decade deltas."""
+    """city_rankings_view should inline annual/seasonal stats, forecast bounds, and decade deltas."""
     with db_conn.cursor() as cur:
         cur.execute(
-            "WITH daily_pet AS ("
-            "SELECT location_id, date, AVG(pet) AS pet "
-            "FROM pet "
-            "GROUP BY location_id, date"
-            "), historical_yearly_avg AS ("
+            "WITH combined_yearly_avg AS ("
             "SELECT "
             "location_id, "
-            "EXTRACT(YEAR FROM date)::int AS year, "
+            "year::int AS year, "
+            "season, "
             "AVG(pet) AS pet, "
             "0 AS source_order "
-            "FROM daily_pet "
-            "GROUP BY location_id, EXTRACT(YEAR FROM date)::int"
-            "), combined_yearly_avg AS ("
-            "SELECT location_id, year, pet, source_order FROM historical_yearly_avg "
+            "FROM pet_year_avg "
+            "GROUP BY location_id, year, season "
             "UNION ALL "
-            "SELECT location_id, year::int AS year, pet, 1 AS source_order "
-            "FROM pet_forecast WHERE season = 'Annual'"
+            "SELECT location_id, year::int AS year, season, pet, 1 AS source_order "
+            "FROM pet_forecast"
             "), deduplicated_yearly_avg AS ("
-            "SELECT DISTINCT ON (location_id, year) location_id, year, pet "
+            "SELECT DISTINCT ON (location_id, year, season) location_id, year, season, pet "
             "FROM combined_yearly_avg "
-            "ORDER BY location_id, year, source_order"
+            "ORDER BY location_id, year, season, source_order"
             "), decade_avg AS ("
-            "SELECT location_id, (year / 10) * 10 AS year, AVG(pet) AS pet "
+            "SELECT location_id, season, (year / 10) * 10 AS year, AVG(pet) AS pet "
             "FROM deduplicated_yearly_avg "
-            "GROUP BY location_id, (year / 10) * 10"
+            "GROUP BY location_id, season, (year / 10) * 10"
             "), expected AS ("
             "SELECT "
             "location_id, "
+            "season, "
             "year, "
-            "ROUND((pet - LAG(pet) OVER (PARTITION BY location_id ORDER BY year))::numeric, 2)::numeric(5,2) AS change "
+            "ROUND((pet - LAG(pet) OVER (PARTITION BY location_id, season ORDER BY year))::numeric, 2)::numeric(5,2) AS change "
             "FROM decade_avg"
             "), projected AS ("
             "SELECT "
             "a.location_id, "
             "a.year, "
+            "a.season, "
             "a.pet AS avg_pet, "
             "m.pet AS max_pet, "
             "l.city, "
@@ -420,16 +418,17 @@ def test_city_rankings_view_matches_expected_projection(
             "LEFT JOIN pet_forecast AS f "
             "ON f.location_id = a.location_id "
             "AND f.year = 2100::smallint "
-            "AND f.season = 'Annual' "
+            "AND f.season = a.season "
             "LEFT JOIN expected AS c "
             "ON c.location_id = a.location_id "
+            "AND c.season = a.season "
             "AND c.year = ((a.year / 10) * 10)::smallint "
-            "WHERE a.location_id > 0 "
-            "AND a.season = 'Annual'"
+            "WHERE a.location_id > 0"
             "), actual AS ("
             "SELECT "
             "location_id, "
             "year, "
+            "season, "
             "avg_pet, "
             "max_pet, "
             "city, "
@@ -453,19 +452,23 @@ def test_city_rankings_view_matches_expected_projection(
             "(SELECT COUNT(*) FROM missing), "
             "(SELECT COUNT(*) FROM extra), "
             "(SELECT COUNT(*) FROM ("
-            "SELECT location_id, year, COUNT(*) AS row_count "
+            "SELECT location_id, year, season, COUNT(*) AS row_count "
             "FROM city_rankings_view "
-            "GROUP BY location_id, year "
+            "GROUP BY location_id, year, season "
             "HAVING COUNT(*) > 1"
             ") AS duplicates)"
         )
         diff_count_row = cur.fetchone()
         assert diff_count_row is not None
 
+        cur.execute("SELECT DISTINCT season FROM city_rankings_view ORDER BY season")
+        seasons = {row[0] for row in cur.fetchall()}
+
     columns = _get_relation_columns(db_conn, "city_rankings_view")
     assert columns == [
         "location_id",
         "year",
+        "season",
         "avg_pet",
         "max_pet",
         "city",
@@ -478,6 +481,9 @@ def test_city_rankings_view_matches_expected_projection(
     ]
 
     missing_count, extra_count, duplicate_count = diff_count_row
+    assert seasons
+    assert "Annual" in seasons
+    assert seasons.issubset({"Annual", "Winter", "Spring", "Summer", "Fall"})
     assert missing_count == 0
     assert extra_count == 0
     assert duplicate_count == 0

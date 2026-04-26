@@ -756,70 +756,59 @@ CREATE INDEX if not exists pet_forecast_season_idx
 ON public.pet_forecast (season) ;
 
 CREATE MATERIALIZED VIEW public.city_rankings_view AS
-WITH daily_pet AS (
+WITH combined_yearly_avg AS (
 SELECT
-p.location_id::smallint AS location_id,
-p.date,
-AVG (p.pet)::real AS pet
-FROM public.pet AS p
-GROUP BY
-p.location_id,
-p.date
-), historical_yearly_avg AS (
-SELECT
-d.location_id::smallint AS location_id,
-EXTRACT (YEAR FROM d.date)::smallint AS year,
-AVG (d.pet)::real AS pet,
+a.location_id::smallint AS location_id,
+a.year::smallint AS year,
+a.season,
+a.pet::real AS pet,
 0 AS source_order
-FROM daily_pet AS d
-GROUP BY
-d.location_id,
-EXTRACT (YEAR FROM d.date)::smallint
-), combined_yearly_avg AS (
-SELECT
-location_id::smallint AS location_id,
-year::smallint AS year,
-pet::real AS pet,
-source_order
-FROM historical_yearly_avg
+FROM public.pet_year_avg AS a
 UNION ALL
 SELECT
 f.location_id::smallint AS location_id,
 f.year::smallint AS year,
+f.season,
 f.pet::real AS pet,
 1 AS source_order
 FROM public.pet_forecast AS f
-WHERE f.season = public.pet_annual_season ()
 ), deduplicated_yearly_avg AS (
-SELECT DISTINCT ON (location_id, year)
+SELECT DISTINCT ON (location_id, year, season)
 location_id::smallint AS location_id,
 year::smallint AS year,
+season,
 pet::real AS pet
 FROM combined_yearly_avg
 ORDER BY
 location_id,
 year,
+season,
 source_order
 ), decade_avg AS (
 SELECT
 location_id::smallint,
+season,
 (year / 10) * 10 AS year,
 AVG (pet)::real AS pet
 FROM deduplicated_yearly_avg
 GROUP BY
 location_id,
+season,
 (year / 10) * 10
 ), change_rows AS (
 SELECT
 location_id::smallint AS location_id,
+season,
 year::smallint AS year,
-ROUND ((pet - LAG (pet) OVER (PARTITION BY location_id ORDER BY year))::numeric,
+ROUND ((pet - LAG (pet) OVER (PARTITION BY location_id,
+season ORDER BY year))::numeric,
 2)::real AS change
 FROM decade_avg
 )
 SELECT
 a.location_id::smallint,
 a.year::smallint,
+a.season,
 a.pet::real AS avg_pet,
 m.pet::real AS max_pet,
 l.city,
@@ -838,15 +827,15 @@ JOIN public.pet_percentiles AS p ON p.location_id = a.location_id
 AND p.year = a.year
 LEFT JOIN public.pet_forecast AS f ON f.location_id = a.location_id
 AND f.year = 2100::smallint
-AND f.season = public.pet_annual_season ()
+AND f.season = a.season
 LEFT JOIN change_rows AS c ON c.location_id = a.location_id
+AND c.season = a.season
 AND c.year = ((a.year / 10) * 10)::smallint
 WHERE
-a.location_id > 0
-AND a.season = public.pet_annual_season () ;
+a.location_id > 0 ;
 
 CREATE UNIQUE INDEX if not exists city_rankings_view_location_year_uidx
-ON public.city_rankings_view (location_id, year) ;
+ON public.city_rankings_view (location_id, year, season) ;
 
 CREATE INDEX if not exists city_rankings_view_year_idx
 ON public.city_rankings_view (year) ;
