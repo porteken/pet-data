@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import typing
+from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
@@ -11,10 +11,29 @@ import pytest
 import historical_pet_update as hpu
 
 
+class FakeCopy:
+    def __init__(self, cursor: FakeCursor) -> None:
+        """Initialize the fake COPY context manager."""
+        self.cursor = cursor
+
+    def __enter__(self) -> FakeCopy:  # noqa: PYI034
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit context manager."""
+        _ = (exc_type, exc, tb)
+
+    def __iter__(self) -> Iterator[str]:
+        """Yield exported CSV lines."""
+        return iter(["location_id,date,pet\n1,2000-05-01,20.0\n"])
+
+
 class FakeCursor:
     def __init__(self) -> None:
         """Initialize the fake cursor."""
         self.copy_query = ""
+        self.copy_params: tuple[str, str] | None = None
         self._fetchone_values = [("public.pet",)]
 
     def execute(self, query: object, params: object | None = None) -> None:
@@ -25,14 +44,10 @@ class FakeCursor:
             return None
         return self._fetchone_values.pop(0)
 
-    def mogrify(self, query: str, params: tuple[str, str]) -> bytes:
-        return (
-            query.replace("%s", f"'{params[0]}'", 1).replace("%s", f"'{params[1]}'", 1)
-        ).encode("utf-8")
-
-    def copy_expert(self, query: str, csv_file: typing.IO[str]) -> None:
+    def copy(self, query: str, params: tuple[str, str] | None = None) -> FakeCopy:
         self.copy_query = query
-        csv_file.write("location_id,date,pet\n1,2000-05-01,20.0\n")
+        self.copy_params = params
+        return FakeCopy(self)
 
     def __enter__(self) -> FakeCursor:  # noqa: PYI034
         """Enter context manager."""
@@ -59,7 +74,7 @@ def test_export_all_writes_pet_rows(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     fake_conn = FakeConnection()
-    monkeypatch.setattr(hpu.psycopg2, "connect", lambda _: fake_conn)
+    monkeypatch.setattr(hpu.psycopg, "connect", lambda _: fake_conn)
     monkeypatch.setenv("SUPABASE_DB_URI", "postgresql://example")
 
     output_path = tmp_path / "existing_pet.csv"
@@ -68,6 +83,7 @@ def test_export_all_writes_pet_rows(
     assert output_path.read_text() == "location_id,date,pet\n1,2000-05-01,20.0\n"
     assert "FROM public.pet" in fake_conn.cursor_instance.copy_query
     assert "ORDER BY location_id, date" in fake_conn.cursor_instance.copy_query
+    assert fake_conn.cursor_instance.copy_params is None
 
 
 def test_merge_csvs_prefers_later_sources_for_duplicates(tmp_path: Path) -> None:

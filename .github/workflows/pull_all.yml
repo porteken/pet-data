@@ -185,45 +185,9 @@ jobs:
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
             --args="--year=${{ matrix.year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
-  generate-analytics:
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [compute-pet-google-era5-a, compute-pet-google-era5-b, build-year-range]
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 20
-      fail-fast: true
-      matrix:
-        analytics_shard_index: ${{ fromJSON(needs.build-year-range.outputs.analytics_shards) }}
-    name: Analytics shard ${{ matrix.analytics_shard_index }}/20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - name: Sync runtime dependencies
-        run: uv sync --locked --no-dev
-      - name: Sync Data from S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: aws s3 sync s3://pet-parquet-files/pet_data_csv/ ./pet_data_csv/
-      - name: Generate Analytics
-        run: uv run python generate_analytics.py --shard-index ${{ matrix.analytics_shard_index }} --shard-count 20
-      - name: Upload Analytics Shard
-        uses: actions/upload-artifact@v4
-        with:
-          name: analytics-shard-${{ matrix.analytics_shard_index }}
-          path: analytics_data_csv/
-
   prepare-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [setup-locations, generate-analytics]
+    needs: [setup-locations, compute-pet-google-era5-a, compute-pet-google-era5-b]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -247,21 +211,21 @@ jobs:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
         run: |
           uv run python - <<'PY'
-          import os, sys, psycopg2
+          import os, sys, psycopg
           from pathlib import Path
-          conn = psycopg2.connect(os.environ["SUPABASE_DB_URI"])
+          conn = psycopg.connect(os.environ["SUPABASE_DB_URI"])
           conn.autocommit = True
           with conn.cursor() as cur:
               cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
               cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
-              cur.execute("TRUNCATE TABLE locations, pet, pet_forecast CASCADE")
+              cur.execute("TRUNCATE TABLE locations, pet CASCADE")
           conn.close()
           PY
-            uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table pet_forecast
+            uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet
 
   load-to-db:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [prepare-db-load, generate-analytics, build-year-range]
+    needs: [prepare-db-load, build-year-range]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 20
@@ -281,12 +245,6 @@ jobs:
           enable-cache: true
       - name: Sync runtime dependencies
         run: uv sync --locked --no-dev
-      - name: Download analytics shards
-        uses: actions/download-artifact@v4
-        with:
-          pattern: analytics-shard-${{ matrix.load_shard_index }}
-          merge-multiple: true
-          path: analytics_data_csv
       - name: Sync PET Data from S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -296,7 +254,7 @@ jobs:
       - name: Load shard to Supabase
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
+        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -317,4 +275,4 @@ jobs:
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-table locations --skip-table pet --skip-table pet_forecast
+        run: uv run python load.py --append-only --skip-table locations --skip-table pet

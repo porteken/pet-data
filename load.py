@@ -6,27 +6,134 @@ import argparse
 import io
 import logging
 import os
+import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
-import psycopg2
+import psycopg
 import pyarrow.parquet as pq
-from psycopg2 import sql
+from psycopg import sql
 
 if TYPE_CHECKING:
-    from psycopg2.extensions import connection
+    from collections.abc import Iterator
+
+    from psycopg import Connection
 
 LOGGER = logging.getLogger(__name__)
 DB_URI = os.getenv("SUPABASE_DB_URI")
 COPY_BATCH_SIZE = 50_000
+DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_]\w*)?\$")
 TABLE_NAMES = [
     "locations",
     "pet",
-    "pet_forecast",
 ]
 
 
-def execute_sql_file(conn: connection, file_path: str | Path) -> None:
+def _consume_line_comment(sql_text: str, index: int) -> int:
+    """Skip to the first character after a line comment."""
+    newline_index = sql_text.find("\n", index)
+    if newline_index == -1:
+        return len(sql_text)
+    return newline_index + 1
+
+
+def _consume_block_comment(sql_text: str, index: int) -> int:
+    """Skip over a possibly nested block comment."""
+    block_comment_depth = 1
+
+    while index < len(sql_text) and block_comment_depth > 0:
+        next_two = sql_text[index : index + 2]
+        if next_two == "/*":
+            block_comment_depth += 1
+            index += 2
+            continue
+        if next_two == "*/":
+            block_comment_depth -= 1
+            index += 2
+            continue
+        index += 1
+
+    return index
+
+
+def _consume_quoted_string(sql_text: str, index: int, quote_char: str) -> int:
+    """Skip over a single- or double-quoted string."""
+    index += 1
+
+    while index < len(sql_text):
+        if sql_text[index] != quote_char:
+            index += 1
+            continue
+        if index + 1 < len(sql_text) and sql_text[index + 1] == quote_char:
+            index += 2
+            continue
+        return index + 1
+
+    return index
+
+
+def _match_dollar_quote(sql_text: str, index: int) -> str | None:
+    """Return the opening dollar-quote tag at the current position, if any."""
+    match = DOLLAR_QUOTE_RE.match(sql_text, index)
+    if match is None:
+        return None
+    return match.group(0)
+
+
+def _consume_dollar_quote(sql_text: str, index: int, tag: str) -> int:
+    """Skip over a dollar-quoted PostgreSQL string body."""
+    closing_index = sql_text.find(tag, index + len(tag))
+    if closing_index == -1:
+        return len(sql_text)
+    return closing_index + len(tag)
+
+
+def _consume_special_region(sql_text: str, index: int) -> int | None:
+    """Consume any non-statement-delimiting SQL region at the current index."""
+    next_two = sql_text[index : index + 2]
+    if next_two == "--":
+        return _consume_line_comment(sql_text, index + 2)
+    if next_two == "/*":
+        return _consume_block_comment(sql_text, index + 2)
+
+    current_char = sql_text[index]
+    if current_char in {"'", '"'}:
+        return _consume_quoted_string(sql_text, index, current_char)
+    if current_char != "$":
+        return None
+
+    dollar_quote = _match_dollar_quote(sql_text, index)
+    if dollar_quote is None:
+        return None
+    return _consume_dollar_quote(sql_text, index, dollar_quote)
+
+
+def _iter_sql_statements(sql_text: str) -> Iterator[str]:
+    """Yield SQL statements while preserving dollar-quoted function bodies."""
+    start_idx = 0
+    index = 0
+
+    while index < len(sql_text):
+        special_region_end = _consume_special_region(sql_text, index)
+        if special_region_end is not None:
+            index = special_region_end
+            continue
+
+        current_char = sql_text[index]
+        if current_char == ";":
+            statement = sql_text[start_idx:index].strip()
+            if statement:
+                yield f"{statement};"
+            start_idx = index + 1
+
+        index += 1
+
+    statement = sql_text[start_idx:].strip()
+    if statement:
+        yield statement
+
+
+def execute_sql_file(conn: Connection[Any], file_path: str | Path) -> None:
     """Execute a raw SQL file."""
     path = Path(file_path)
     if not path.exists():
@@ -34,9 +141,15 @@ def execute_sql_file(conn: connection, file_path: str | Path) -> None:
         return
 
     LOGGER.info("Executing SQL file: %s...", file_path)
-    with conn.cursor() as cur, path.open("r", encoding="utf-8") as f:
-        cur.execute(f.read())
-    LOGGER.info("Successfully executed %s.", file_path)
+    statements = list(_iter_sql_statements(path.read_text(encoding="utf-8")))
+    if not statements:
+        LOGGER.info("SQL file %s is empty. Skipping.", file_path)
+        return
+
+    with conn.cursor() as cur:
+        for statement in statements:
+            cur.execute(cast("Any", statement))
+    LOGGER.info("Successfully executed %s (%d statements).", file_path, len(statements))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -45,7 +158,12 @@ def _parse_args() -> argparse.Namespace:
             "Load shard-aware PET CSV outputs into the database and recreate views."
         ),
     )
-    parser.add_argument("--cities-csv", default="cities.csv")
+    parser.add_argument(
+        "--locations-csv",
+        "--cities-csv",
+        dest="locations_csv",
+        default="locations.csv",
+    )
     parser.add_argument("--pet-csv", default="pet.csv")
     parser.add_argument("--pet-root", default="pet_data_csv")
     parser.add_argument(
@@ -252,14 +370,17 @@ def _filter_paths_by_partition_value(
 
 
 def _copy_parquet_file_in_batches(
-    conn: connection,
+    conn: Connection[Any],
     table_name: str,
     parquet_path: Path,
     *,
     batch_size: int,
 ) -> int:
     parquet_file = pq.ParquetFile(str(parquet_path))
-    column_names = parquet_file.schema_arrow.names
+    column_names = _normalize_copy_column_names(
+        table_name,
+        parquet_file.schema_arrow.names,
+    )
     copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
         sql.Identifier(table_name),
         sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
@@ -271,14 +392,14 @@ def _copy_parquet_file_in_batches(
             batch_df = batch.to_pandas()
             csv_buffer = io.StringIO()
             batch_df.to_csv(csv_buffer, index=False, header=False)
-            csv_buffer.seek(0)
-            cur.copy_expert(copy_statement.as_string(conn), csv_buffer)
-            total_rows += cur.rowcount
+            with cur.copy(copy_statement) as copy:
+                copy.write(csv_buffer.getvalue())
+            total_rows += batch.num_rows
     return total_rows
 
 
 def _copy_csv_file_in_batches(
-    conn: connection,
+    conn: Connection[Any],
     table_name: str,
     csv_path: Path,
     *,
@@ -290,7 +411,10 @@ def _copy_csv_file_in_batches(
         if header is None:
             LOGGER.warning("CSV file %s is empty. Skipping.", csv_path)
             return 0
-        column_names = [col.strip() for col in header.split(",")]
+        column_names = _normalize_copy_column_names(
+            table_name,
+            [col.strip() for col in header.split(",")],
+        )
         copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
             sql.Identifier(table_name),
             sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
@@ -300,13 +424,14 @@ def _copy_csv_file_in_batches(
             lines = list(f.readlines(batch_size))
             if not lines:
                 break
-            cur.copy_expert(copy_statement.as_string(conn), io.StringIO("".join(lines)))
-            total_rows += cur.rowcount
+            with cur.copy(copy_statement) as copy:
+                copy.write("".join(lines))
+            total_rows += len(lines)
     return total_rows
 
 
 def bulk_insert_csv_files(
-    conn: connection,
+    conn: Connection[Any],
     csv_paths: list[Path],
     table_name: str,
     *,
@@ -367,8 +492,21 @@ def bulk_insert_csv_files(
     )
 
 
+def _normalize_copy_column_names(
+    table_name: str,
+    column_names: list[str],
+) -> list[str]:
+    if table_name != "locations":
+        return column_names
+
+    return [
+        "id" if column_name == "location_id" else column_name
+        for column_name in column_names
+    ]
+
+
 def _discover_locations_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return [Path(args.cities_csv)]
+    return [Path(args.locations_csv)]
 
 
 def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
@@ -428,7 +566,7 @@ def _discover_forecast_csv_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def _load_requested_tables(
-    conn: connection,
+    conn: Connection[Any],
     args: argparse.Namespace,
     *,
     truncate_tables: set[str],
@@ -437,7 +575,6 @@ def _load_requested_tables(
     table_csv_resolvers = (
         ("locations", _discover_locations_csv_paths),
         ("pet", _discover_pet_csv_paths),
-        ("pet_forecast", _discover_forecast_csv_paths),
     )
 
     for table_name, csv_resolver in table_csv_resolvers:
@@ -477,7 +614,7 @@ def main() -> None:
         return
 
     LOGGER.info("Connecting to the database...")
-    conn: connection = psycopg2.connect(DB_URI)
+    conn: Connection[Any] = psycopg.connect(DB_URI)
     conn.autocommit = True
 
     try:

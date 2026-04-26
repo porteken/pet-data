@@ -6,16 +6,16 @@ import importlib
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-import psycopg2
-from psycopg2 import sql
+import psycopg
+from psycopg import sql
 
 if TYPE_CHECKING:
-    from psycopg2.extensions import connection, cursor
+    from psycopg import Connection
 
 PET_CSV_HEADER = "location_id,date,pet\n"
-ANALYTICS_TABLES = ("pet_forecast",)
+ANALYTICS_TABLES: tuple[str, ...] = ()
 
 
 def _write_empty_pet_csv(output_path: str | Path) -> None:
@@ -23,31 +23,29 @@ def _write_empty_pet_csv(output_path: str | Path) -> None:
 
 
 def _build_export_copy_query(
-    cur: cursor,
     *,
     window_start: str | None,
     window_end: str | None,
-) -> str:
+) -> tuple[str, tuple[str, str] | None]:
     if window_start is None or window_end is None:
         return (
             "COPY ("
             "SELECT location_id, date, pet "
             "FROM public.pet "
             "ORDER BY location_id, date"
-            ") TO STDOUT WITH CSV HEADER"
+            ") TO STDOUT WITH CSV HEADER",
+            None,
         )
 
-    return cur.mogrify(
-        ""
+    return (
         "COPY ("
         "SELECT location_id, date, pet "
         "FROM public.pet "
         "WHERE date < %s::date OR date > %s::date "
         "ORDER BY location_id, date"
-        ") TO STDOUT WITH CSV HEADER"
-        "",
+        ") TO STDOUT WITH CSV HEADER",
         (window_start, window_end),
-    ).decode("utf-8")
+    )
 
 
 def export_pet(
@@ -62,7 +60,7 @@ def export_pet(
         _write_empty_pet_csv(output_path)
         return
 
-    conn = psycopg2.connect(db_uri)
+    conn = psycopg.connect(db_uri)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.pet')")
@@ -72,14 +70,19 @@ def export_pet(
                 _write_empty_pet_csv(output_path)
                 return
 
-            copy_query = _build_export_copy_query(
-                cur,
+            copy_query, copy_params = _build_export_copy_query(
                 window_start=window_start,
                 window_end=window_end,
             )
 
             with Path(output_path).open("w", encoding="utf-8", newline="") as csv_file:
-                cur.copy_expert(copy_query, csv_file)
+                copy_context = (
+                    cur.copy(cast("Any", copy_query))
+                    if copy_params is None
+                    else cur.copy(cast("Any", copy_query), copy_params)
+                )
+                with copy_context as copy:
+                    csv_file.writelines(cast("Any", copy))
     finally:
         conn.close()
 
@@ -156,7 +159,7 @@ def merge_csvs(
 
 
 def _existing_public_tables(
-    conn: connection,
+    conn: Connection[Any],
     table_names: tuple[str, ...],
 ) -> list[str]:
     existing_tables: list[str] = []
@@ -176,12 +179,18 @@ def delete_window(window_start: str, window_end: str) -> None:
         print("SUPABASE_DB_URI not set, skipping database cleanup.")  # noqa: T201
         return
 
-    conn = psycopg2.connect(db_uri)
+    conn = psycopg.connect(db_uri)
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
             if Path("drop_views.sql").exists():
-                cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
+                cur.execute(
+                    cast("Any", Path("drop_views.sql").read_text(encoding="utf-8")),
+                )
+            if Path("create_tables.sql").exists():
+                cur.execute(
+                    cast("Any", Path("create_tables.sql").read_text(encoding="utf-8")),
+                )
 
             cur.execute("SELECT to_regclass('public.pet')")
             regclass = cur.fetchone()

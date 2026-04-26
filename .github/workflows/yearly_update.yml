@@ -55,77 +55,9 @@ jobs:
           path: pet_data_csv/
           retention-days: 1
 
-  export-existing-data:
-    needs: build-target-window
-    if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - name: Sync runtime dependencies
-        run: uv sync --locked --no-dev
-      - name: Export Existing PET Rows
-        env:
-          SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python historical_pet_update.py export "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}" existing_pet.csv
-      - name: Upload Exported CSV
-        uses: actions/upload-artifact@v4
-        with:
-          name: existing-pet-csv
-          path: existing_pet.csv
-          retention-days: 1
-
-  generate-analytics:
-    needs: [build-target-window, compute-pet, export-existing-data]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard_index: ${{ fromJSON(needs.build-target-window.outputs.analytics_shards) }}
-    name: Analytics Shard ${{ matrix.shard_index }}/20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - name: Sync runtime dependencies
-        run: uv sync --locked --no-dev
-      - name: Download Computed PET Data
-        uses: actions/download-artifact@v4
-        with:
-          pattern: pet-data-*
-          path: pet_data_csv
-          merge-multiple: true
-      - name: Download Exported CSV
-        uses: actions/download-artifact@v4
-        with:
-          name: existing-pet-csv
-      - name: Build Full PET CSV For Analytics
-        run: uv run python historical_pet_update.py merge pet_full.csv existing_pet.csv --dirs pet_data_csv
-      - name: Generate Analytics
-        run: uv run python generate_analytics.py --pet-csv pet_full.csv --prefer-pet-csv --shard-index ${{ matrix.shard_index }} --shard-count 20
-      - name: Upload analytics shard
-        uses: actions/upload-artifact@v4
-        with:
-          name: analytics-shard-${{ matrix.shard_index }}
-          path: analytics_data_csv/
-          retention-days: 1
-
   prepare-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [build-target-window, generate-analytics]
+    needs: [build-target-window, compute-pet]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +78,7 @@ jobs:
 
   load-to-db:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
-    needs: [prepare-db-load, generate-analytics, compute-pet, build-target-window]
+    needs: [prepare-db-load, compute-pet, build-target-window]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -171,15 +103,10 @@ jobs:
           pattern: pet-data-*
           path: pet_data_csv
           merge-multiple: true
-      - name: Download Analytics Shard
-        uses: actions/download-artifact@v4
-        with:
-          name: analytics-shard-${{ matrix.shard_index }}
-          path: analytics_data_csv
       - name: Load Shard to Database
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --analytics-shard-count 20 --load-shard-index ${{ matrix.shard_index }} --load-shard-count 20
+        run: uv run python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --load-shard-index ${{ matrix.shard_index }} --load-shard-count 20
 
   finalize-db-load:
     if: github.ref_name == 'dev' || github.ref_name == 'prd'
@@ -200,4 +127,4 @@ jobs:
       - name: Recreate Views
         env:
           SUPABASE_DB_URI: ${{ github.ref_name == 'dev' && secrets.SUPABASE_DB_URI_DEV || secrets.SUPABASE_DB_URI }}
-        run: uv run python load.py --append-only --skip-table locations --skip-table pet --skip-table pet_forecast
+        run: uv run python load.py --append-only --skip-table locations --skip-table pet

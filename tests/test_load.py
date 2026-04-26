@@ -4,18 +4,49 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from load import (
     TABLE_NAMES,
     _discover_csv_inputs,
+    _discover_locations_csv_paths,
     _discover_pet_csv_paths,
     _extract_partition_marker,
     _filter_paths_by_partition_value,
+    _iter_sql_statements,
+    _normalize_copy_column_names,
     _select_partition_shard_paths,
     _validate_load_shard_args,
+    execute_sql_file,
 )
+
+
+class FakeCursor:
+    def __init__(self, executed_statements: list[str]) -> None:
+        """Initialize the fake cursor."""
+        self.executed_statements = executed_statements
+
+    def execute(self, statement: str) -> None:
+        self.executed_statements.append(statement)
+
+    def __enter__(self) -> FakeCursor:  # noqa: PYI034
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit context manager."""
+        _ = (exc_type, exc, tb)
+
+
+class FakeConnection:
+    def __init__(self) -> None:
+        """Initialize the fake connection."""
+        self.executed_statements: list[str] = []
+
+    def cursor(self) -> FakeCursor:
+        return FakeCursor(self.executed_statements)
 
 
 class TestFilterPathsByPartitionValue:
@@ -95,7 +126,7 @@ class TestDiscoverCsvInputs:
     def test_shard_root_discovery(self, tmp_path: Path) -> None:
         shard_dir = tmp_path / "analytics" / "shard_count=00020" / "shard_index=00000"
         shard_dir.mkdir(parents=True)
-        from typing import Any, cast
+        from typing import cast
 
         import pandas as pd
 
@@ -136,6 +167,68 @@ class TestDiscoverPetCsvPaths:
         )
 
         assert _discover_pet_csv_paths(args) == [pet_csv]
+
+
+class TestIterSqlStatements:
+    def test_keeps_dollar_quoted_function_body_intact(self) -> None:
+        sql_text = (
+            "CREATE FUNCTION public.test_fn()\n"
+            "RETURNS void\n"
+            "LANGUAGE plpgsql\n"
+            "AS $$\n"
+            "BEGIN\n"
+            "PERFORM 1;\n"
+            "END\n"
+            "$$ ;\n"
+            "CREATE TABLE public.example (id integer);\n"
+        )
+
+        statements = list(_iter_sql_statements(sql_text))
+
+        assert len(statements) == 2
+        assert "PERFORM 1;" in statements[0]
+        assert statements[1] == "CREATE TABLE public.example (id integer);"
+
+    def test_ignores_semicolons_in_comments_and_strings(self) -> None:
+        sql_text = "-- comment;\nSELECT 'a; b';\n/* block; */\nSELECT 2;"
+
+        assert list(_iter_sql_statements(sql_text)) == [
+            "-- comment;\nSELECT 'a; b';",
+            "/* block; */\nSELECT 2;",
+        ]
+
+
+class TestExecuteSqlFile:
+    def test_executes_each_statement_separately(self, tmp_path: Path) -> None:
+        sql_path = tmp_path / "schema.sql"
+        sql_path.write_text("SELECT 1;\nSELECT 2;\n", encoding="utf-8")
+        conn = FakeConnection()
+
+        execute_sql_file(cast("Any", conn), sql_path)
+
+        assert conn.executed_statements == ["SELECT 1;", "SELECT 2;"]
+
+
+class TestDiscoverLocationsCsvPaths:
+    def test_uses_locations_csv_argument(self, tmp_path: Path) -> None:
+        locations_csv = tmp_path / "locations.csv"
+        args = argparse.Namespace(locations_csv=str(locations_csv))
+
+        assert _discover_locations_csv_paths(args) == [locations_csv]
+
+
+class TestNormalizeCopyColumnNames:
+    def test_locations_header_maps_location_id_to_id(self) -> None:
+        assert _normalize_copy_column_names(
+            "locations",
+            ["location_id", "city", "state", "lat", "lng"],
+        ) == ["id", "city", "state", "lat", "lng"]
+
+    def test_non_locations_headers_remain_unchanged(self) -> None:
+        assert _normalize_copy_column_names(
+            "pet",
+            ["location_id", "date", "pet"],
+        ) == ["location_id", "date", "pet"]
 
 
 class TestSelectPartitionShardPaths:
@@ -198,6 +291,6 @@ class TestTableNames:
     def test_expected_tables(self) -> None:
         assert "locations" in TABLE_NAMES
         assert "pet" in TABLE_NAMES
-        assert "pet_forecast" in TABLE_NAMES
+        assert "pet_forecast" not in TABLE_NAMES
         assert "pet_percentiles" not in TABLE_NAMES
         assert "pet_change" not in TABLE_NAMES

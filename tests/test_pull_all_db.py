@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from psycopg2.extensions import connection
+    from psycopg import Connection
 
 pytestmark = pytest.mark.db
 
@@ -19,11 +19,11 @@ DB_URI = os.getenv("SUPABASE_DB_URI")
 REQUIRED_TABLES = [
     "locations",
     "pet",
-    "pet_forecast",
 ]
 
 REQUIRED_MATERIALIZED_VIEWS = [
-    "pet_change",
+    "city_rankings_view",
+    "pet_forecast",
     "pet_percentiles",
     "pet_year",
     "pet_year_avg",
@@ -32,27 +32,27 @@ REQUIRED_MATERIALIZED_VIEWS = [
 
 
 @pytest.fixture(scope="module")
-def db_conn() -> Generator[connection, None, None]:
-    """Yield a psycopg2 connection, skip if unavailable."""
+def db_conn() -> Generator[Connection[Any], None, None]:
+    """Yield a psycopg connection, skip if unavailable."""
     if not DB_URI:
         pytest.skip("SUPABASE_DB_URI not set")
 
     try:
-        import psycopg2
+        import psycopg
     except ImportError:
-        pytest.skip("psycopg2 not installed")
+        pytest.skip("psycopg not installed")
 
     try:
-        conn = psycopg2.connect(DB_URI)
+        conn = psycopg.connect(DB_URI)
         conn.autocommit = True
-    except psycopg2.OperationalError as exc:
+    except psycopg.OperationalError as exc:
         pytest.skip(f"Cannot connect to database: {exc}")
 
     yield conn
     conn.close()
 
 
-def _row_count(conn: connection, relation: str) -> int:
+def _row_count(conn: Connection[Any], relation: str) -> int:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT COUNT(*) FROM pg_class WHERE relname = %s",
@@ -62,25 +62,25 @@ def _row_count(conn: connection, relation: str) -> int:
         assert row is not None
         if row[0] == 0:
             pytest.fail(f"Relation {relation!r} does not exist")
-        cur.execute(f"SELECT COUNT(*) FROM {relation}")  # noqa: S608
+        cur.execute(cast("Any", f"SELECT COUNT(*) FROM {relation}"))  # noqa: S608
         count_row = cur.fetchone()
         assert count_row is not None
         return count_row[0]
 
 
 @pytest.mark.parametrize("table", REQUIRED_TABLES)
-def test_table_has_rows(db_conn: connection, table: str) -> None:
+def test_table_has_rows(db_conn: Connection[Any], table: str) -> None:
     count = _row_count(db_conn, table)
     assert count > 0, f"Table {table!r} is empty (0 rows)"
 
 
 @pytest.mark.parametrize("view", REQUIRED_MATERIALIZED_VIEWS)
-def test_materialized_view_has_rows(db_conn: connection, view: str) -> None:
+def test_materialized_view_has_rows(db_conn: Connection[Any], view: str) -> None:
     count = _row_count(db_conn, view)
     assert count > 0, f"Materialized view {view!r} is empty (0 rows)"
 
 
-def test_pet_covers_year_range(db_conn: connection) -> None:
+def test_pet_covers_year_range(db_conn: Connection[Any]) -> None:
     """The pet table should have data for the years it contains."""
     with db_conn.cursor() as cur:
         cur.execute(
@@ -96,17 +96,83 @@ def test_pet_covers_year_range(db_conn: connection) -> None:
     assert max_year <= 2026, f"Latest year {max_year} is beyond expected 2026"
 
 
-def test_locations_not_empty(db_conn: connection) -> None:
+def test_locations_not_empty(db_conn: Connection[Any]) -> None:
     count = _row_count(db_conn, "locations")
     assert count > 0, "locations table is empty"
 
 
-def test_pet_has_id_index(db_conn: connection) -> None:
+def test_compact_schema_types(db_conn: Connection[Any]) -> None:
+    """Core tables and analytics views should use the compact types defined in SQL."""
+    assert _get_relation_column_types(db_conn, "locations") == {
+        "id": "smallint",
+        "city": "text",
+        "state": "text",
+        "lat": "real",
+        "lng": "real",
+    }
+    assert _get_relation_column_types(db_conn, "pet") == {
+        "id": "smallint",
+        "location_id": "smallint",
+        "date": "date",
+        "pet": "real",
+    }
+    assert _get_relation_column_types(db_conn, "pet_year") == {
+        "location_id": "integer",
+        "date": "date",
+        "year": "smallint",
+        "pet": "real",
+    }
+    assert _get_relation_column_types(db_conn, "pet_year_avg") == {
+        "location_id": "integer",
+        "year": "smallint",
+        "season": "text",
+        "pet": "numeric(5,1)",
+    }
+    assert _get_relation_column_types(db_conn, "pet_year_max") == {
+        "location_id": "integer",
+        "year": "smallint",
+        "season": "text",
+        "pet": "numeric(5,1)",
+    }
+    assert _get_relation_column_types(db_conn, "pet_percentiles") == {
+        "year": "smallint",
+        "location_id": "integer",
+        "p10": "numeric(5,1)",
+        "p90": "numeric(5,1)",
+    }
+    assert _get_relation_column_types(db_conn, "pet_forecast") == {
+        "location_id": "integer",
+        "year": "smallint",
+        "season": "text",
+        "pet": "numeric(5,1)",
+        "lower": "numeric(5,1)",
+        "upper": "numeric(5,1)",
+        "model_type": "text",
+        "full_years_used": "smallint",
+        "warming_rate": "numeric(5,2)",
+        "acceleration": "numeric(6,3)",
+    }
+    assert _get_relation_column_types(db_conn, "city_rankings_view") == {
+        "location_id": "integer",
+        "year": "smallint",
+        "avg_pet": "numeric(5,1)",
+        "max_pet": "numeric(5,1)",
+        "city": "text",
+        "state": "text",
+        "p10": "numeric(5,1)",
+        "p90": "numeric(5,1)",
+        "future_lower": "numeric(5,1)",
+        "future_upper": "numeric(5,1)",
+        "change_per_decade": "numeric(5,2)",
+    }
+
+
+def test_pet_has_id_index(db_conn: Connection[Any]) -> None:
     """Pet should expose the requested id index for location/date access."""
     assert _get_index_columns(db_conn, "id") == ["location_id", "date"]
 
 
-def _get_relation_columns(conn: connection, relation: str) -> list[str]:
+def _get_relation_columns(conn: Connection[Any], relation: str) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT a.attname "
@@ -123,7 +189,24 @@ def _get_relation_columns(conn: connection, relation: str) -> list[str]:
         return [row[0] for row in cur.fetchall()]
 
 
-def _get_index_columns(conn: connection, index_name: str) -> list[str]:
+def _get_relation_column_types(conn: Connection[Any], relation: str) -> dict[str, str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod) "
+            "FROM pg_catalog.pg_attribute AS a "
+            "JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' "
+            "AND c.relname = %s "
+            "AND a.attnum > 0 "
+            "AND NOT a.attisdropped "
+            "ORDER BY a.attnum",
+            (relation,),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _get_index_columns(conn: Connection[Any], index_name: str) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT a.attname "
@@ -143,62 +226,66 @@ def _get_index_columns(conn: connection, index_name: str) -> list[str]:
 
 
 def _assert_year_season_pet_view(
-    db_conn: connection, view: str, aggregate: str
+    db_conn: Connection[Any], view: str, aggregate: str
 ) -> None:
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM ("  # noqa: S608
-            "SELECT location_id, year, season, COUNT(*) AS row_count "
-            f"FROM {view} "
-            "GROUP BY location_id, year, season "
-            "HAVING COUNT(*) > 1"
-            ") AS duplicates"
+            cast(
+                "Any",
+                "SELECT COUNT(*) FROM ("  # noqa: S608
+                "SELECT location_id, year, season, COUNT(*) AS row_count "
+                f"FROM {view} "
+                "GROUP BY location_id, year, season "
+                "HAVING COUNT(*) > 1"
+                ") AS duplicates",
+            )
         )  # noqa: RUF100, S608
         duplicate_count_row = cur.fetchone()
         assert duplicate_count_row is not None
 
         cur.execute(  # noqa: RUF100, S608
-            "WITH pet_with_seasons AS ("  # noqa: S608
-            "SELECT location_id, EXTRACT(YEAR FROM date)::int AS year, 'Annual'::text AS season, pet "
-            "FROM pet "
-            "UNION ALL "
-            "SELECT "
-            "location_id, "
-            "EXTRACT(YEAR FROM date)::int AS year, "
-            "CASE "
-            "WHEN EXTRACT(MONTH FROM date)::int IN (12, 1, 2) THEN 'Winter' "
-            "WHEN EXTRACT(MONTH FROM date)::int IN (3, 4, 5) THEN 'Spring' "
-            "WHEN EXTRACT(MONTH FROM date)::int IN (6, 7, 8) THEN 'Summer' "
-            "ELSE 'Fall' "
-            "END AS season, "
-            "pet "
-            "FROM pet"
-            "), expected AS ("
-            "SELECT location_id, year, season, "
-            f"ROUND({aggregate}(pet)::numeric, 1) AS pet "
-            "FROM pet_with_seasons "
-            "GROUP BY location_id, year, season"
-            "), actual AS ("
-            f"SELECT location_id, year, season, pet FROM {view}"
-            "), missing AS ("
-            "SELECT * FROM expected "
-            "EXCEPT "
-            "SELECT * FROM actual"
-            "), extra AS ("
-            "SELECT * FROM actual "
-            "EXCEPT "
-            "SELECT * FROM expected"
-            ") "
-            "SELECT "
-            "(SELECT COUNT(*) FROM missing), "
-            "(SELECT COUNT(*) FROM extra)"
+            cast(
+                "Any",
+                "WITH pet_with_seasons AS ("  # noqa: S608
+                "SELECT location_id, EXTRACT(YEAR FROM date)::int AS year, 'Annual'::text AS season, pet "
+                "FROM pet "
+                "UNION ALL "
+                "SELECT "
+                "location_id, "
+                "EXTRACT(YEAR FROM date)::int AS year, "
+                "CASE "
+                "WHEN EXTRACT(MONTH FROM date)::int IN (12, 1, 2) THEN 'Winter' "
+                "WHEN EXTRACT(MONTH FROM date)::int IN (3, 4, 5) THEN 'Spring' "
+                "WHEN EXTRACT(MONTH FROM date)::int IN (6, 7, 8) THEN 'Summer' "
+                "ELSE 'Fall' "
+                "END AS season, "
+                "pet "
+                "FROM pet"
+                "), expected AS ("
+                "SELECT location_id, year, season, "
+                f"ROUND({aggregate}(pet)::numeric, 1) AS pet "
+                "FROM pet_with_seasons "
+                "GROUP BY location_id, year, season"
+                "), actual AS ("
+                f"SELECT location_id, year, season, pet FROM {view}"
+                "), missing AS ("
+                "SELECT * FROM expected "
+                "EXCEPT "
+                "SELECT * FROM actual"
+                "), extra AS ("
+                "SELECT * FROM actual "
+                "EXCEPT "
+                "SELECT * FROM expected"
+                ") "
+                "SELECT "
+                "(SELECT COUNT(*) FROM missing), "
+                "(SELECT COUNT(*) FROM extra)",
+            )
         )
         diff_count_row = cur.fetchone()
         assert diff_count_row is not None
 
-        cur.execute(
-            f"SELECT DISTINCT season FROM {view} ORDER BY season"  # noqa: S608
-        )
+        cur.execute(cast("Any", f"SELECT DISTINCT season FROM {view} ORDER BY season"))  # noqa: S608
         seasons = {row[0] for row in cur.fetchall()}
 
     columns = _get_relation_columns(db_conn, view)
@@ -214,17 +301,17 @@ def _assert_year_season_pet_view(
     assert extra_count == 0
 
 
-def test_pet_year_avg_has_annual_and_seasons(db_conn: connection) -> None:
+def test_pet_year_avg_has_annual_and_seasons(db_conn: Connection[Any]) -> None:
     """pet_year_avg should expose Annual plus Winter/Spring/Summer/Fall rows."""
     _assert_year_season_pet_view(db_conn, "pet_year_avg", "AVG")
 
 
-def test_pet_year_max_has_annual_and_seasons(db_conn: connection) -> None:
+def test_pet_year_max_has_annual_and_seasons(db_conn: Connection[Any]) -> None:
     """Verify pet_year_max contains annual and seasonal rows."""
     _assert_year_season_pet_view(db_conn, "pet_year_max", "MAX")
 
 
-def test_pet_percentiles_match_pet_quantiles(db_conn: connection) -> None:
+def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
     """pet_percentiles should match yearly 10th/90th quantiles from pet."""
     with db_conn.cursor() as cur:
         cur.execute(
@@ -269,8 +356,10 @@ def test_pet_percentiles_match_pet_quantiles(db_conn: connection) -> None:
     assert duplicate_count == 0
 
 
-def test_pet_change_matches_decade_deltas(db_conn: connection) -> None:
-    """pet_change should match decade-to-decade deltas from pet + pet_forecast."""
+def test_city_rankings_view_matches_expected_projection(
+    db_conn: Connection[Any],
+) -> None:
+    """city_rankings_view should inline annual stats, forecast bounds, and decade deltas."""
     with db_conn.cursor() as cur:
         cur.execute(
             "WITH daily_pet AS ("
@@ -288,7 +377,8 @@ def test_pet_change_matches_decade_deltas(db_conn: connection) -> None:
             "), combined_yearly_avg AS ("
             "SELECT location_id, year, pet, source_order FROM historical_yearly_avg "
             "UNION ALL "
-            "SELECT location_id, year::int AS year, pet, 1 AS source_order FROM pet_forecast"
+            "SELECT location_id, year::int AS year, pet, 1 AS source_order "
+            "FROM pet_forecast WHERE season = 'Annual'"
             "), deduplicated_yearly_avg AS ("
             "SELECT DISTINCT ON (location_id, year) location_id, year, pet "
             "FROM combined_yearly_avg "
@@ -301,25 +391,70 @@ def test_pet_change_matches_decade_deltas(db_conn: connection) -> None:
             "SELECT "
             "location_id, "
             "year, "
-            "ROUND((pet - LAG(pet) OVER (PARTITION BY location_id ORDER BY year))::numeric, 2) AS change "
+            "ROUND((pet - LAG(pet) OVER (PARTITION BY location_id ORDER BY year))::numeric, 2)::numeric(5,2) AS change "
             "FROM decade_avg"
+            "), projected AS ("
+            "SELECT "
+            "a.location_id, "
+            "a.year, "
+            "a.pet AS avg_pet, "
+            "m.pet AS max_pet, "
+            "l.city, "
+            "l.state, "
+            "p.p10, "
+            "p.p90, "
+            "f.lower AS future_lower, "
+            "f.upper AS future_upper, "
+            "c.change AS change_per_decade "
+            "FROM pet_year_avg AS a "
+            "JOIN locations AS l "
+            "ON l.id = a.location_id "
+            "AND l.id > 0 "
+            "JOIN pet_year_max AS m "
+            "ON m.location_id = a.location_id "
+            "AND m.year = a.year "
+            "AND m.season = a.season "
+            "JOIN pet_percentiles AS p "
+            "ON p.location_id = a.location_id "
+            "AND p.year = a.year "
+            "LEFT JOIN pet_forecast AS f "
+            "ON f.location_id = a.location_id "
+            "AND f.year = 2100::smallint "
+            "AND f.season = 'Annual' "
+            "LEFT JOIN expected AS c "
+            "ON c.location_id = a.location_id "
+            "AND c.year = ((a.year / 10) * 10)::smallint "
+            "WHERE a.location_id > 0 "
+            "AND a.season = 'Annual'"
             "), actual AS ("
-            "SELECT location_id, year, change FROM pet_change"
+            "SELECT "
+            "location_id, "
+            "year, "
+            "avg_pet, "
+            "max_pet, "
+            "city, "
+            "state, "
+            "p10, "
+            "p90, "
+            "future_lower, "
+            "future_upper, "
+            "change_per_decade "
+            "FROM city_rankings_view"
             "), missing AS ("
-            "SELECT location_id, year, change FROM expected WHERE change IS NOT NULL "
+            "SELECT * FROM projected "
             "EXCEPT "
             "SELECT * FROM actual"
             "), extra AS ("
             "SELECT * FROM actual "
             "EXCEPT "
-            "SELECT location_id, year, change FROM expected WHERE change IS NOT NULL"
+            "SELECT * FROM projected"
             ") "
             "SELECT "
             "(SELECT COUNT(*) FROM missing), "
             "(SELECT COUNT(*) FROM extra), "
             "(SELECT COUNT(*) FROM ("
             "SELECT location_id, year, COUNT(*) AS row_count "
-            "FROM pet_change "
+            "FROM city_rankings_view "
             "GROUP BY location_id, year "
             "HAVING COUNT(*) > 1"
             ") AS duplicates)"
@@ -327,10 +462,210 @@ def test_pet_change_matches_decade_deltas(db_conn: connection) -> None:
         diff_count_row = cur.fetchone()
         assert diff_count_row is not None
 
-    columns = _get_relation_columns(db_conn, "pet_change")
-    assert columns == ["location_id", "year", "change"]
+    columns = _get_relation_columns(db_conn, "city_rankings_view")
+    assert columns == [
+        "location_id",
+        "year",
+        "avg_pet",
+        "max_pet",
+        "city",
+        "state",
+        "p10",
+        "p90",
+        "future_lower",
+        "future_upper",
+        "change_per_decade",
+    ]
 
     missing_count, extra_count, duplicate_count = diff_count_row
     assert missing_count == 0
     assert extra_count == 0
     assert duplicate_count == 0
+
+
+def test_pet_forecast_has_annual_and_seasons(db_conn: Connection[Any]) -> None:
+    """pet_forecast should expose annual plus seasonal forecasts with no duplicates."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "WITH pet_with_seasons AS ("
+            "SELECT location_id, date, 'Annual'::text AS season, pet "
+            "FROM pet "
+            "UNION ALL "
+            "SELECT "
+            "location_id, "
+            "date, "
+            "CASE "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (12, 1, 2) THEN 'Winter' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (3, 4, 5) THEN 'Spring' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (6, 7, 8) THEN 'Summer' "
+            "ELSE 'Fall' "
+            "END AS season, "
+            "pet "
+            "FROM pet"
+            "), daily_pet AS ("
+            "SELECT location_id, date, season, AVG(pet) AS pet "
+            "FROM pet_with_seasons "
+            "GROUP BY location_id, date, season"
+            "), yearly_pet AS ("
+            "SELECT "
+            "location_id, "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "season, "
+            "AVG(pet) AS pet, "
+            "COUNT(*)::int AS days_present "
+            "FROM daily_pet "
+            "GROUP BY location_id, EXTRACT(YEAR FROM date)::int, season"
+            "), complete_yearly_pet AS ("
+            "SELECT location_id, year, season, pet "
+            "FROM yearly_pet "
+            "WHERE days_present = CASE "
+            "WHEN season = 'Annual' THEN CASE "
+            "WHEN MOD(year, 4) = 0 AND (MOD(year, 100) <> 0 OR MOD(year, 400) = 0) THEN 366 "
+            "ELSE 365 "
+            "END "
+            "WHEN season = 'Winter' THEN CASE "
+            "WHEN MOD(year, 4) = 0 AND (MOD(year, 100) <> 0 OR MOD(year, 400) = 0) THEN 91 "
+            "ELSE 90 "
+            "END "
+            "WHEN season IN ('Spring', 'Summer') THEN 92 "
+            "ELSE 91 "
+            "END"
+            "), forecast_inputs AS ("
+            "SELECT "
+            "location_id, "
+            "season, "
+            "array_agg(year ORDER BY year) AS years, "
+            "array_agg(pet ORDER BY year) AS pet_values "
+            "FROM complete_yearly_pet "
+            "GROUP BY location_id, season"
+            "), expected AS ("
+            "SELECT "
+            "forecast.location_id, "
+            "forecast.year, "
+            "inputs.season, "
+            "forecast.pet, "
+            "forecast.lower, "
+            "forecast.upper, "
+            "forecast.model_type, "
+            "forecast.full_years_used, "
+            "forecast.warming_rate, "
+            "forecast.acceleration "
+            "FROM forecast_inputs AS inputs "
+            "CROSS JOIN LATERAL pet_forecast_for_location(inputs.location_id, inputs.years, inputs.pet_values) AS forecast"
+            "), actual AS ("
+            "SELECT "
+            "location_id, "
+            "year, "
+            "season, "
+            "pet, "
+            "lower, "
+            "upper, "
+            "model_type, "
+            "full_years_used, "
+            "warming_rate, "
+            "acceleration "
+            "FROM pet_forecast"
+            "), missing AS ("
+            "SELECT * FROM expected "
+            "EXCEPT "
+            "SELECT * FROM actual"
+            "), extra AS ("
+            "SELECT * FROM actual "
+            "EXCEPT "
+            "SELECT * FROM expected"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM missing), "
+            "(SELECT COUNT(*) FROM extra), "
+            "(SELECT COUNT(*) FROM ("
+            "SELECT location_id, year, season, COUNT(*) AS row_count "
+            "FROM pet_forecast "
+            "GROUP BY location_id, year, season "
+            "HAVING COUNT(*) > 1"
+            ") AS duplicates)"
+        )
+        diff_count_row = cur.fetchone()
+        assert diff_count_row is not None
+
+        cur.execute("SELECT DISTINCT season FROM pet_forecast ORDER BY season")
+        seasons = {row[0] for row in cur.fetchall()}
+
+    columns = _get_relation_columns(db_conn, "pet_forecast")
+    assert columns == [
+        "location_id",
+        "year",
+        "season",
+        "pet",
+        "lower",
+        "upper",
+        "model_type",
+        "full_years_used",
+        "warming_rate",
+        "acceleration",
+    ]
+
+    missing_count, extra_count, duplicate_count = diff_count_row
+    assert seasons
+    assert "Annual" in seasons
+    assert seasons.issubset({"Annual", "Winter", "Spring", "Summer", "Fall"})
+    assert missing_count == 0
+    assert extra_count == 0
+    assert duplicate_count == 0
+
+
+def test_pet_forecast_matches_legacy_table_when_present(
+    db_conn: Connection[Any],
+) -> None:
+    """Compare Annual derived pet_forecast rows to any preserved legacy table rows."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.pet_forecast_legacy')")
+        legacy_relation_row = cur.fetchone()
+        assert legacy_relation_row is not None
+        if legacy_relation_row[0] is None:
+            pytest.skip("pet_forecast_legacy not present for migration comparison")
+
+        cur.execute(
+            "WITH actual AS ("
+            "SELECT "
+            "location_id, "
+            "year, "
+            "ROUND(pet::numeric, 1) AS pet, "
+            "ROUND(lower::numeric, 1) AS lower, "
+            "ROUND(upper::numeric, 1) AS upper, "
+            "model_type, "
+            "full_years_used, "
+            "ROUND(warming_rate::numeric, 2) AS warming_rate, "
+            "ROUND(acceleration::numeric, 3) AS acceleration "
+            "FROM pet_forecast "
+            "WHERE season = 'Annual'"
+            "), legacy AS ("
+            "SELECT "
+            "location_id, "
+            "year, "
+            "ROUND(pet::numeric, 1) AS pet, "
+            "ROUND(lower::numeric, 1) AS lower, "
+            "ROUND(upper::numeric, 1) AS upper, "
+            "model_type, "
+            "full_years_used, "
+            "ROUND(warming_rate::numeric, 2) AS warming_rate, "
+            "ROUND(acceleration::numeric, 3) AS acceleration "
+            "FROM pet_forecast_legacy"
+            "), missing AS ("
+            "SELECT * FROM legacy "
+            "EXCEPT "
+            "SELECT * FROM actual"
+            "), extra AS ("
+            "SELECT * FROM actual "
+            "EXCEPT "
+            "SELECT * FROM legacy"
+            ") "
+            "SELECT "
+            "(SELECT COUNT(*) FROM missing), "
+            "(SELECT COUNT(*) FROM extra)"
+        )
+        diff_count_row = cur.fetchone()
+        assert diff_count_row is not None
+
+    missing_count, extra_count = diff_count_row
+    assert missing_count == 0
+    assert extra_count == 0

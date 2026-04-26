@@ -11,7 +11,7 @@
         "weather_data_parquet",
         "utci_data_parquet",
         "combined_data_parquet",
-        "**/node_modules", "**/.*"
+        "**/node_modules", "**/.*", ".conda"
     ],
     "venvPath": ".",
     "venv": ".venv",
