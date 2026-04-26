@@ -715,20 +715,25 @@ y.pet::real AS pet
 FROM yearly_pet AS y
 -- Seasons are grouped by the calendar year of each date, matching
 -- public.pet_season() (for example: Winter 2024 = Jan/Feb/Dec 2024).
+-- Sqruff v0.38.0 still flags these <> comparisons as LT01 even with
+-- comparison_operator spacing configured as touch; keep them compact so
+-- Squawk does not read "< >" as an invalid operation.
+-- noqa: disable=LT01
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
 WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
+AND (MOD (y.year, 100) <> 0 OR MOD (y.year, 400) = 0) THEN 366
 ELSE 365
 END
 WHEN y.season = 'Winter' THEN CASE
 WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
+AND (MOD (y.year, 100) <> 0 OR MOD (y.year, 400) = 0) THEN 91
 ELSE 90
 END
 WHEN y.season IN ('Spring', 'Summer') THEN 92
 ELSE 91
 END
+-- noqa: enable=LT01
 ), forecast_inputs AS (
 SELECT
 location_id::smallint AS location_id,
