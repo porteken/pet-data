@@ -27,6 +27,7 @@ gcs = [
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-cov>=7.1.0",
     "ruff",
 ]
 
