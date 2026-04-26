@@ -84,6 +84,10 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY entrypoint.sh cities.py google_era5.py pet_corrected.py shards.py ./
 
-RUN chmod +x entrypoint.sh
+RUN groupadd -r appuser && useradd -r -g appuser appuser \
+    && chown -R appuser:appuser /app \
+    && chmod +x entrypoint.sh
+
+USER appuser
 
 ENTRYPOINT ["./entrypoint.sh"]

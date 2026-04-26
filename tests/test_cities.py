@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from cities import CITY_COORD_DECIMALS, filter_bounding_box, process_cities
 
@@ -93,5 +94,9 @@ class TestProcessCities:
 
         result = process_cities(df)
 
-        assert result.iloc[0]["lat"] == round(30.12341, CITY_COORD_DECIMALS)
-        assert result.iloc[0]["lng"] == round(-90.98761, CITY_COORD_DECIMALS)
+        assert result.iloc[0]["lat"] == pytest.approx(
+            round(30.12341, CITY_COORD_DECIMALS)
+        )
+        assert result.iloc[0]["lng"] == pytest.approx(
+            round(-90.98761, CITY_COORD_DECIMALS)
+        )

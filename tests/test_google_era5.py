@@ -205,7 +205,7 @@ class TestComputePetChunk:
 
         result = _compute_pet_chunk(df)
 
-        assert result["pet"].tolist() == [22.0]
+        assert result["pet"].tolist() == pytest.approx([22.0])
 
 
 class TestRunEra5BatchJobs:

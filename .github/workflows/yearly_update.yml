@@ -21,7 +21,7 @@ jobs:
       window_end: ${{ steps.compute.outputs.window_end }}
       analytics_shards: ${{ steps.compute.outputs.analytics_shards }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - id: compute
         run: python build_year_range.py --github --yearly >> "$GITHUB_OUTPUT"
 
@@ -32,7 +32,7 @@ jobs:
       STACK_NAME: pet-data-infrastructure
       BUCKET_NAME: pet-parquet-files
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Deploy S3 Bucket
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -46,13 +46,13 @@ jobs:
     needs: deploy-infrastructure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Authenticate GCP
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
       - name: Cancel running Cloud Run executions
         run: |
           python3 cancel_cloud_run_job_executions.py \
@@ -65,7 +65,7 @@ jobs:
     needs: [build-target-window, deploy-infrastructure, cancel-running-cloud-run-executions]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Clear PET Prefix
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -78,13 +78,13 @@ jobs:
     needs: [deploy-infrastructure, cancel-running-cloud-run-executions]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Authenticate GCP
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
       - name: Build and deploy Cloud Run worker
         env:
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
@@ -106,13 +106,13 @@ jobs:
         time_shard_index: [0, 1, 2, 3, 4, 5, 6]
     name: ERA5->PET A ${{ needs.build-target-window.outputs.target_year }} time ${{ matrix.time_shard_index }}/13
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Authenticate GCP
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
           # Keep batch-hours explicit so CI stays aligned with the local runner.
@@ -134,13 +134,13 @@ jobs:
         time_shard_index: [7, 8, 9, 10, 11, 12]
     name: ERA5->PET B ${{ needs.build-target-window.outputs.target_year }} time ${{ matrix.time_shard_index }}/13
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Authenticate GCP
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
           # Keep batch-hours explicit so CI stays aligned with the local runner.
@@ -156,13 +156,13 @@ jobs:
     needs: [build-target-window, compute-pet-google-era5-a, compute-pet-google-era5-b]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version-file: "pyproject.toml"
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           enable-cache: true
       - name: Sync runtime dependencies
@@ -183,13 +183,13 @@ jobs:
         load_shard_index: ${{ fromJSON(needs.build-target-window.outputs.analytics_shards) }}
     name: Load shard ${{ matrix.load_shard_index }}/20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version-file: "pyproject.toml"
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           enable-cache: true
       - name: Sync runtime dependencies
@@ -215,13 +215,13 @@ jobs:
     needs: load-to-db
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version-file: "pyproject.toml"
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           enable-cache: true
       - name: Sync runtime dependencies

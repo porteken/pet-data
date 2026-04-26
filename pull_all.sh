@@ -91,6 +91,7 @@ fi
 
 _progress_enabled() {
     [[ "${PROGRESS}" == "1" ]]
+    return $?
 }
 
 _progress_bar() {
@@ -110,6 +111,7 @@ _progress_bar() {
 
     printf '%*s' "${filled}" '' | tr ' ' '#'
     printf '%*s' "${empty}" '' | tr ' ' '-'
+    return 0
 }
 
 _progress_display() {
@@ -120,7 +122,7 @@ _progress_display() {
 
     # shellcheck disable=SC2310
     if ! _progress_enabled; then
-        return
+        return 0
     fi
 
     if (( total < 1 )); then
@@ -139,7 +141,7 @@ _progress_display() {
         if (( force )) || (( PROGRESS_CURRENT >= total )); then
             printf '\n' >&2
         fi
-        return
+        return 0
     fi
 
     if (( force )) || (( percent >= PROGRESS_LAST_PERCENT + 5 )) || (( PROGRESS_CURRENT >= total )); then
@@ -147,10 +149,12 @@ _progress_display() {
         echo "Progress [$(_progress_bar "${PROGRESS_CURRENT}" "${total}" 20)] ${percent}% (${PROGRESS_CURRENT}/${total}) ${message}" >&2
         PROGRESS_LAST_PERCENT=${percent}
     fi
+    return 0
 }
 
 _progress_note() {
     _progress_display "$1" 1
+    return $?
 }
 
 _progress_advance() {
@@ -163,16 +167,17 @@ _progress_advance() {
     fi
 
     _progress_display "${message}"
+    return $?
 }
 
 _require_executable() {
     local executable=$1
     if [[ "${executable}" == */* ]]; then
         if [[ -x "${executable}" ]]; then
-            return
+            return 0
         fi
     elif command -v "${executable}" >/dev/null 2>&1; then
-        return
+        return 0
     fi
 
     echo "Required executable not found: ${executable}" >&2
@@ -185,15 +190,17 @@ _require_python_runner() {
     else
         _require_executable "${PYTHON_BIN}"
     fi
+    return $?
 }
 
 _sync_python_environment() {
     if [[ "${USE_UV}" != "1" ]]; then
-        return
+        return 0
     fi
 
     echo "Syncing local project environment with uv..."
     "${UV_BIN}" sync --locked --extra gcs
+    return $?
 }
 
 _run_python() {
@@ -202,11 +209,21 @@ _run_python() {
     else
         "${PYTHON_BIN}" "$@"
     fi
+    return $?
 }
 
 _join_csv_args() {
-    local IFS=,
-    printf '%s' "$*"
+    local first=1
+    local arg
+    for arg in "$@"; do
+        if (( first )); then
+            printf '%s' "${arg}"
+            first=0
+        else
+            printf ',%s' "${arg}"
+        fi
+    done
+    return 0
 }
 
 _s3_prefix_has_objects() {
@@ -234,16 +251,18 @@ _s3_prefix_has_objects() {
             2>/dev/null || true
     )
     [[ -n "${first_key}" && "${first_key}" != "None" ]]
+    return $?
 }
 
 _local_pet_output_exists() {
     find pet_data_csv -type f -name 'pet_batch_*.parquet' -print -quit | grep -q .
+    return $?
 }
 
 _assert_pet_output_available() {
     # shellcheck disable=SC2310
     if _local_pet_output_exists; then
-        return
+        return 0
     fi
 
     if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
@@ -278,17 +297,19 @@ combined = pd.read_parquet(
 combined.to_csv("pet.csv", index=False)
 print(f"Saved {len(combined)} rows to pet.csv")
 PY
+    return $?
 }
 
 _write_empty_pet_csv() {
     printf 'location_id,date,pet\n' > "$1"
+    return $?
 }
 
 _count_pet_csv_years() {
     local csv_path=$1
     if [[ ! -f "${csv_path}" ]]; then
         echo 0
-        return
+        return 0
     fi
 
     awk -F, '
@@ -305,6 +326,7 @@ _count_pet_csv_years() {
             print substr($date_col, 1, 4)
         }
     ' "${csv_path}" | sort -u | awk 'END {print NR + 0}'
+    return $?
 }
 
 _export_history_pet_csv() {
@@ -313,10 +335,11 @@ _export_history_pet_csv() {
 
     if [[ -z "${env_name}" || -z "${!env_name:-}" ]]; then
         _write_empty_pet_csv "${output_csv}"
-        return
+        return 0
     fi
 
     SUPABASE_DB_URI="${!env_name}" _run_python historical_pet_update.py export-all "${output_csv}"
+    return $?
 }
 
 _prepare_analytics_pet_inputs() {
@@ -324,11 +347,11 @@ _prepare_analytics_pet_inputs() {
     DB_LOAD_PREFER_PET_CSV=0
 
     if [[ "${SKIP_DB_LOAD}" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
-        return
+        return 0
     fi
 
     if [[ "${MERGE_EXISTING_PET_HISTORY}" != "1" ]]; then
-        return
+        return 0
     fi
 
     echo "====== Step 2.75: Merge historical PET for DB load ======"
@@ -358,6 +381,7 @@ _prepare_analytics_pet_inputs() {
     DB_LOAD_PET_CSV="${FULL_PET_CSV}"
     DB_LOAD_PREFER_PET_CSV=1
     _progress_advance 1 "Merged historical PET inputs"
+    return 0
 }
 
 _clear_remote_pet_prefix() {
@@ -366,6 +390,7 @@ _clear_remote_pet_prefix() {
         --bucket "${S3_BUCKET}" \
         --prefix "${REMOTE_PET_PREFIX}/" \
         --max-workers "${CLEAR_MAX_WORKERS}"
+    return $?
 }
 
 _sync_pet_from_s3() {
@@ -375,6 +400,7 @@ _sync_pet_from_s3() {
         "s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/" \
         ./pet_data_csv/ \
         --delete
+    return $?
 }
 
 _cancel_running_cloud_run_executions() {
@@ -389,6 +415,7 @@ _cancel_running_cloud_run_executions() {
     fi
 
     _run_python "${cancel_args[@]}"
+    return $?
 }
 
 _build_cloud_run_args_csv() {
@@ -415,6 +442,7 @@ _build_cloud_run_args_csv() {
     fi
 
     _join_csv_args "${era5_args[@]}"
+    return 0
 }
 
 _kill_tree() {
@@ -422,6 +450,7 @@ _kill_tree() {
     children=$(pgrep -P "${pid}" 2>/dev/null || true)
     if [[ -n "${children}" ]]; then for c in ${children}; do _kill_tree "${c}" "${sig}"; done; fi
     kill -"${sig}" "${pid}" 2>/dev/null || true
+    return 0
 }
 
 _cleanup() {
@@ -451,6 +480,7 @@ _remove_pid_from_tracking() {
     if (( ${#active_pids[@]} > 0 )); then
         _PIDS=("${active_pids[@]}")
     fi
+    return 0
 }
 
 _wait_for_any_pid() {
@@ -476,6 +506,7 @@ _wait_for_any_pid() {
     fi
 
     _progress_advance 1 "${label}"
+    return 0
 }
 
 _launch() {
@@ -491,6 +522,7 @@ _launch() {
     while (( ${#_PIDS[@]} >= max )); do
         _wait_for_any_pid
     done
+    return 0
 }
 
 _wait_phase() {
@@ -503,6 +535,7 @@ _wait_phase() {
     while (( ${#_PIDS[@]} > 0 )); do
         _wait_for_any_pid
     done
+    return 0
 }
 
 _resolve_era5_parallel_strategy() {
@@ -514,7 +547,7 @@ _resolve_era5_parallel_strategy() {
         else
             echo "local-balanced"
         fi
-        return
+        return 0
     fi
 
     case "${ERA5_PARALLEL_STRATEGY}" in
@@ -526,6 +559,7 @@ _resolve_era5_parallel_strategy() {
             exit 1
             ;;
     esac
+    return 0
 }
 
 _calculate_progress_total() {
@@ -566,9 +600,13 @@ _calculate_progress_total() {
     fi
 
     echo "${total}"
+    return 0
 }
 
-_cpu_count() { getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1; }
+_cpu_count() {
+    getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1
+    return $?
+}
 CPU_COUNT=$(_cpu_count)
 AVAILABLE_CPUS=$(( CPU_COUNT > 1 ? CPU_COUNT - 1 : 1 ))
 COMPUTE_JOB_LIMIT=$(( AVAILABLE_CPUS < 8 ? AVAILABLE_CPUS : 8 ))

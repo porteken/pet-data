@@ -39,7 +39,7 @@ class TestPetConstants:
     def test_standard_atmosphere(self) -> None:
         c = PetConstants()
         assert np.isclose(c.po, 1013.25, rtol=1e-09, atol=1e-09)
-        assert c.p == 1013.25
+        assert np.isclose(c.p, 1013.25, rtol=1e-09, atol=1e-09)
 
 
 class TestPetCorrected:
