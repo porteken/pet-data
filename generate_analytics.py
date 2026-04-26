@@ -215,9 +215,6 @@ def _select_best_model(loc_df: DataFrame) -> TrendModel | None:
         degree=1,
         min_train_years=MIN_BACKTEST_TRAIN_YEARS_LINEAR,
     )
-    # Option C from forecast_analysis.md: long-range quadratic extrapolation from
-    # the available history is too unstable, so forecasts intentionally stay
-    # linear-only even when a quadratic fit would score well in-sample.
     return linear_model
 
 
