@@ -2,7 +2,7 @@
 # Local pipeline using the Cloud Run ERA5 worker for ERA5->PET, then local analytics/db steps.
 set -euo pipefail
 
-if [ -f .env ]; then
+if [[ -f .env ]]; then
     set -a
     # shellcheck source=/dev/null
     source .env
@@ -15,7 +15,7 @@ PYTHON_BIN=${PYTHON_BIN:-python}
 GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
 AWS_BIN=${AWS_BIN:-aws}
 
-if [ -z "${SUPABASE_DB_URI:-}" ]; then
+if [[ -z "${SUPABASE_DB_URI:-}" ]]; then
     echo "WARNING: SUPABASE_DB_URI is not set. Database upload steps will be skipped."
 fi
 
@@ -46,11 +46,11 @@ ALLOW_EMPTY_ANALYTICS=${ALLOW_EMPTY_ANALYTICS:-0}
 PROGRESS=${PROGRESS:-1}
 ERA5_PARALLEL_STRATEGY=${ERA5_PARALLEL_STRATEGY:-auto}
 
-if [[ "$SKIP_DB_LOAD" == "1" ]]; then
+if [[ "${SKIP_DB_LOAD}" == "1" ]]; then
     echo "WARNING: SKIP_DB_LOAD=1 means this run will not update Supabase."
 fi
 
-if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
     echo "WARNING: USE_CLOUD_RUN=1 uses the deployed Cloud Run image, not your local checkout."
     echo "         Use PROVISION_CLOUD_RUN=1 to redeploy it first, or USE_CLOUD_RUN=0 to run local google_era5.py."
 fi
@@ -64,10 +64,10 @@ DB_LOAD_PET_CSV="pet.csv"
 DB_LOAD_PREFER_PET_CSV=0
 MIN_PET_YEARS_FOR_FORECAST=10
 
-if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
     REMOTE_BASE_PREFIX=${S3_PREFIX#/}
     REMOTE_BASE_PREFIX=${REMOTE_BASE_PREFIX%/}
-    if [[ -z "$REMOTE_BASE_PREFIX" ]]; then
+    if [[ -z "${REMOTE_BASE_PREFIX}" ]]; then
         echo "S3_PREFIX must not be empty when USE_CLOUD_RUN=1." >&2
         exit 1
     fi
@@ -90,7 +90,7 @@ if [[ -t 2 ]]; then
 fi
 
 _progress_enabled() {
-    [[ "$PROGRESS" == "1" ]]
+    [[ "${PROGRESS}" == "1" ]]
 }
 
 _progress_bar() {
@@ -104,20 +104,21 @@ _progress_bar() {
         filled=$(( current * width / total ))
     fi
     if (( filled > width )); then
-        filled=$width
+        filled=${width}
     fi
     empty=$(( width - filled ))
 
-    printf '%*s' "$filled" '' | tr ' ' '#'
-    printf '%*s' "$empty" '' | tr ' ' '-'
+    printf '%*s' "${filled}" '' | tr ' ' '#'
+    printf '%*s' "${empty}" '' | tr ' ' '-'
 }
 
 _progress_display() {
     local message=$1
     local force=${2:-0}
-    local total=$PROGRESS_TOTAL
+    local total=${PROGRESS_TOTAL}
     local percent=0
 
+    # shellcheck disable=SC2310
     if ! _progress_enabled; then
         return
     fi
@@ -128,12 +129,13 @@ _progress_display() {
     percent=$(( PROGRESS_CURRENT * 100 / total ))
 
     if (( PROGRESS_IS_TTY )); then
+        # shellcheck disable=SC2312
         printf '\r[%s] %3d%% (%d/%d) %s' \
-            "$(_progress_bar "$PROGRESS_CURRENT" "$total" "$PROGRESS_BAR_WIDTH")" \
-            "$percent" \
-            "$PROGRESS_CURRENT" \
-            "$total" \
-            "$message" >&2
+            "$(_progress_bar "${PROGRESS_CURRENT}" "${total}" "${PROGRESS_BAR_WIDTH}")" \
+            "${percent}" \
+            "${PROGRESS_CURRENT}" \
+            "${total}" \
+            "${message}" >&2
         if (( force )) || (( PROGRESS_CURRENT >= total )); then
             printf '\n' >&2
         fi
@@ -141,8 +143,9 @@ _progress_display() {
     fi
 
     if (( force )) || (( percent >= PROGRESS_LAST_PERCENT + 5 )) || (( PROGRESS_CURRENT >= total )); then
-        echo "Progress [$(_progress_bar "$PROGRESS_CURRENT" "$total" 20)] ${percent}% (${PROGRESS_CURRENT}/${total}) ${message}" >&2
-        PROGRESS_LAST_PERCENT=$percent
+        # shellcheck disable=SC2312
+        echo "Progress [$(_progress_bar "${PROGRESS_CURRENT}" "${total}" 20)] ${percent}% (${PROGRESS_CURRENT}/${total}) ${message}" >&2
+        PROGRESS_LAST_PERCENT=${percent}
     fi
 }
 
@@ -156,48 +159,48 @@ _progress_advance() {
 
     (( PROGRESS_CURRENT += increment ))
     if (( PROGRESS_CURRENT > PROGRESS_TOTAL )); then
-        PROGRESS_CURRENT=$PROGRESS_TOTAL
+        PROGRESS_CURRENT=${PROGRESS_TOTAL}
     fi
 
-    _progress_display "$message"
+    _progress_display "${message}"
 }
 
 _require_executable() {
     local executable=$1
-    if [[ "$executable" == */* ]]; then
-        if [[ -x "$executable" ]]; then
+    if [[ "${executable}" == */* ]]; then
+        if [[ -x "${executable}" ]]; then
             return
         fi
-    elif command -v "$executable" >/dev/null 2>&1; then
+    elif command -v "${executable}" >/dev/null 2>&1; then
         return
     fi
 
-    echo "Required executable not found: $executable" >&2
+    echo "Required executable not found: ${executable}" >&2
     exit 1
 }
 
 _require_python_runner() {
-    if [[ "$USE_UV" == "1" ]]; then
-        _require_executable "$UV_BIN"
+    if [[ "${USE_UV}" == "1" ]]; then
+        _require_executable "${UV_BIN}"
     else
-        _require_executable "$PYTHON_BIN"
+        _require_executable "${PYTHON_BIN}"
     fi
 }
 
 _sync_python_environment() {
-    if [[ "$USE_UV" != "1" ]]; then
+    if [[ "${USE_UV}" != "1" ]]; then
         return
     fi
 
     echo "Syncing local project environment with uv..."
-    "$UV_BIN" sync --locked --extra gcs
+    "${UV_BIN}" sync --locked --extra gcs
 }
 
 _run_python() {
-    if [[ "$USE_UV" == "1" ]]; then
-        "$UV_BIN" run python "$@"
+    if [[ "${USE_UV}" == "1" ]]; then
+        "${UV_BIN}" run python "$@"
     else
-        "$PYTHON_BIN" "$@"
+        "${PYTHON_BIN}" "$@"
     fi
 }
 
@@ -211,26 +214,26 @@ _s3_prefix_has_objects() {
     local stripped_uri bucket prefix first_key
 
     stripped_uri=${uri#s3://}
-    if [[ "$stripped_uri" == "$uri" || -z "$stripped_uri" ]]; then
+    if [[ "${stripped_uri}" == "${uri}" || -z "${stripped_uri}" ]]; then
         return 1
     fi
 
     bucket=${stripped_uri%%/*}
     prefix=""
-    if [[ "$stripped_uri" == */* ]]; then
+    if [[ "${stripped_uri}" == */* ]]; then
         prefix=${stripped_uri#*/}
     fi
 
     first_key=$(
-        "$AWS_BIN" s3api list-objects-v2 \
-            --bucket "$bucket" \
-            --prefix "$prefix" \
+        "${AWS_BIN}" s3api list-objects-v2 \
+            --bucket "${bucket}" \
+            --prefix "${prefix}" \
             --max-keys 1 \
             --query 'Contents[0].Key' \
             --output text \
             2>/dev/null || true
     )
-    [[ -n "$first_key" && "$first_key" != "None" ]]
+    [[ -n "${first_key}" && "${first_key}" != "None" ]]
 }
 
 _local_pet_output_exists() {
@@ -238,13 +241,15 @@ _local_pet_output_exists() {
 }
 
 _assert_pet_output_available() {
+    # shellcheck disable=SC2310
     if _local_pet_output_exists; then
         return
     fi
 
-    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
         local legacy_uri="s3://${S3_BUCKET}/${REMOTE_BASE_PREFIX}/era5_data_parquet/"
-        if _s3_prefix_has_objects "$legacy_uri"; then
+        # shellcheck disable=SC2310
+        if _s3_prefix_has_objects "${legacy_uri}"; then
             echo "Cloud Run job ${CLOUD_RUN_JOB} only produced legacy era5_data_parquet output under ${legacy_uri}. Redeploy the job from this checkout by setting PROVISION_CLOUD_RUN=1 or running ./cloudrun_provision.sh manually." >&2
         else
             echo "No pet batch parquet files were written under ${REMOTE_OUT_DIR}/pet_data_csv." >&2
@@ -281,7 +286,7 @@ _write_empty_pet_csv() {
 
 _count_pet_csv_years() {
     local csv_path=$1
-    if [[ ! -f "$csv_path" ]]; then
+    if [[ ! -f "${csv_path}" ]]; then
         echo 0
         return
     fi
@@ -299,49 +304,49 @@ _count_pet_csv_years() {
         date_col && $date_col ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ {
             print substr($date_col, 1, 4)
         }
-    ' "$csv_path" | sort -u | awk 'END {print NR + 0}'
+    ' "${csv_path}" | sort -u | awk 'END {print NR + 0}'
 }
 
 _export_history_pet_csv() {
     local env_name=$1
     local output_csv=$2
 
-    if [[ -z "$env_name" || -z "${!env_name:-}" ]]; then
-        _write_empty_pet_csv "$output_csv"
+    if [[ -z "${env_name}" || -z "${!env_name:-}" ]]; then
+        _write_empty_pet_csv "${output_csv}"
         return
     fi
 
-    SUPABASE_DB_URI="${!env_name}" _run_python historical_pet_update.py export-all "$output_csv"
+    SUPABASE_DB_URI="${!env_name}" _run_python historical_pet_update.py export-all "${output_csv}"
 }
 
 _prepare_analytics_pet_inputs() {
     DB_LOAD_PET_CSV="pet.csv"
     DB_LOAD_PREFER_PET_CSV=0
 
-    if [[ "$SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ "${SKIP_DB_LOAD}" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
         return
     fi
 
-    if [[ "$MERGE_EXISTING_PET_HISTORY" != "1" ]]; then
+    if [[ "${MERGE_EXISTING_PET_HISTORY}" != "1" ]]; then
         return
     fi
 
     echo "====== Step 2.75: Merge historical PET for DB load ======"
-    rm -f "$HISTORY_EXPORT_CSV" "$FULL_PET_CSV"
+    rm -f "${HISTORY_EXPORT_CSV}" "${FULL_PET_CSV}"
 
-    local primary_env=$HISTORY_DB_URI_ENV
-    local fallback_env=$HISTORY_FALLBACK_DB_URI_ENV
+    local primary_env=${HISTORY_DB_URI_ENV}
+    local fallback_env=${HISTORY_FALLBACK_DB_URI_ENV}
 
-    _export_history_pet_csv "$primary_env" "$HISTORY_EXPORT_CSV"
-    _run_python historical_pet_update.py merge "$FULL_PET_CSV" "$HISTORY_EXPORT_CSV" --dirs pet_data_csv
+    _export_history_pet_csv "${primary_env}" "${HISTORY_EXPORT_CSV}"
+    _run_python historical_pet_update.py merge "${FULL_PET_CSV}" "${HISTORY_EXPORT_CSV}" --dirs pet_data_csv
 
     local merged_year_count
-    merged_year_count=$(_count_pet_csv_years "$FULL_PET_CSV")
-    if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "$fallback_env" ]] && [[ "$fallback_env" != "$primary_env" ]] && [[ -n "${!fallback_env:-}" ]]; then
+    merged_year_count=$(_count_pet_csv_years "${FULL_PET_CSV}")
+    if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "${fallback_env}" ]] && [[ "${fallback_env}" != "${primary_env}" ]] && [[ -n "${!fallback_env:-}" ]]; then
         echo "Primary history source did not provide enough PET history; retrying with ${fallback_env}."
-        _export_history_pet_csv "$fallback_env" "$HISTORY_EXPORT_CSV"
-        _run_python historical_pet_update.py merge "$FULL_PET_CSV" "$HISTORY_EXPORT_CSV" --dirs pet_data_csv
-        merged_year_count=$(_count_pet_csv_years "$FULL_PET_CSV")
+        _export_history_pet_csv "${fallback_env}" "${HISTORY_EXPORT_CSV}"
+        _run_python historical_pet_update.py merge "${FULL_PET_CSV}" "${HISTORY_EXPORT_CSV}" --dirs pet_data_csv
+        merged_year_count=$(_count_pet_csv_years "${FULL_PET_CSV}")
     fi
 
     if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
@@ -350,7 +355,7 @@ _prepare_analytics_pet_inputs() {
         exit 1
     fi
 
-    DB_LOAD_PET_CSV="$FULL_PET_CSV"
+    DB_LOAD_PET_CSV="${FULL_PET_CSV}"
     DB_LOAD_PREFER_PET_CSV=1
     _progress_advance 1 "Merged historical PET inputs"
 }
@@ -358,15 +363,15 @@ _prepare_analytics_pet_inputs() {
 _clear_remote_pet_prefix() {
     echo "Clearing remote Cloud Run output at s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/"
     _run_python clear_s3_prefix.py \
-        --bucket "$S3_BUCKET" \
+        --bucket "${S3_BUCKET}" \
         --prefix "${REMOTE_PET_PREFIX}/" \
-        --max-workers "$CLEAR_MAX_WORKERS"
+        --max-workers "${CLEAR_MAX_WORKERS}"
 }
 
 _sync_pet_from_s3() {
     echo "Syncing PET parquet from s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/"
     mkdir -p pet_data_csv
-    "$AWS_BIN" s3 sync \
+    "${AWS_BIN}" s3 sync \
         "s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/" \
         ./pet_data_csv/ \
         --delete
@@ -375,12 +380,12 @@ _sync_pet_from_s3() {
 _cancel_running_cloud_run_executions() {
     local cancel_args=(
         cancel_cloud_run_job_executions.py
-        --job "$CLOUD_RUN_JOB"
-        --region "$GCP_REGION"
+        --job "${CLOUD_RUN_JOB}"
+        --region "${GCP_REGION}"
     )
 
-    if [[ -n "$GCP_PROJECT" ]]; then
-        cancel_args+=(--project "$GCP_PROJECT")
+    if [[ -n "${GCP_PROJECT}" ]]; then
+        cancel_args+=(--project "${GCP_PROJECT}")
     fi
 
     _run_python "${cancel_args[@]}"
@@ -414,20 +419,20 @@ _build_cloud_run_args_csv() {
 
 _kill_tree() {
     local pid=$1 sig=${2:-TERM} children
-    children=$(pgrep -P "$pid" 2>/dev/null || true)
-    if [ -n "$children" ]; then for c in $children; do _kill_tree "$c" "$sig"; done; fi
-    kill -"$sig" "$pid" 2>/dev/null || true
+    children=$(pgrep -P "${pid}" 2>/dev/null || true)
+    if [[ -n "${children}" ]]; then for c in ${children}; do _kill_tree "${c}" "${sig}"; done; fi
+    kill -"${sig}" "${pid}" 2>/dev/null || true
 }
 
 _cleanup() {
     local exit_code=$?
     trap - SIGINT SIGTERM ERR EXIT
     if (( exit_code != 0 && ${#_PIDS[@]} > 0 )); then
-        for pid in "${_PIDS[@]}"; do _kill_tree "$pid" TERM; done
+        for pid in "${_PIDS[@]}"; do _kill_tree "${pid}" TERM; done
         sleep 1
-        for pid in "${_PIDS[@]}"; do _kill_tree "$pid" KILL; done
+        for pid in "${_PIDS[@]}"; do _kill_tree "${pid}" KILL; done
     fi
-    exit "$exit_code"
+    exit "${exit_code}"
 }
 # Catch all abort signals AND script exits to ensure cleanup fires safely
 trap _cleanup SIGINT SIGTERM ERR EXIT
@@ -437,8 +442,8 @@ _remove_pid_from_tracking() {
     local active_pids=()
 
     for pid in "${_PIDS[@]}"; do
-        if [[ "$pid" != "$finished_pid" ]]; then
-            active_pids+=("$pid")
+        if [[ "${pid}" != "${finished_pid}" ]]; then
+            active_pids+=("${pid}")
         fi
     done
 
@@ -459,18 +464,18 @@ _wait_for_any_pid() {
         exit_status=$?
     fi
 
-    if [[ -n "$finished_pid" ]]; then
-        label=${_PID_PROGRESS_LABELS[$finished_pid]:-background task}
-        _remove_pid_from_tracking "$finished_pid"
-        unset "_PID_PROGRESS_LABELS[$finished_pid]"
+    if [[ -n "${finished_pid}" ]]; then
+        label=${_PID_PROGRESS_LABELS[${finished_pid}]:-background task}
+        _remove_pid_from_tracking "${finished_pid}"
+        unset "_PID_PROGRESS_LABELS[${finished_pid}]"
     fi
 
     if (( exit_status != 0 )); then
         echo "Background job failed: ${label}" >&2
-        exit "$exit_status"
+        exit "${exit_status}"
     fi
 
-    _progress_advance 1 "$label"
+    _progress_advance 1 "${label}"
 }
 
 _launch() {
@@ -480,8 +485,8 @@ _launch() {
 
     "$@" &
     local pid=$!
-    _PIDS+=("$pid")
-    _PID_PROGRESS_LABELS[$pid]="$label"
+    _PIDS+=("${pid}")
+    _PID_PROGRESS_LABELS[${pid}]="${label}"
 
     while (( ${#_PIDS[@]} >= max )); do
         _wait_for_any_pid
@@ -501,10 +506,10 @@ _wait_phase() {
 }
 
 _resolve_era5_parallel_strategy() {
-    if [[ "$ERA5_PARALLEL_STRATEGY" == "auto" ]]; then
-        if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "${ERA5_PARALLEL_STRATEGY}" == "auto" ]]; then
+        if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
             echo "cloud-run-scale-out"
-        elif [[ "$MODE" == "smoke" ]]; then
+        elif [[ "${MODE}" == "smoke" ]]; then
             echo "local-smoke"
         else
             echo "local-balanced"
@@ -512,9 +517,9 @@ _resolve_era5_parallel_strategy() {
         return
     fi
 
-    case "$ERA5_PARALLEL_STRATEGY" in
+    case "${ERA5_PARALLEL_STRATEGY}" in
         cloud-run-scale-out|local-balanced|local-smoke|serial)
-            echo "$ERA5_PARALLEL_STRATEGY"
+            echo "${ERA5_PARALLEL_STRATEGY}"
             ;;
         *)
             echo "ERA5_PARALLEL_STRATEGY must be one of auto, cloud-run-scale-out, local-balanced, local-smoke, serial." >&2
@@ -527,13 +532,13 @@ _calculate_progress_total() {
     local total=1
     local era5_task_count=0
 
-    if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
-        if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
+        if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
             (( total += 1 ))
-            if [[ "$PROVISION_CLOUD_RUN" == "1" ]]; then
+            if [[ "${PROVISION_CLOUD_RUN}" == "1" ]]; then
                 (( total += 1 ))
             fi
-            if [[ "$SKIP_REMOTE_CLEAR" != "1" ]]; then
+            if [[ "${SKIP_REMOTE_CLEAR}" != "1" ]]; then
                 (( total += 1 ))
             fi
         fi
@@ -541,26 +546,26 @@ _calculate_progress_total() {
         era5_task_count=$(( YEAR_COUNT * ERA5_CITY_SHARD_COUNT * ${#ERA5_TIME_SHARDS[@]} ))
         (( total += era5_task_count ))
 
-        if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+        if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
             (( total += 1 ))
         fi
-    elif [[ "$USE_CLOUD_RUN" == "1" && "$SYNC_PET_FROM_S3" == "1" ]]; then
+    elif [[ "${USE_CLOUD_RUN}" == "1" && "${SYNC_PET_FROM_S3}" == "1" ]]; then
         (( total += 1 ))
     fi
 
     (( total += 1 ))
 
-    if [[ "$SKIP_DB_LOAD" != "1" && -n "${SUPABASE_DB_URI:-}" && "$MERGE_EXISTING_PET_HISTORY" == "1" ]]; then
+    if [[ "${SKIP_DB_LOAD}" != "1" && -n "${SUPABASE_DB_URI:-}" && "${MERGE_EXISTING_PET_HISTORY}" == "1" ]]; then
         (( total += 1 ))
     fi
 
-    if [[ "$SKIP_DB_LOAD" != "1" && -n "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ "${SKIP_DB_LOAD}" != "1" && -n "${SUPABASE_DB_URI:-}" ]]; then
         (( total += 1 ))
         (( total += ANALYTICS_SHARD_COUNT ))
         (( total += 1 ))
     fi
 
-    echo "$total"
+    echo "${total}"
 }
 
 _cpu_count() { getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1; }
@@ -568,8 +573,8 @@ CPU_COUNT=$(_cpu_count)
 AVAILABLE_CPUS=$(( CPU_COUNT > 1 ? CPU_COUNT - 1 : 1 ))
 COMPUTE_JOB_LIMIT=$(( AVAILABLE_CPUS < 8 ? AVAILABLE_CPUS : 8 ))
 
-if [[ -n "$YEARS" ]]; then
-    read -r -a ALL_YEARS_ARRAY <<< "$YEARS"
+if [[ -n "${YEARS}" ]]; then
+    read -r -a ALL_YEARS_ARRAY <<< "${YEARS}"
 else
     DEFAULT_ERA5_END_YEAR=$(( $(date -u +%Y) - 1 ))
     if (( DEFAULT_ERA5_END_YEAR < 2000 )); then
@@ -579,7 +584,7 @@ else
 
     ALL_YEARS_ARRAY=()
     for (( YEAR=2000; YEAR<=DEFAULT_ERA5_END_YEAR; YEAR++ )); do
-        ALL_YEARS_ARRAY+=("$YEAR")
+        ALL_YEARS_ARRAY+=("${YEAR}")
     done
 fi
 
@@ -591,7 +596,7 @@ fi
 ALL_YEARS=${ALL_YEARS_ARRAY[*]}
 YEAR_COUNT=${#ALL_YEARS_ARRAY[@]}
 
-if [[ "$MODE" == "smoke" ]]; then
+if [[ "${MODE}" == "smoke" ]]; then
     ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-168}
     ERA5_TIME_SHARD_COUNT=${ERA5_TIME_SHARD_COUNT:-53}
     ERA5_TIME_SHARDS=("${SMOKE_TIME_SHARD_INDEX:-17}")
@@ -600,10 +605,10 @@ else
     ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-720}
     ERA5_TIME_SHARD_COUNT=${ERA5_TIME_SHARD_COUNT:-13}
     for (( TIME_SHARD=0; TIME_SHARD<ERA5_TIME_SHARD_COUNT; TIME_SHARD++ )); do
-        ERA5_TIME_SHARDS+=("$TIME_SHARD")
+        ERA5_TIME_SHARDS+=("${TIME_SHARD}")
     done
     full_mode_label="local compute fallback"
-    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
         full_mode_label="Cloud Run"
     fi
     echo "Running local pipeline in full mode via ${full_mode_label}: ${ALL_YEARS} (full year)."
@@ -616,8 +621,8 @@ _sync_python_environment
 
 echo "====== Step 1: Compute year ranges + setup locations ======"
 mkdir -p output_tiles pet_data_csv analytics_data_csv
-if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
-    for YEAR in "${ALL_YEARS_ARRAY[@]}"; do rm -rf "pet_data_csv/year=$YEAR"; done
+if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
+    for YEAR in "${ALL_YEARS_ARRAY[@]}"; do rm -rf "pet_data_csv/year=${YEAR}"; done
 fi
 rm -rf analytics_data_csv/shard_count=*
 
@@ -629,25 +634,25 @@ if (( CITY_COUNT < 1 )); then
     exit 1
 fi
 
-if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
     DEFAULT_ERA5_CITY_SHARD_COUNT=1
 else
     DEFAULT_ERA5_CITY_SHARD_COUNT=$(( CITY_COUNT < 2 ? CITY_COUNT : 2 ))
 fi
-ERA5_CITY_SHARD_COUNT=${ERA5_CITY_SHARD_COUNT:-$DEFAULT_ERA5_CITY_SHARD_COUNT}
+ERA5_CITY_SHARD_COUNT=${ERA5_CITY_SHARD_COUNT:-${DEFAULT_ERA5_CITY_SHARD_COUNT}}
 if (( ERA5_CITY_SHARD_COUNT < 1 )); then ERA5_CITY_SHARD_COUNT=1; fi
-if (( ERA5_CITY_SHARD_COUNT > CITY_COUNT )); then ERA5_CITY_SHARD_COUNT=$CITY_COUNT; fi
+if (( ERA5_CITY_SHARD_COUNT > CITY_COUNT )); then ERA5_CITY_SHARD_COUNT=${CITY_COUNT}; fi
 
 ANALYTICS_SHARD_COUNT=$(( CITY_COUNT < COMPUTE_JOB_LIMIT ? CITY_COUNT : COMPUTE_JOB_LIMIT ))
 ERA5_PARALLEL_STRATEGY=$(_resolve_era5_parallel_strategy)
 
-case "$ERA5_PARALLEL_STRATEGY" in
+case "${ERA5_PARALLEL_STRATEGY}" in
     cloud-run-scale-out)
         DEFAULT_CLOUD_RUN_JOB_LIMIT=$(( ERA5_CITY_SHARD_COUNT * ${#ERA5_TIME_SHARDS[@]} ))
         if (( DEFAULT_CLOUD_RUN_JOB_LIMIT > 8 )); then
             DEFAULT_CLOUD_RUN_JOB_LIMIT=8
         fi
-        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-$DEFAULT_CLOUD_RUN_JOB_LIMIT}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-${DEFAULT_CLOUD_RUN_JOB_LIMIT}}
         ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-aggressive}
         ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-1}
         ;;
@@ -659,12 +664,12 @@ case "$ERA5_PARALLEL_STRATEGY" in
         if (( DEFAULT_SMOKE_BATCH_WORKERS > 2 )); then
             DEFAULT_SMOKE_BATCH_WORKERS=2
         fi
-        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-${ERA5_CITY_SHARD_COUNT}}
         ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-aggressive}
-        ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-$DEFAULT_SMOKE_BATCH_WORKERS}
+        ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-${DEFAULT_SMOKE_BATCH_WORKERS}}
         ;;
     local-balanced)
-        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-${ERA5_CITY_SHARD_COUNT}}
         ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-balanced}
         ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-1}
         ;;
@@ -672,6 +677,10 @@ case "$ERA5_PARALLEL_STRATEGY" in
         ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-1}
         ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-conservative}
         ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-1}
+        ;;
+    *)
+        echo "Unexpected ERA5_PARALLEL_STRATEGY: ${ERA5_PARALLEL_STRATEGY}" >&2
+        exit 1
         ;;
 esac
 
@@ -684,19 +693,19 @@ echo "Using ERA5 parallel strategy: ${ERA5_PARALLEL_STRATEGY} (job limit=${ERA5_
 _progress_advance 1 "Prepared locations"
 
 echo "====== Step 2: Compute ERA5 + PET ======"
-if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
-    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
-        _require_executable "$GCLOUD_BIN"
-        _require_executable "$AWS_BIN"
+if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
+    if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
+        _require_executable "${GCLOUD_BIN}"
+        _require_executable "${AWS_BIN}"
         _cancel_running_cloud_run_executions
         _progress_advance 1 "Cancelled stale Cloud Run executions"
         echo "Using Cloud Run job ${CLOUD_RUN_JOB} in ${GCP_REGION} with output ${REMOTE_OUT_DIR}"
-        if [[ "$PROVISION_CLOUD_RUN" == "1" ]]; then
+        if [[ "${PROVISION_CLOUD_RUN}" == "1" ]]; then
             echo "Refreshing Cloud Run job ${CLOUD_RUN_JOB} from the current checkout"
             /bin/bash ./cloudrun_provision.sh
             _progress_advance 1 "Provisioned Cloud Run worker"
         fi
-        if [[ "$SKIP_REMOTE_CLEAR" != "1" ]]; then
+        if [[ "${SKIP_REMOTE_CLEAR}" != "1" ]]; then
             _clear_remote_pet_prefix
             _progress_advance 1 "Cleared remote PET prefix"
         fi
@@ -706,51 +715,51 @@ if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
         for (( CITY_SHARD=0; CITY_SHARD<ERA5_CITY_SHARD_COUNT; CITY_SHARD++ )); do
             for TIME_SHARD in "${ERA5_TIME_SHARDS[@]}"; do
                 SHARD_LABEL="ERA5 year=${YEAR} city-shard=$(( CITY_SHARD + 1 ))/${ERA5_CITY_SHARD_COUNT} time-shard=${TIME_SHARD}/${ERA5_TIME_SHARD_COUNT}"
-                if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+                if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
                     CLOUD_RUN_ARGS=$(_build_cloud_run_args_csv \
-                        "$YEAR" \
-                        "$CITY_SHARD" \
-                        "$ERA5_CITY_SHARD_COUNT" \
-                        "$TIME_SHARD" \
-                        "$ERA5_TIME_SHARD_COUNT")
+                        "${YEAR}" \
+                        "${CITY_SHARD}" \
+                        "${ERA5_CITY_SHARD_COUNT}" \
+                        "${TIME_SHARD}" \
+                        "${ERA5_TIME_SHARD_COUNT}")
                     GCLOUD_CMD=(
-                        "$GCLOUD_BIN" run jobs execute "$CLOUD_RUN_JOB"
-                        --region "$GCP_REGION"
+                        "${GCLOUD_BIN}" run jobs execute "${CLOUD_RUN_JOB}"
+                        --region "${GCP_REGION}"
                         --wait
                         "--args=${CLOUD_RUN_ARGS}"
                     )
-                    if [[ -n "$GCP_PROJECT" ]]; then
-                        GCLOUD_CMD+=(--project "$GCP_PROJECT")
+                    if [[ -n "${GCP_PROJECT}" ]]; then
+                        GCLOUD_CMD+=(--project "${GCP_PROJECT}")
                     fi
-                    _launch "$ERA5_JOB_LIMIT" "$SHARD_LABEL" "${GCLOUD_CMD[@]}"
+                    _launch "${ERA5_JOB_LIMIT}" "${SHARD_LABEL}" "${GCLOUD_CMD[@]}"
                 else
                     ERA5_ARGS=(
-                        --year "$YEAR"
-                        --city-shard-count "$ERA5_CITY_SHARD_COUNT"
-                        --city-shard-index "$CITY_SHARD"
-                        --time-shard-index "$TIME_SHARD"
-                        --time-shard-count "$ERA5_TIME_SHARD_COUNT"
-                        --batch-hours "$ERA5_BATCH_HOURS"
-                        --max-workers "$ERA5_BATCH_WORKERS"
-                        --concurrency-profile "$ERA5_CONCURRENCY_PROFILE"
+                        --year "${YEAR}"
+                        --city-shard-count "${ERA5_CITY_SHARD_COUNT}"
+                        --city-shard-index "${CITY_SHARD}"
+                        --time-shard-index "${TIME_SHARD}"
+                        --time-shard-count "${ERA5_TIME_SHARD_COUNT}"
+                        --batch-hours "${ERA5_BATCH_HOURS}"
+                        --max-workers "${ERA5_BATCH_WORKERS}"
+                        --concurrency-profile "${ERA5_CONCURRENCY_PROFILE}"
                         --out-dir .
                     )
                     if (( ${#ERA5_MONTHS[@]} > 0 )); then
                         ERA5_ARGS+=(--months "${ERA5_MONTHS[@]}")
                     fi
-                    _launch "$ERA5_JOB_LIMIT" "$SHARD_LABEL" _run_python google_era5.py "${ERA5_ARGS[@]}"
+                    _launch "${ERA5_JOB_LIMIT}" "${SHARD_LABEL}" _run_python google_era5.py "${ERA5_ARGS[@]}"
                 fi
             done
         done
     done
     _wait_phase "pull-google-era5-pet"
 
-    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
         _sync_pet_from_s3
         _progress_advance 1 "Synced PET shards from S3"
     fi
-elif [[ "$USE_CLOUD_RUN" == "1" && "$SYNC_PET_FROM_S3" == "1" ]]; then
-    _require_executable "$AWS_BIN"
+elif [[ "${USE_CLOUD_RUN}" == "1" && "${SYNC_PET_FROM_S3}" == "1" ]]; then
+    _require_executable "${AWS_BIN}"
     _sync_pet_from_s3
     _progress_advance 1 "Synced PET shards from S3"
 fi
@@ -760,7 +769,7 @@ _materialize_pet_csv
 _progress_advance 1 "Materialized pet.csv"
 _prepare_analytics_pet_inputs
 
-if [[ "$SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+if [[ "${SKIP_DB_LOAD}" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
     echo "====== Step 3-5: Skipping DB load ======"
     echo "====== Pipeline complete! ======"
     exit 0
@@ -791,14 +800,14 @@ for (( LOAD_SHARD=0; LOAD_SHARD<ANALYTICS_SHARD_COUNT; LOAD_SHARD++ )); do
         --skip-drop-views
         --skip-create-views
         --skip-table locations
-        --pet-csv "$DB_LOAD_PET_CSV"
-        --load-shard-index "$LOAD_SHARD"
-        --load-shard-count "$ANALYTICS_SHARD_COUNT"
+        --pet-csv "${DB_LOAD_PET_CSV}"
+        --load-shard-index "${LOAD_SHARD}"
+        --load-shard-count "${ANALYTICS_SHARD_COUNT}"
     )
-    if [[ "$DB_LOAD_PREFER_PET_CSV" == "1" ]]; then
+    if [[ "${DB_LOAD_PREFER_PET_CSV}" == "1" ]]; then
         LOAD_ARGS+=(--prefer-pet-csv)
     fi
-    _launch "$COMPUTE_JOB_LIMIT" "DB load shard $(( LOAD_SHARD + 1 ))/${ANALYTICS_SHARD_COUNT}" _run_python "${LOAD_ARGS[@]}"
+    _launch "${COMPUTE_JOB_LIMIT}" "DB load shard $(( LOAD_SHARD + 1 ))/${ANALYTICS_SHARD_COUNT}" _run_python "${LOAD_ARGS[@]}"
 done
 _wait_phase "load-to-db"
 
