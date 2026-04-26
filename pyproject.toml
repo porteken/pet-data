@@ -53,16 +53,16 @@ max-statements = 300
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
-    "S101",     # assert is expected in tests
-    "D100", "D101", "D102", "D103", "D104",  # no docstrings needed in tests
-    "D401",     # imperative mood not needed in test docstrings
-    "PLR2004",  # magic values are fine in tests
-    "COM812",   # trailing comma style
-    "PD011",    # .values is fine in tests
-    "RUF003",   # ambiguous unicode
-    "PT001",    # pytest fixture style
-    "TC003",    # Path used at runtime in tests
-    "PERF401",  # micro-optimization not needed in tests
-    "PLC0415",  # local imports in test methods are intentional
-    "SLF001",   # tests may exercise internal helpers directly
+    "S101",     
+    "D100", "D101", "D102", "D103", "D104",
+    "D401",
+    "PLR2004",
+    "COM812",
+    "PD011",
+    "RUF003",
+    "PT001",
+    "TC003",
+    "PERF401",
+    "PLC0415",
+    "SLF001",
 ]

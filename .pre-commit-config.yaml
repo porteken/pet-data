@@ -11,13 +11,10 @@ repos:
     hooks:
       - id: pyright
   - repo: https://github.com/concur1/sqruff-pre-commit
-    # Sqruff version.
     rev: v0.38.0
     hooks:
-      # Run the formatter.
       - id: sqruff-fix
         files: \.sql$
-      # Run the linter.
       - id: sqruff-lint
         files: \.sql$
   - repo: local

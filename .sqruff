@@ -1,4 +1,3 @@
 [sqruff:layout:type:comparison_operator]
-# Keep multi-character comparison operators such as <> together.
 # Squawk treats `< >` as an invalid operation.
 spacing_within = touch

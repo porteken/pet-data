@@ -468,7 +468,6 @@ _cleanup() {
     fi
     return 0
 }
-# Catch all abort signals AND script exits to ensure cleanup fires safely
 trap _cleanup SIGINT SIGTERM ERR EXIT
 
 _remove_pid_from_tracking() {

@@ -1,18 +1,14 @@
-# Ignore Git files
 .git
 .gitignore
 
-# Ignore Secrets (CRITICAL)
 .env
 google.json
 
-# Ignore Python Caches & Virtual Envs
 __pycache__/
 venv/
 env/
 .venv/
 
-# Ignore all locally downloaded data from previous runs
 *.parquet
 *.csv
 *.tmp

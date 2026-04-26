@@ -115,9 +115,6 @@ jobs:
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
-          # Keep batch-hours explicit so CI stays aligned with the local runner.
-          # 13 time shards x 720 hours keeps each Cloud Run execution to one batch.
-          # Split across two jobs to stay under GitHub's 256-matrix limit.
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
@@ -143,9 +140,6 @@ jobs:
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
       - name: Pull ERA5 & Compute PET (Writes straight to S3)
         run: |
-          # Keep batch-hours explicit so CI stays aligned with the local runner.
-          # 13 time shards x 720 hours keeps each Cloud Run execution to one batch.
-          # Split across two jobs to stay under GitHub's 256-matrix limit.
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
