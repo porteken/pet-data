@@ -628,27 +628,35 @@ CREATE INDEX if not exists pet_year_year_idx
 ON public.pet_year (year) ;
 
 CREATE MATERIALIZED VIEW public.pet_percentiles AS
-WITH pet_with_year AS (
+WITH pet_with_seasons AS (
 SELECT
 EXTRACT (YEAR FROM p.date)::smallint AS year,
 p.location_id::smallint AS location_id,
+p_seasons.season,
 p.pet::real AS pet
 FROM public.pet AS p
+CROSS JOIN LATERAL (
+VALUES
+(public.pet_annual_season ()),
+(public.pet_season (p.date))
+) AS p_seasons (season)
 )
 SELECT
 year::smallint AS year,
 location_id::smallint AS location_id,
+season,
 ROUND ((PERCENTILE_CONT (0.1) WITHIN GROUP (ORDER BY pet))::numeric,
 1)::real AS p10,
 ROUND ((PERCENTILE_CONT (0.9) WITHIN GROUP (ORDER BY pet))::numeric,
 1)::real AS p90
-FROM pet_with_year
+FROM pet_with_seasons
 GROUP BY
 year,
-location_id ;
+location_id,
+season ;
 
-CREATE UNIQUE INDEX if not exists pet_percentiles_location_year_uidx
-ON public.pet_percentiles (location_id, year) ;
+CREATE UNIQUE INDEX if not exists pet_percentiles_location_year_season_uidx
+ON public.pet_percentiles (location_id, year, season) ;
 
 CREATE INDEX if not exists pet_percentiles_year_idx
 ON public.pet_percentiles (year) ;
@@ -755,7 +763,7 @@ ON public.pet_forecast (year) ;
 CREATE INDEX if not exists pet_forecast_season_idx
 ON public.pet_forecast (season) ;
 
-CREATE MATERIALIZED VIEW public.city_rankings_view AS
+CREATE VIEW public.city_rankings_view AS
 WITH combined_yearly_avg AS (
 SELECT
 a.location_id::smallint AS location_id,
@@ -825,6 +833,7 @@ AND m.year = a.year
 AND m.season = a.season
 JOIN public.pet_percentiles AS p ON p.location_id = a.location_id
 AND p.year = a.year
+AND p.season = a.season
 LEFT JOIN public.pet_forecast AS f ON f.location_id = a.location_id
 AND f.year = 2100::smallint
 AND f.season = a.season
@@ -833,12 +842,6 @@ AND c.season = a.season
 AND c.year = ((a.year / 10) * 10)::smallint
 WHERE
 a.location_id > 0 ;
-
-CREATE UNIQUE INDEX if not exists city_rankings_view_location_year_uidx
-ON public.city_rankings_view (location_id, year, season) ;
-
-CREATE INDEX if not exists city_rankings_view_year_idx
-ON public.city_rankings_view (year) ;
 
 RESET statement_timeout ;
 RESET lock_timeout ;

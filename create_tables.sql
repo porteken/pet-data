@@ -9,7 +9,6 @@ set statement_timeout = '5s' ;
 set lock_timeout = '1s' ;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year_avg CASCADE ;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year_max CASCADE ;
-DROP MATERIALIZED VIEW IF EXISTS public.pet_year CASCADE ;
 
 -- Note: We use CREATE TABLE IF NOT EXISTS where possible, 
 -- but for a full rebuild we might still want to DROP or just ALTER.
@@ -28,7 +27,22 @@ lng real NOT NULL
 DO $$
 DECLARE
 public_schema constant text := 'public' ;
+pet_year_relation_kind "char" ;
 BEGIN
+SELECT
+c.relkind
+INTO pet_year_relation_kind
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = public_schema
+AND c.relname = 'pet_year' ;
+
+IF pet_year_relation_kind = 'm' THEN
+EXECUTE format('DROP MATERIALIZED VIEW %I.pet_year CASCADE', public_schema) ;
+ELSIF pet_year_relation_kind = 'v' THEN
+EXECUTE format('DROP VIEW %I.pet_year CASCADE', public_schema) ;
+END IF ;
+
 IF EXISTS (
 SELECT
 1
@@ -91,7 +105,7 @@ END IF ;
 END IF ;
 END $$ ;
 
--- Derived analytics now live in create_views.sql as materialized views:
+-- Derived analytics now live in create_views.sql as views/materialized views:
 --   public.pet_forecast
 --   public.pet_percentiles
 --   public.city_rankings_view

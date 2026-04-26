@@ -22,12 +22,15 @@ REQUIRED_TABLES = [
 ]
 
 REQUIRED_MATERIALIZED_VIEWS = [
-    "city_rankings_view",
     "pet_forecast",
     "pet_percentiles",
     "pet_year",
     "pet_year_avg",
     "pet_year_max",
+]
+
+REQUIRED_VIEWS = [
+    "city_rankings_view",
 ]
 
 
@@ -68,6 +71,22 @@ def _row_count(conn: Connection[Any], relation: str) -> int:
         return count_row[0]
 
 
+def _get_relation_kind(conn: Connection[Any], relation: str) -> str:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.relkind "
+            "FROM pg_catalog.pg_class AS c "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' "
+            "AND c.relname = %s",
+            (relation,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            pytest.fail(f"Relation {relation!r} does not exist")
+        return row[0]
+
+
 @pytest.mark.parametrize("table", REQUIRED_TABLES)
 def test_table_has_rows(db_conn: Connection[Any], table: str) -> None:
     count = _row_count(db_conn, table)
@@ -76,8 +95,16 @@ def test_table_has_rows(db_conn: Connection[Any], table: str) -> None:
 
 @pytest.mark.parametrize("view", REQUIRED_MATERIALIZED_VIEWS)
 def test_materialized_view_has_rows(db_conn: Connection[Any], view: str) -> None:
+    assert _get_relation_kind(db_conn, view) == "m"
     count = _row_count(db_conn, view)
     assert count > 0, f"Materialized view {view!r} is empty (0 rows)"
+
+
+@pytest.mark.parametrize("view", REQUIRED_VIEWS)
+def test_view_has_rows(db_conn: Connection[Any], view: str) -> None:
+    assert _get_relation_kind(db_conn, view) == "v"
+    count = _row_count(db_conn, view)
+    assert count > 0, f"View {view!r} is empty (0 rows)"
 
 
 def test_pet_covers_year_range(db_conn: Connection[Any]) -> None:
@@ -137,6 +164,7 @@ def test_compact_schema_types(db_conn: Connection[Any]) -> None:
     assert _get_relation_column_types(db_conn, "pet_percentiles") == {
         "year": "smallint",
         "location_id": "integer",
+        "season": "text",
         "p10": "numeric(5,1)",
         "p90": "numeric(5,1)",
     }
@@ -313,19 +341,39 @@ def test_pet_year_max_has_annual_and_seasons(db_conn: Connection[Any]) -> None:
 
 
 def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
-    """pet_percentiles should match yearly 10th/90th quantiles from pet."""
+    """pet_percentiles should match yearly season-specific 10th/90th quantiles from pet."""
     with db_conn.cursor() as cur:
         cur.execute(
-            "WITH expected AS ("
+            "WITH pet_with_seasons AS ("
             "SELECT "
             "EXTRACT(YEAR FROM date)::int AS year, "
             "location_id, "
+            "'Annual'::text AS season, "
+            "pet "
+            "FROM pet "
+            "UNION ALL "
+            "SELECT "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "location_id, "
+            "CASE "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (12, 1, 2) THEN 'Winter' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (3, 4, 5) THEN 'Spring' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (6, 7, 8) THEN 'Summer' "
+            "ELSE 'Fall' "
+            "END AS season, "
+            "pet "
+            "FROM pet"
+            "), expected AS ("
+            "SELECT "
+            "year, "
+            "location_id, "
+            "season, "
             "ROUND((PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY pet))::numeric, 1) AS p10, "
             "ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY pet))::numeric, 1) AS p90 "
-            "FROM pet "
-            "GROUP BY EXTRACT(YEAR FROM date)::int, location_id"
+            "FROM pet_with_seasons "
+            "GROUP BY year, location_id, season"
             "), actual AS ("
-            "SELECT year, location_id, p10, p90 FROM pet_percentiles"
+            "SELECT year, location_id, season, p10, p90 FROM pet_percentiles"
             "), missing AS ("
             "SELECT * FROM expected "
             "EXCEPT "
@@ -339,9 +387,9 @@ def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
             "(SELECT COUNT(*) FROM missing), "
             "(SELECT COUNT(*) FROM extra), "
             "(SELECT COUNT(*) FROM ("
-            "SELECT year, location_id, COUNT(*) AS row_count "
+            "SELECT year, location_id, season, COUNT(*) AS row_count "
             "FROM pet_percentiles "
-            "GROUP BY year, location_id "
+            "GROUP BY year, location_id, season "
             "HAVING COUNT(*) > 1"
             ") AS duplicates)"
         )
@@ -349,7 +397,7 @@ def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
         assert diff_count_row is not None
 
     columns = _get_relation_columns(db_conn, "pet_percentiles")
-    assert columns == ["year", "location_id", "p10", "p90"]
+    assert columns == ["year", "location_id", "season", "p10", "p90"]
 
     missing_count, extra_count, duplicate_count = diff_count_row
     assert missing_count == 0
@@ -360,10 +408,38 @@ def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
 def test_city_rankings_view_matches_expected_projection(
     db_conn: Connection[Any],
 ) -> None:
-    """city_rankings_view should inline annual/seasonal stats, forecast bounds, and decade deltas."""
+    """city_rankings_view should inline annual/seasonal stats, seasonal percentile bands, forecast bounds, and decade deltas."""
     with db_conn.cursor() as cur:
         cur.execute(
-            "WITH combined_yearly_avg AS ("
+            "WITH pet_with_seasons AS ("
+            "SELECT "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "location_id, "
+            "'Annual'::text AS season, "
+            "pet "
+            "FROM pet "
+            "UNION ALL "
+            "SELECT "
+            "EXTRACT(YEAR FROM date)::int AS year, "
+            "location_id, "
+            "CASE "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (12, 1, 2) THEN 'Winter' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (3, 4, 5) THEN 'Spring' "
+            "WHEN EXTRACT(MONTH FROM date)::int IN (6, 7, 8) THEN 'Summer' "
+            "ELSE 'Fall' "
+            "END AS season, "
+            "pet "
+            "FROM pet"
+            "), expected_percentiles AS ("
+            "SELECT "
+            "year, "
+            "location_id, "
+            "season, "
+            "ROUND((PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY pet))::numeric, 1) AS p10, "
+            "ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY pet))::numeric, 1) AS p90 "
+            "FROM pet_with_seasons "
+            "GROUP BY year, location_id, season"
+            "), combined_yearly_avg AS ("
             "SELECT "
             "location_id, "
             "year::int AS year, "
@@ -412,9 +488,10 @@ def test_city_rankings_view_matches_expected_projection(
             "ON m.location_id = a.location_id "
             "AND m.year = a.year "
             "AND m.season = a.season "
-            "JOIN pet_percentiles AS p "
+            "JOIN expected_percentiles AS p "
             "ON p.location_id = a.location_id "
             "AND p.year = a.year "
+            "AND p.season = a.season "
             "LEFT JOIN pet_forecast AS f "
             "ON f.location_id = a.location_id "
             "AND f.year = 2100::smallint "
