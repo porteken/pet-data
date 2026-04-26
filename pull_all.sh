@@ -9,7 +9,7 @@ if [ -f .env ]; then
     set +a
 fi
 
-RUN_LOCAL_USE_UV=${RUN_LOCAL_USE_UV:-1}
+USE_UV=${USE_UV:-1}
 UV_BIN=${UV_BIN:-uv}
 PYTHON_BIN=${PYTHON_BIN:-python}
 GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
@@ -25,34 +25,34 @@ export MKL_NUM_THREADS=1
 export VECLIB_MAX_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-RUN_LOCAL_MODE=${RUN_LOCAL_MODE:-full}
-RUN_LOCAL_YEARS=${RUN_LOCAL_YEARS:-}
-RUN_LOCAL_SKIP_ERA5_PULL=${RUN_LOCAL_SKIP_ERA5_PULL:-0}
-RUN_LOCAL_SKIP_DB_LOAD=${RUN_LOCAL_SKIP_DB_LOAD:-0}
-RUN_LOCAL_USE_CLOUD_RUN=${RUN_LOCAL_USE_CLOUD_RUN:-1}
-RUN_LOCAL_PROVISION_CLOUD_RUN=${RUN_LOCAL_PROVISION_CLOUD_RUN:-0}
-RUN_LOCAL_SYNC_PET_FROM_S3=${RUN_LOCAL_SYNC_PET_FROM_S3:-0}
-RUN_LOCAL_SKIP_REMOTE_CLEAR=${RUN_LOCAL_SKIP_REMOTE_CLEAR:-0}
-RUN_LOCAL_GCP_REGION=${RUN_LOCAL_GCP_REGION:-us-east1}
-RUN_LOCAL_GCP_PROJECT=${RUN_LOCAL_GCP_PROJECT:-}
-RUN_LOCAL_CLOUD_RUN_JOB=${RUN_LOCAL_CLOUD_RUN_JOB:-era5-worker}
-RUN_LOCAL_S3_BUCKET=${RUN_LOCAL_S3_BUCKET:-pet-parquet-files}
-RUN_LOCAL_S3_PREFIX=${RUN_LOCAL_S3_PREFIX:-local-run/${USER:-unknown-user}}
-RUN_LOCAL_CLEAR_MAX_WORKERS=${RUN_LOCAL_CLEAR_MAX_WORKERS:-8}
-RUN_LOCAL_MERGE_EXISTING_PET_HISTORY=${RUN_LOCAL_MERGE_EXISTING_PET_HISTORY:-1}
-RUN_LOCAL_HISTORY_DB_URI_ENV=${RUN_LOCAL_HISTORY_DB_URI_ENV:-SUPABASE_DB_URI}
-RUN_LOCAL_HISTORY_FALLBACK_DB_URI_ENV=${RUN_LOCAL_HISTORY_FALLBACK_DB_URI_ENV:-SUPABASE_DB_URI_PRD}
-RUN_LOCAL_ALLOW_EMPTY_ANALYTICS=${RUN_LOCAL_ALLOW_EMPTY_ANALYTICS:-0}
-RUN_LOCAL_PROGRESS=${RUN_LOCAL_PROGRESS:-1}
-RUN_LOCAL_ERA5_PARALLEL_STRATEGY=${RUN_LOCAL_ERA5_PARALLEL_STRATEGY:-auto}
+MODE=${MODE:-full}
+YEARS=${YEARS:-}
+SKIP_ERA5_PULL=${SKIP_ERA5_PULL:-0}
+SKIP_DB_LOAD=${SKIP_DB_LOAD:-0}
+USE_CLOUD_RUN=${USE_CLOUD_RUN:-1}
+PROVISION_CLOUD_RUN=${PROVISION_CLOUD_RUN:-0}
+SYNC_PET_FROM_S3=${SYNC_PET_FROM_S3:-0}
+SKIP_REMOTE_CLEAR=${SKIP_REMOTE_CLEAR:-0}
+GCP_REGION=${GCP_REGION:-us-east1}
+GCP_PROJECT=${GCP_PROJECT:-}
+CLOUD_RUN_JOB=${CLOUD_RUN_JOB:-era5-worker}
+S3_BUCKET=${S3_BUCKET:-pet-parquet-files}
+S3_PREFIX=${S3_PREFIX:-local-run/${USER:-unknown-user}}
+CLEAR_MAX_WORKERS=${CLEAR_MAX_WORKERS:-8}
+MERGE_EXISTING_PET_HISTORY=${MERGE_EXISTING_PET_HISTORY:-1}
+HISTORY_DB_URI_ENV=${HISTORY_DB_URI_ENV:-SUPABASE_DB_URI}
+HISTORY_FALLBACK_DB_URI_ENV=${HISTORY_FALLBACK_DB_URI_ENV:-SUPABASE_DB_URI_PRD}
+ALLOW_EMPTY_ANALYTICS=${ALLOW_EMPTY_ANALYTICS:-0}
+PROGRESS=${PROGRESS:-1}
+ERA5_PARALLEL_STRATEGY=${ERA5_PARALLEL_STRATEGY:-auto}
 
-if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" ]]; then
-    echo "WARNING: RUN_LOCAL_SKIP_DB_LOAD=1 means this run will not update Supabase."
+if [[ "$SKIP_DB_LOAD" == "1" ]]; then
+    echo "WARNING: SKIP_DB_LOAD=1 means this run will not update Supabase."
 fi
 
-if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
-    echo "WARNING: RUN_LOCAL_USE_CLOUD_RUN=1 uses the deployed Cloud Run image, not your local checkout."
-    echo "         Use RUN_LOCAL_PROVISION_CLOUD_RUN=1 to redeploy it first, or RUN_LOCAL_USE_CLOUD_RUN=0 to run local google_era5.py."
+if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    echo "WARNING: USE_CLOUD_RUN=1 uses the deployed Cloud Run image, not your local checkout."
+    echo "         Use PROVISION_CLOUD_RUN=1 to redeploy it first, or USE_CLOUD_RUN=0 to run local google_era5.py."
 fi
 
 REMOTE_BASE_PREFIX=""
@@ -64,14 +64,14 @@ DB_LOAD_PET_CSV="pet.csv"
 DB_LOAD_PREFER_PET_CSV=0
 MIN_PET_YEARS_FOR_FORECAST=10
 
-if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
-    REMOTE_BASE_PREFIX=${RUN_LOCAL_S3_PREFIX#/}
+if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+    REMOTE_BASE_PREFIX=${S3_PREFIX#/}
     REMOTE_BASE_PREFIX=${REMOTE_BASE_PREFIX%/}
     if [[ -z "$REMOTE_BASE_PREFIX" ]]; then
-        echo "RUN_LOCAL_S3_PREFIX must not be empty when RUN_LOCAL_USE_CLOUD_RUN=1." >&2
+        echo "S3_PREFIX must not be empty when USE_CLOUD_RUN=1." >&2
         exit 1
     fi
-    REMOTE_OUT_DIR="s3://${RUN_LOCAL_S3_BUCKET}/${REMOTE_BASE_PREFIX}"
+    REMOTE_OUT_DIR="s3://${S3_BUCKET}/${REMOTE_BASE_PREFIX}"
     REMOTE_PET_PREFIX="${REMOTE_BASE_PREFIX}/pet_data_csv"
 fi
 
@@ -90,7 +90,7 @@ if [[ -t 2 ]]; then
 fi
 
 _progress_enabled() {
-    [[ "$RUN_LOCAL_PROGRESS" == "1" ]]
+    [[ "$PROGRESS" == "1" ]]
 }
 
 _progress_bar() {
@@ -177,7 +177,7 @@ _require_executable() {
 }
 
 _require_python_runner() {
-    if [[ "$RUN_LOCAL_USE_UV" == "1" ]]; then
+    if [[ "$USE_UV" == "1" ]]; then
         _require_executable "$UV_BIN"
     else
         _require_executable "$PYTHON_BIN"
@@ -185,7 +185,7 @@ _require_python_runner() {
 }
 
 _sync_python_environment() {
-    if [[ "$RUN_LOCAL_USE_UV" != "1" ]]; then
+    if [[ "$USE_UV" != "1" ]]; then
         return
     fi
 
@@ -194,7 +194,7 @@ _sync_python_environment() {
 }
 
 _run_python() {
-    if [[ "$RUN_LOCAL_USE_UV" == "1" ]]; then
+    if [[ "$USE_UV" == "1" ]]; then
         "$UV_BIN" run python "$@"
     else
         "$PYTHON_BIN" "$@"
@@ -242,10 +242,10 @@ _assert_pet_output_available() {
         return
     fi
 
-    if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
-        local legacy_uri="s3://${RUN_LOCAL_S3_BUCKET}/${REMOTE_BASE_PREFIX}/era5_data_parquet/"
+    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
+        local legacy_uri="s3://${S3_BUCKET}/${REMOTE_BASE_PREFIX}/era5_data_parquet/"
         if _s3_prefix_has_objects "$legacy_uri"; then
-            echo "Cloud Run job ${RUN_LOCAL_CLOUD_RUN_JOB} only produced legacy era5_data_parquet output under ${legacy_uri}. Redeploy the job from this checkout by setting RUN_LOCAL_PROVISION_CLOUD_RUN=1 or running ./cloudrun_provision.sh manually." >&2
+            echo "Cloud Run job ${CLOUD_RUN_JOB} only produced legacy era5_data_parquet output under ${legacy_uri}. Redeploy the job from this checkout by setting PROVISION_CLOUD_RUN=1 or running ./cloudrun_provision.sh manually." >&2
         else
             echo "No pet batch parquet files were written under ${REMOTE_OUT_DIR}/pet_data_csv." >&2
         fi
@@ -318,19 +318,19 @@ _prepare_analytics_pet_inputs() {
     DB_LOAD_PET_CSV="pet.csv"
     DB_LOAD_PREFER_PET_CSV=0
 
-    if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ "$SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
         return
     fi
 
-    if [[ "$RUN_LOCAL_MERGE_EXISTING_PET_HISTORY" != "1" ]]; then
+    if [[ "$MERGE_EXISTING_PET_HISTORY" != "1" ]]; then
         return
     fi
 
     echo "====== Step 2.75: Merge historical PET for DB load ======"
     rm -f "$HISTORY_EXPORT_CSV" "$FULL_PET_CSV"
 
-    local primary_env=$RUN_LOCAL_HISTORY_DB_URI_ENV
-    local fallback_env=$RUN_LOCAL_HISTORY_FALLBACK_DB_URI_ENV
+    local primary_env=$HISTORY_DB_URI_ENV
+    local fallback_env=$HISTORY_FALLBACK_DB_URI_ENV
 
     _export_history_pet_csv "$primary_env" "$HISTORY_EXPORT_CSV"
     _run_python historical_pet_update.py merge "$FULL_PET_CSV" "$HISTORY_EXPORT_CSV" --dirs pet_data_csv
@@ -346,7 +346,7 @@ _prepare_analytics_pet_inputs() {
 
     if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
         echo "Need at least ${MIN_PET_YEARS_FOR_FORECAST} PET years to derive pet_forecast (and the downstream city_rankings_view change fields). Found ${merged_year_count} year(s) in ${FULL_PET_CSV}." >&2
-        echo "Either widen the historical source or set RUN_LOCAL_MERGE_EXISTING_PET_HISTORY=0 and accept empty analytics." >&2
+        echo "Either widen the historical source or set MERGE_EXISTING_PET_HISTORY=0 and accept empty analytics." >&2
         exit 1
     fi
 
@@ -356,18 +356,18 @@ _prepare_analytics_pet_inputs() {
 }
 
 _clear_remote_pet_prefix() {
-    echo "Clearing remote Cloud Run output at s3://${RUN_LOCAL_S3_BUCKET}/${REMOTE_PET_PREFIX}/"
+    echo "Clearing remote Cloud Run output at s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/"
     _run_python clear_s3_prefix.py \
-        --bucket "$RUN_LOCAL_S3_BUCKET" \
+        --bucket "$S3_BUCKET" \
         --prefix "${REMOTE_PET_PREFIX}/" \
-        --max-workers "$RUN_LOCAL_CLEAR_MAX_WORKERS"
+        --max-workers "$CLEAR_MAX_WORKERS"
 }
 
 _sync_pet_from_s3() {
-    echo "Syncing PET parquet from s3://${RUN_LOCAL_S3_BUCKET}/${REMOTE_PET_PREFIX}/"
+    echo "Syncing PET parquet from s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/"
     mkdir -p pet_data_csv
     "$AWS_BIN" s3 sync \
-        "s3://${RUN_LOCAL_S3_BUCKET}/${REMOTE_PET_PREFIX}/" \
+        "s3://${S3_BUCKET}/${REMOTE_PET_PREFIX}/" \
         ./pet_data_csv/ \
         --delete
 }
@@ -375,12 +375,12 @@ _sync_pet_from_s3() {
 _cancel_running_cloud_run_executions() {
     local cancel_args=(
         cancel_cloud_run_job_executions.py
-        --job "$RUN_LOCAL_CLOUD_RUN_JOB"
-        --region "$RUN_LOCAL_GCP_REGION"
+        --job "$CLOUD_RUN_JOB"
+        --region "$GCP_REGION"
     )
 
-    if [[ -n "$RUN_LOCAL_GCP_PROJECT" ]]; then
-        cancel_args+=(--project "$RUN_LOCAL_GCP_PROJECT")
+    if [[ -n "$GCP_PROJECT" ]]; then
+        cancel_args+=(--project "$GCP_PROJECT")
     fi
 
     _run_python "${cancel_args[@]}"
@@ -501,10 +501,10 @@ _wait_phase() {
 }
 
 _resolve_era5_parallel_strategy() {
-    if [[ "$RUN_LOCAL_ERA5_PARALLEL_STRATEGY" == "auto" ]]; then
-        if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "$ERA5_PARALLEL_STRATEGY" == "auto" ]]; then
+        if [[ "$USE_CLOUD_RUN" == "1" ]]; then
             echo "cloud-run-scale-out"
-        elif [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
+        elif [[ "$MODE" == "smoke" ]]; then
             echo "local-smoke"
         else
             echo "local-balanced"
@@ -512,12 +512,12 @@ _resolve_era5_parallel_strategy() {
         return
     fi
 
-    case "$RUN_LOCAL_ERA5_PARALLEL_STRATEGY" in
+    case "$ERA5_PARALLEL_STRATEGY" in
         cloud-run-scale-out|local-balanced|local-smoke|serial)
-            echo "$RUN_LOCAL_ERA5_PARALLEL_STRATEGY"
+            echo "$ERA5_PARALLEL_STRATEGY"
             ;;
         *)
-            echo "RUN_LOCAL_ERA5_PARALLEL_STRATEGY must be one of auto, cloud-run-scale-out, local-balanced, local-smoke, serial." >&2
+            echo "ERA5_PARALLEL_STRATEGY must be one of auto, cloud-run-scale-out, local-balanced, local-smoke, serial." >&2
             exit 1
             ;;
     esac
@@ -527,13 +527,13 @@ _calculate_progress_total() {
     local total=1
     local era5_task_count=0
 
-    if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
-        if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
+        if [[ "$USE_CLOUD_RUN" == "1" ]]; then
             (( total += 1 ))
-            if [[ "$RUN_LOCAL_PROVISION_CLOUD_RUN" == "1" ]]; then
+            if [[ "$PROVISION_CLOUD_RUN" == "1" ]]; then
                 (( total += 1 ))
             fi
-            if [[ "$RUN_LOCAL_SKIP_REMOTE_CLEAR" != "1" ]]; then
+            if [[ "$SKIP_REMOTE_CLEAR" != "1" ]]; then
                 (( total += 1 ))
             fi
         fi
@@ -541,20 +541,20 @@ _calculate_progress_total() {
         era5_task_count=$(( YEAR_COUNT * ERA5_CITY_SHARD_COUNT * ${#ERA5_TIME_SHARDS[@]} ))
         (( total += era5_task_count ))
 
-        if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+        if [[ "$USE_CLOUD_RUN" == "1" ]]; then
             (( total += 1 ))
         fi
-    elif [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" && "$RUN_LOCAL_SYNC_PET_FROM_S3" == "1" ]]; then
+    elif [[ "$USE_CLOUD_RUN" == "1" && "$SYNC_PET_FROM_S3" == "1" ]]; then
         (( total += 1 ))
     fi
 
     (( total += 1 ))
 
-    if [[ "$RUN_LOCAL_SKIP_DB_LOAD" != "1" && -n "${SUPABASE_DB_URI:-}" && "$RUN_LOCAL_MERGE_EXISTING_PET_HISTORY" == "1" ]]; then
+    if [[ "$SKIP_DB_LOAD" != "1" && -n "${SUPABASE_DB_URI:-}" && "$MERGE_EXISTING_PET_HISTORY" == "1" ]]; then
         (( total += 1 ))
     fi
 
-    if [[ "$RUN_LOCAL_SKIP_DB_LOAD" != "1" && -n "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ "$SKIP_DB_LOAD" != "1" && -n "${SUPABASE_DB_URI:-}" ]]; then
         (( total += 1 ))
         (( total += ANALYTICS_SHARD_COUNT ))
         (( total += 1 ))
@@ -568,12 +568,12 @@ CPU_COUNT=$(_cpu_count)
 AVAILABLE_CPUS=$(( CPU_COUNT > 1 ? CPU_COUNT - 1 : 1 ))
 COMPUTE_JOB_LIMIT=$(( AVAILABLE_CPUS < 8 ? AVAILABLE_CPUS : 8 ))
 
-if [[ -n "$RUN_LOCAL_YEARS" ]]; then
-    read -r -a ALL_YEARS_ARRAY <<< "$RUN_LOCAL_YEARS"
+if [[ -n "$YEARS" ]]; then
+    read -r -a ALL_YEARS_ARRAY <<< "$YEARS"
 else
     DEFAULT_ERA5_END_YEAR=$(( $(date -u +%Y) - 1 ))
     if (( DEFAULT_ERA5_END_YEAR < 2000 )); then
-        echo "Computed default ERA5 end year ${DEFAULT_ERA5_END_YEAR} is earlier than 2000; set RUN_LOCAL_YEARS explicitly." >&2
+        echo "Computed default ERA5 end year ${DEFAULT_ERA5_END_YEAR} is earlier than 2000; set YEARS explicitly." >&2
         exit 1
     fi
 
@@ -584,26 +584,26 @@ else
 fi
 
 if (( ${#ALL_YEARS_ARRAY[@]} == 0 )); then
-    echo "RUN_LOCAL_YEARS must contain at least one year." >&2
+    echo "YEARS must contain at least one year." >&2
     exit 1
 fi
 
 ALL_YEARS=${ALL_YEARS_ARRAY[*]}
 YEAR_COUNT=${#ALL_YEARS_ARRAY[@]}
 
-if [[ "$RUN_LOCAL_MODE" == "smoke" ]]; then
+if [[ "$MODE" == "smoke" ]]; then
     ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-168}
-    ERA5_TIME_SHARD_COUNT=${RUN_LOCAL_ERA5_TIME_SHARD_COUNT:-53}
-    ERA5_TIME_SHARDS=("${RUN_LOCAL_SMOKE_TIME_SHARD_INDEX:-17}")
+    ERA5_TIME_SHARD_COUNT=${ERA5_TIME_SHARD_COUNT:-53}
+    ERA5_TIME_SHARDS=("${SMOKE_TIME_SHARD_INDEX:-17}")
     echo "Running local pipeline in smoke mode: ${ALL_YEARS} ERA5 week only."
 else
     ERA5_BATCH_HOURS=${ERA5_BATCH_HOURS:-720}
-    ERA5_TIME_SHARD_COUNT=${RUN_LOCAL_ERA5_TIME_SHARD_COUNT:-13}
+    ERA5_TIME_SHARD_COUNT=${ERA5_TIME_SHARD_COUNT:-13}
     for (( TIME_SHARD=0; TIME_SHARD<ERA5_TIME_SHARD_COUNT; TIME_SHARD++ )); do
         ERA5_TIME_SHARDS+=("$TIME_SHARD")
     done
     full_mode_label="local compute fallback"
-    if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
         full_mode_label="Cloud Run"
     fi
     echo "Running local pipeline in full mode via ${full_mode_label}: ${ALL_YEARS} (full year)."
@@ -616,7 +616,7 @@ _sync_python_environment
 
 echo "====== Step 1: Compute year ranges + setup locations ======"
 mkdir -p output_tiles pet_data_csv analytics_data_csv
-if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
+if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
     for YEAR in "${ALL_YEARS_ARRAY[@]}"; do rm -rf "pet_data_csv/year=$YEAR"; done
 fi
 rm -rf analytics_data_csv/shard_count=*
@@ -629,12 +629,12 @@ if (( CITY_COUNT < 1 )); then
     exit 1
 fi
 
-if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+if [[ "$USE_CLOUD_RUN" == "1" ]]; then
     DEFAULT_ERA5_CITY_SHARD_COUNT=1
 else
     DEFAULT_ERA5_CITY_SHARD_COUNT=$(( CITY_COUNT < 2 ? CITY_COUNT : 2 ))
 fi
-ERA5_CITY_SHARD_COUNT=${RUN_LOCAL_ERA5_CITY_SHARD_COUNT:-$DEFAULT_ERA5_CITY_SHARD_COUNT}
+ERA5_CITY_SHARD_COUNT=${ERA5_CITY_SHARD_COUNT:-$DEFAULT_ERA5_CITY_SHARD_COUNT}
 if (( ERA5_CITY_SHARD_COUNT < 1 )); then ERA5_CITY_SHARD_COUNT=1; fi
 if (( ERA5_CITY_SHARD_COUNT > CITY_COUNT )); then ERA5_CITY_SHARD_COUNT=$CITY_COUNT; fi
 
@@ -647,9 +647,9 @@ case "$ERA5_PARALLEL_STRATEGY" in
         if (( DEFAULT_CLOUD_RUN_JOB_LIMIT > 8 )); then
             DEFAULT_CLOUD_RUN_JOB_LIMIT=8
         fi
-        ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-$DEFAULT_CLOUD_RUN_JOB_LIMIT}
-        ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-aggressive}
-        ERA5_BATCH_WORKERS=${RUN_LOCAL_ERA5_BATCH_WORKERS:-1}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-$DEFAULT_CLOUD_RUN_JOB_LIMIT}
+        ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-aggressive}
+        ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-1}
         ;;
     local-smoke)
         DEFAULT_SMOKE_BATCH_WORKERS=$(( AVAILABLE_CPUS / ERA5_CITY_SHARD_COUNT ))
@@ -659,19 +659,19 @@ case "$ERA5_PARALLEL_STRATEGY" in
         if (( DEFAULT_SMOKE_BATCH_WORKERS > 2 )); then
             DEFAULT_SMOKE_BATCH_WORKERS=2
         fi
-        ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
-        ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-aggressive}
-        ERA5_BATCH_WORKERS=${RUN_LOCAL_ERA5_BATCH_WORKERS:-$DEFAULT_SMOKE_BATCH_WORKERS}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
+        ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-aggressive}
+        ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-$DEFAULT_SMOKE_BATCH_WORKERS}
         ;;
     local-balanced)
-        ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
-        ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-balanced}
-        ERA5_BATCH_WORKERS=${RUN_LOCAL_ERA5_BATCH_WORKERS:-1}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-$ERA5_CITY_SHARD_COUNT}
+        ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-balanced}
+        ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-1}
         ;;
     serial)
-        ERA5_JOB_LIMIT=${RUN_LOCAL_ERA5_JOB_LIMIT:-1}
-        ERA5_CONCURRENCY_PROFILE=${RUN_LOCAL_ERA5_CONCURRENCY_PROFILE:-conservative}
-        ERA5_BATCH_WORKERS=${RUN_LOCAL_ERA5_BATCH_WORKERS:-1}
+        ERA5_JOB_LIMIT=${ERA5_JOB_LIMIT:-1}
+        ERA5_CONCURRENCY_PROFILE=${ERA5_CONCURRENCY_PROFILE:-conservative}
+        ERA5_BATCH_WORKERS=${ERA5_BATCH_WORKERS:-1}
         ;;
 esac
 
@@ -684,19 +684,19 @@ echo "Using ERA5 parallel strategy: ${ERA5_PARALLEL_STRATEGY} (job limit=${ERA5_
 _progress_advance 1 "Prepared locations"
 
 echo "====== Step 2: Compute ERA5 + PET ======"
-if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
-    if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+if [[ "$SKIP_ERA5_PULL" != "1" ]]; then
+    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
         _require_executable "$GCLOUD_BIN"
         _require_executable "$AWS_BIN"
         _cancel_running_cloud_run_executions
         _progress_advance 1 "Cancelled stale Cloud Run executions"
-        echo "Using Cloud Run job ${RUN_LOCAL_CLOUD_RUN_JOB} in ${RUN_LOCAL_GCP_REGION} with output ${REMOTE_OUT_DIR}"
-        if [[ "$RUN_LOCAL_PROVISION_CLOUD_RUN" == "1" ]]; then
-            echo "Refreshing Cloud Run job ${RUN_LOCAL_CLOUD_RUN_JOB} from the current checkout"
+        echo "Using Cloud Run job ${CLOUD_RUN_JOB} in ${GCP_REGION} with output ${REMOTE_OUT_DIR}"
+        if [[ "$PROVISION_CLOUD_RUN" == "1" ]]; then
+            echo "Refreshing Cloud Run job ${CLOUD_RUN_JOB} from the current checkout"
             /bin/bash ./cloudrun_provision.sh
             _progress_advance 1 "Provisioned Cloud Run worker"
         fi
-        if [[ "$RUN_LOCAL_SKIP_REMOTE_CLEAR" != "1" ]]; then
+        if [[ "$SKIP_REMOTE_CLEAR" != "1" ]]; then
             _clear_remote_pet_prefix
             _progress_advance 1 "Cleared remote PET prefix"
         fi
@@ -706,7 +706,7 @@ if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
         for (( CITY_SHARD=0; CITY_SHARD<ERA5_CITY_SHARD_COUNT; CITY_SHARD++ )); do
             for TIME_SHARD in "${ERA5_TIME_SHARDS[@]}"; do
                 SHARD_LABEL="ERA5 year=${YEAR} city-shard=$(( CITY_SHARD + 1 ))/${ERA5_CITY_SHARD_COUNT} time-shard=${TIME_SHARD}/${ERA5_TIME_SHARD_COUNT}"
-                if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+                if [[ "$USE_CLOUD_RUN" == "1" ]]; then
                     CLOUD_RUN_ARGS=$(_build_cloud_run_args_csv \
                         "$YEAR" \
                         "$CITY_SHARD" \
@@ -714,13 +714,13 @@ if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
                         "$TIME_SHARD" \
                         "$ERA5_TIME_SHARD_COUNT")
                     GCLOUD_CMD=(
-                        "$GCLOUD_BIN" run jobs execute "$RUN_LOCAL_CLOUD_RUN_JOB"
-                        --region "$RUN_LOCAL_GCP_REGION"
+                        "$GCLOUD_BIN" run jobs execute "$CLOUD_RUN_JOB"
+                        --region "$GCP_REGION"
                         --wait
                         "--args=${CLOUD_RUN_ARGS}"
                     )
-                    if [[ -n "$RUN_LOCAL_GCP_PROJECT" ]]; then
-                        GCLOUD_CMD+=(--project "$RUN_LOCAL_GCP_PROJECT")
+                    if [[ -n "$GCP_PROJECT" ]]; then
+                        GCLOUD_CMD+=(--project "$GCP_PROJECT")
                     fi
                     _launch "$ERA5_JOB_LIMIT" "$SHARD_LABEL" "${GCLOUD_CMD[@]}"
                 else
@@ -745,11 +745,11 @@ if [[ "$RUN_LOCAL_SKIP_ERA5_PULL" != "1" ]]; then
     done
     _wait_phase "pull-google-era5-pet"
 
-    if [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" ]]; then
+    if [[ "$USE_CLOUD_RUN" == "1" ]]; then
         _sync_pet_from_s3
         _progress_advance 1 "Synced PET shards from S3"
     fi
-elif [[ "$RUN_LOCAL_USE_CLOUD_RUN" == "1" && "$RUN_LOCAL_SYNC_PET_FROM_S3" == "1" ]]; then
+elif [[ "$USE_CLOUD_RUN" == "1" && "$SYNC_PET_FROM_S3" == "1" ]]; then
     _require_executable "$AWS_BIN"
     _sync_pet_from_s3
     _progress_advance 1 "Synced PET shards from S3"
@@ -760,7 +760,7 @@ _materialize_pet_csv
 _progress_advance 1 "Materialized pet.csv"
 _prepare_analytics_pet_inputs
 
-if [[ "$RUN_LOCAL_SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+if [[ "$SKIP_DB_LOAD" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
     echo "====== Step 3-5: Skipping DB load ======"
     echo "====== Pipeline complete! ======"
     exit 0
