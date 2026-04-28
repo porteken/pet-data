@@ -31,7 +31,7 @@ class FakeCursor:
     def execute(self, statement: str) -> None:
         self.executed_statements.append(statement)
 
-    def __enter__(self) -> FakeCursor:  # noqa: PYI034
+    def __enter__(self) -> FakeCursor:
         """Enter context manager."""
         return self
 

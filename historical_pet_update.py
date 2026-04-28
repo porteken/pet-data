@@ -56,7 +56,7 @@ def export_pet(
     """Export PET data, optionally excluding a target date window."""
     db_uri = os.environ.get("SUPABASE_DB_URI")
     if not db_uri:
-        print("SUPABASE_DB_URI not set, skipping database export.")  # noqa: T201
+        print("SUPABASE_DB_URI not set, skipping database export.")
         _write_empty_pet_csv(output_path)
         return
 
@@ -66,7 +66,7 @@ def export_pet(
             cur.execute("SELECT to_regclass('public.pet')")
             regclass = cur.fetchone()
             if regclass is None or regclass[0] is None:
-                print("Table 'pet' does not exist. Creating empty export.")  # noqa: T201
+                print("Table 'pet' does not exist. Creating empty export.")
                 _write_empty_pet_csv(output_path)
                 return
 
@@ -102,7 +102,7 @@ def _iter_source_paths(source_dirs: list[str], source_files: list[str]) -> list[
     return source_paths
 
 
-def _load_pet_frame_from_path(source_path: Path, pd: Any) -> Any:  # noqa: ANN401
+def _load_pet_frame_from_path(source_path: Path, pd: Any) -> Any:
     if source_path.suffix == ".parquet":
         return pd.read_parquet(source_path, columns=["location_id", "date", "pet"])
     return pd.read_csv(source_path, usecols=["location_id", "date", "pet"])
@@ -116,7 +116,7 @@ def merge_csvs(
     """Merge multiple PET CSV/parquet sources into one de-duplicated CSV."""
     pd = importlib.import_module("pandas")
 
-    print(f"Merging PET data into {output_file}...")  # noqa: T201
+    print(f"Merging PET data into {output_file}...")
     frames = []
 
     for source_order, source_path in enumerate(
@@ -128,7 +128,7 @@ def merge_csvs(
         try:
             frame = _load_pet_frame_from_path(source_path, pd)
         except Exception as exc:  # noqa: BLE001
-            print(f"Error processing {source_path}: {exc}")  # noqa: T201
+            print(f"Error processing {source_path}: {exc}")
             continue
 
         frame = frame[["location_id", "date", "pet"]].copy()
@@ -137,7 +137,7 @@ def merge_csvs(
 
     if not frames:
         _write_empty_pet_csv(output_file)
-        print("No source data found; wrote empty CSV.")  # noqa: T201
+        print("No source data found; wrote empty CSV.")
         return
 
     combined = pd.concat(frames, ignore_index=True)
@@ -155,7 +155,7 @@ def merge_csvs(
     combined = combined.drop(columns=["_source_order"])
     combined["date"] = combined["date"].dt.strftime("%Y-%m-%d")
     combined.to_csv(output_file, index=False)
-    print(f"Wrote {len(combined)} rows to {output_file}.")  # noqa: T201
+    print(f"Wrote {len(combined)} rows to {output_file}.")
 
 
 def _existing_public_tables(
@@ -176,7 +176,7 @@ def delete_window(window_start: str, window_end: str) -> None:
     """Delete PET rows within a specific date window and reset analytics tables."""
     db_uri = os.environ.get("SUPABASE_DB_URI")
     if not db_uri:
-        print("SUPABASE_DB_URI not set, skipping database cleanup.")  # noqa: T201
+        print("SUPABASE_DB_URI not set, skipping database cleanup.")
         return
 
     conn = psycopg.connect(db_uri)
@@ -195,7 +195,7 @@ def delete_window(window_start: str, window_end: str) -> None:
             cur.execute("SELECT to_regclass('public.pet')")
             regclass = cur.fetchone()
             if regclass is not None and regclass[0] is not None:
-                print(f"Deleting PET data in window [{window_start}, {window_end}]...")  # noqa: T201
+                print(f"Deleting PET data in window [{window_start}, {window_end}]...")
                 cur.execute(
                     "DELETE FROM public.pet WHERE date BETWEEN %s::date AND %s::date",
                     (window_start, window_end),
@@ -203,7 +203,7 @@ def delete_window(window_start: str, window_end: str) -> None:
 
         analytics_tables = _existing_public_tables(conn, ANALYTICS_TABLES)
         if analytics_tables:
-            print("Truncating analytics tables...")  # noqa: T201
+            print("Truncating analytics tables...")
             with conn.cursor() as cur:
                 cur.execute(
                     sql.SQL("TRUNCATE TABLE {}").format(
@@ -219,7 +219,8 @@ def delete_window(window_start: str, window_end: str) -> None:
 
 def main() -> None:
     """Execute historical PET update commands."""
-    if len(sys.argv) < 2:  # noqa: PLR2004
+    min_args = 2
+    if len(sys.argv) < min_args:
         msg = (
             "Usage: historical_pet_update.py "
             "[export|export-all|merge|delete-window] ..."

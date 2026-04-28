@@ -27,7 +27,7 @@ def _aws_executable() -> str:
 
 
 def _run_aws_json(args: list[str]) -> dict[str, Any]:
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(
         [_aws_executable(), *args, "--output", "json"],
         check=True,
         capture_output=True,
@@ -51,7 +51,7 @@ def _delete_batch(bucket: str, objects: list[dict[str, str]]) -> int:
         payload_path = handle.name
 
     try:
-        completed = subprocess.run(  # noqa: S603
+        completed = subprocess.run(
             [
                 _aws_executable(),
                 "s3api",
@@ -110,7 +110,7 @@ def _delete_single_object(
     if version_id is not None:
         args.extend(["--version-id", version_id])
 
-    completed = subprocess.run(  # noqa: S603
+    completed = subprocess.run(
         args,
         check=False,
         capture_output=True,

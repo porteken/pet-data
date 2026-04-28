@@ -19,7 +19,7 @@ class FakeCopy:
         """Initialize the fake COPY context manager."""
         self.cursor = cursor
 
-    def __enter__(self) -> FakeCopy:  # noqa: PYI034
+    def __enter__(self) -> FakeCopy:
         """Enter context manager."""
         return self
 
@@ -55,7 +55,7 @@ class FakeCursor:
         self.copy_params = params
         return FakeCopy(self)
 
-    def __enter__(self) -> FakeCursor:  # noqa: PYI034
+    def __enter__(self) -> FakeCursor:
         """Enter context manager."""
         return self
 
@@ -97,7 +97,7 @@ class RecordingCursor:
             return None
         return self._fetchone_values.pop(0)
 
-    def __enter__(self) -> RecordingCursor:  # noqa: PYI034
+    def __enter__(self) -> RecordingCursor:
         """Enter context manager."""
         return self
 

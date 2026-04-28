@@ -65,7 +65,7 @@ def _row_count(conn: Connection[Any], relation: str) -> int:
         assert row is not None
         if row[0] == 0:
             pytest.fail(f"Relation {relation!r} does not exist")
-        cur.execute(cast("Any", f"SELECT COUNT(*) FROM {relation}"))  # noqa: S608
+        cur.execute(cast("Any", f"SELECT COUNT(*) FROM {relation}"))
         count_row = cur.fetchone()
         assert count_row is not None
         return count_row[0]
@@ -261,21 +261,21 @@ def _assert_year_season_pet_view(
         cur.execute(
             cast(
                 "Any",
-                "SELECT COUNT(*) FROM ("  # noqa: S608
+                "SELECT COUNT(*) FROM ("
                 "SELECT location_id, year, season, COUNT(*) AS row_count "
                 f"FROM {view} "
                 "GROUP BY location_id, year, season "
                 "HAVING COUNT(*) > 1"
                 ") AS duplicates",
             )
-        )  # noqa: RUF100, S608
+        )
         duplicate_count_row = cur.fetchone()
         assert duplicate_count_row is not None
 
-        cur.execute(  # noqa: RUF100, S608
+        cur.execute(
             cast(
                 "Any",
-                "WITH pet_with_seasons AS ("  # noqa: S608
+                "WITH pet_with_seasons AS ("
                 "SELECT location_id, EXTRACT(YEAR FROM date)::int AS year, 'Annual'::text AS season, pet "
                 "FROM pet "
                 "UNION ALL "
@@ -314,7 +314,7 @@ def _assert_year_season_pet_view(
         diff_count_row = cur.fetchone()
         assert diff_count_row is not None
 
-        cur.execute(cast("Any", f"SELECT DISTINCT season FROM {view} ORDER BY season"))  # noqa: S608
+        cur.execute(cast("Any", f"SELECT DISTINCT season FROM {view} ORDER BY season"))
         seasons = {row[0] for row in cur.fetchall()}
 
     columns = _get_relation_columns(db_conn, view)

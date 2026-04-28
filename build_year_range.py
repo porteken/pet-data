@@ -45,31 +45,31 @@ def main() -> None:
     years = sorted(set(era5_years + cds_years))
 
     if "--shell" in sys.argv:
-        print(f"ERA5_YEARS='{' '.join(map(str, era5_years))}'")  # noqa: T201
-        print(f"CDS_YEARS='{' '.join(map(str, cds_years))}'")  # noqa: T201
-        print(f"CDS_YEAR_MONTHS='{json.dumps(cds_year_months)}'")  # noqa: T201
-        print(f"ALL_YEARS='{' '.join(map(str, years))}'")  # noqa: T201
-        print(f"END_DATE='{end_date.isoformat()}'")  # noqa: T201
-        print(f"START_YEAR='{era5_start}'")  # noqa: T201
-        print(f"END_YEAR='{end_date.year}'")  # noqa: T201
+        print(f"ERA5_YEARS='{' '.join(map(str, era5_years))}'")
+        print(f"CDS_YEARS='{' '.join(map(str, cds_years))}'")
+        print(f"CDS_YEAR_MONTHS='{json.dumps(cds_year_months)}'")
+        print(f"ALL_YEARS='{' '.join(map(str, years))}'")
+        print(f"END_DATE='{end_date.isoformat()}'")
+        print(f"START_YEAR='{era5_start}'")
+        print(f"END_YEAR='{end_date.year}'")
 
     elif "--github" in sys.argv:
         if "--yearly" in sys.argv:
             target_year = prev_year
-            print(f"target_year={target_year}")  # noqa: T201
-            print(f"window_start={target_year}-01-01")  # noqa: T201
-            print(f"window_end={target_year}-12-31")  # noqa: T201
-            print(f"months={json.dumps(list(range(1, 13)))}")  # noqa: T201
-            print(f"analytics_shards={json.dumps(list(range(20)))}")  # noqa: T201
+            print(f"target_year={target_year}")
+            print(f"window_start={target_year}-01-01")
+            print(f"window_end={target_year}-12-31")
+            print(f"months={json.dumps(list(range(1, 13)))}")
+            print(f"analytics_shards={json.dumps(list(range(20)))}")
         else:
-            print(f"start_year={era5_start}")  # noqa: T201
-            print(f"end_year={end_date.year}")  # noqa: T201
-            print(f"end_date={end_date.isoformat()}")  # noqa: T201
-            print(f"years={json.dumps(years)}")  # noqa: T201
-            print(f"era5_years={json.dumps(era5_years)}")  # noqa: T201
-            print(f"cds_years={json.dumps(cds_years)}")  # noqa: T201
-            print(f"cds_year_months={json.dumps(cds_year_months)}")  # noqa: T201
-            print(f"analytics_shards={json.dumps(list(range(20)))}")  # noqa: T201
+            print(f"start_year={era5_start}")
+            print(f"end_year={end_date.year}")
+            print(f"end_date={end_date.isoformat()}")
+            print(f"years={json.dumps(years)}")
+            print(f"era5_years={json.dumps(era5_years)}")
+            print(f"cds_years={json.dumps(cds_years)}")
+            print(f"cds_year_months={json.dumps(cds_year_months)}")
+            print(f"analytics_shards={json.dumps(list(range(20)))}")
 
 
 if __name__ == "__main__":

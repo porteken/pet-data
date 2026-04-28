@@ -388,7 +388,7 @@ class _FakeExecutor:
     def __init__(self, *, max_workers: int) -> None:
         self.max_workers = max_workers
 
-    def __enter__(self) -> _FakeExecutor:  # noqa: PYI034
+    def __enter__(self) -> _FakeExecutor:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
