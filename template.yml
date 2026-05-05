@@ -42,7 +42,7 @@ Resources:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnLike:
                 aws:SourceArn: !Sub 'arn:${AWS::Partition}:s3:::${BucketName}'
-          - Sid: DenyInsecureTransportForAccessLogsBucket
+          - Sid: AllowSSLRequestsOnly
             Effect: Deny
             Principal: '*'
             Action: 's3:*'
@@ -51,7 +51,7 @@ Resources:
               - !Sub '${PetParquetFilesAccessLogsBucket.Arn}/*'
             Condition:
               Bool:
-                aws:SecureTransport: false
+                aws:SecureTransport: 'false'
 
   PetParquetFilesBucket:
     Type: AWS::S3::Bucket
@@ -80,7 +80,7 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: DenyInsecureTransport
+          - Sid: AllowSSLRequestsOnly
             Effect: Deny
             Principal: '*'
             Action: 's3:*'
@@ -89,7 +89,7 @@ Resources:
               - !Sub '${PetParquetFilesBucket.Arn}/*'
             Condition:
               Bool:
-                aws:SecureTransport: false
+                aws:SecureTransport: 'false'
 
 Outputs:
   BucketName:
