@@ -55,7 +55,6 @@ for package_name in WORKER_PACKAGES:
 PY
 
 RUN uv pip install \
-    --no-build \
     --python "$VIRTUAL_ENV/bin/python" \
     --requirement /tmp/cloudrun-worker-requirements.txt
 
