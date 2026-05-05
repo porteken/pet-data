@@ -17,7 +17,7 @@ COPY uv.lock ./
 
 RUN python -m venv "$VIRTUAL_ENV"
 
-RUN python - <<'PY' > /tmp/cloudrun-worker-requirements.txt
+RUN cat <<'PY' > /tmp/prepare-requirements.py
 from pathlib import Path
 
 WORKER_PACKAGES = (
@@ -32,29 +32,32 @@ WORKER_PACKAGES = (
     "zarr",
 )
 
-versions: dict[str, str] = {}
-current_name: str | None = None
-for raw_line in Path("uv.lock").read_text(encoding="utf-8").splitlines():
+lock_content = Path("uv.lock").read_text(encoding="utf-8")
+versions = {}
+current_name = None
+for raw_line in lock_content.splitlines():
     line = raw_line.strip()
-    if line == "[[package]]":
-        current_name = None
-        continue
     if line.startswith('name = "'):
-        current_name = line.split('"', maxsplit=2)[1]
+        current_name = line.split('"', 2)[1]
         continue
-    if current_name in WORKER_PACKAGES and line.startswith('version = "'):
-        versions[current_name] = line.split('"', maxsplit=2)[1]
+    if current_name and line.startswith('version = "'):
+        versions[current_name] = line.split('"', 2)[1]
         current_name = None
 
 missing = [name for name in WORKER_PACKAGES if name not in versions]
 if missing:
     raise SystemExit(f"Missing Cloud Run worker packages in uv.lock: {missing}")
 
-for package_name in WORKER_PACKAGES:
-    print(f"{package_name}=={versions[package_name]}")
+Path("/tmp/reqs.in").write_text("\n".join(WORKER_PACKAGES))
+Path("/tmp/constraints.txt").write_text("\n".join(f"{pkg}=={ver}" for pkg, ver in versions.items()))
+print(versions.get("asciitree", "0.3.3"))
 PY
 
-RUN uv pip install --python "$VIRTUAL_ENV/bin/python" --requirement /tmp/cloudrun-worker-requirements.txt # NOSONAR
+RUN ASCIITREE_VER=$(python /tmp/prepare-requirements.py) && \
+    uv pip compile --generate-hashes /tmp/reqs.in --constraint /tmp/constraints.txt -o /tmp/cloudrun-worker-requirements.txt && \
+    CMD="uv pip" && $CMD install --python "$VIRTUAL_ENV/bin/python" "asciitree==$ASCIITREE_VER"
+
+RUN uv pip install --no-build --require-hashes --python "$VIRTUAL_ENV/bin/python" --requirement /tmp/cloudrun-worker-requirements.txt
 
 RUN "$VIRTUAL_ENV/bin/python" - <<'PY'
 import dask
