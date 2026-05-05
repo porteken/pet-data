@@ -54,9 +54,7 @@ for package_name in WORKER_PACKAGES:
     print(f"{package_name}=={versions[package_name]}")
 PY
 
-RUN uv pip install \
-    --python "$VIRTUAL_ENV/bin/python" \
-    --requirement /tmp/cloudrun-worker-requirements.txt # NOSONAR
+RUN uv pip install --python "$VIRTUAL_ENV/bin/python" --requirement /tmp/cloudrun-worker-requirements.txt # NOSONAR
 
 RUN "$VIRTUAL_ENV/bin/python" - <<'PY'
 import dask

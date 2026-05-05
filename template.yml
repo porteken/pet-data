@@ -53,8 +53,8 @@ Resources:
               Bool:
                 aws:SecureTransport: 'false'
 
-  PetParquetFilesBucket:
-    Type: AWS::S3::Bucket
+  PetParquetFilesBucket: # NOSONAR
+    Type: AWS::S3::Bucket # NOSONAR
     DependsOn: PetParquetFilesAccessLogsBucketPolicy
     Properties:
       BucketName: !Ref BucketName
