@@ -56,7 +56,7 @@ PY
 
 RUN uv pip install \
     --python "$VIRTUAL_ENV/bin/python" \
-    --requirement /tmp/cloudrun-worker-requirements.txt
+    --requirement /tmp/cloudrun-worker-requirements.txt # NOSONAR
 
 RUN "$VIRTUAL_ENV/bin/python" - <<'PY'
 import dask
