@@ -192,7 +192,7 @@ def test_compact_schema_types(db_conn: Connection[Any]) -> None:
         "p90": "numeric(5,1)",
         "future_lower": "numeric(5,1)",
         "future_upper": "numeric(5,1)",
-        "change_per_decade": "numeric(5,2)",
+        "change_from_2000": "numeric(5,2)",
     }
 
 
@@ -455,17 +455,10 @@ def test_city_rankings_view_matches_expected_projection(
             "SELECT DISTINCT ON (location_id, year, season) location_id, year, season, pet "
             "FROM combined_yearly_avg "
             "ORDER BY location_id, year, season, source_order"
-            "), decade_avg AS ("
-            "SELECT location_id, season, (year / 10) * 10 AS year, AVG(pet) AS pet "
+            "), year_2000_value AS ("
+            "SELECT location_id, season, pet "
             "FROM deduplicated_yearly_avg "
-            "GROUP BY location_id, season, (year / 10) * 10"
-            "), expected AS ("
-            "SELECT "
-            "location_id, "
-            "season, "
-            "year, "
-            "ROUND((pet - LAG(pet) OVER (PARTITION BY location_id, season ORDER BY year))::numeric, 2)::numeric(5,2) AS change "
-            "FROM decade_avg"
+            "WHERE year = 2000"
             "), projected AS ("
             "SELECT "
             "a.location_id, "
@@ -479,7 +472,7 @@ def test_city_rankings_view_matches_expected_projection(
             "p.p90, "
             "f.lower AS future_lower, "
             "f.upper AS future_upper, "
-            "c.change AS change_per_decade "
+            "ROUND((a.pet - y2k.pet)::numeric, 2)::numeric(5,2) AS change_from_2000 "
             "FROM pet_year_avg AS a "
             "JOIN locations AS l "
             "ON l.id = a.location_id "
@@ -496,10 +489,9 @@ def test_city_rankings_view_matches_expected_projection(
             "ON f.location_id = a.location_id "
             "AND f.year = 2100::smallint "
             "AND f.season = a.season "
-            "LEFT JOIN expected AS c "
-            "ON c.location_id = a.location_id "
-            "AND c.season = a.season "
-            "AND c.year = ((a.year / 10) * 10)::smallint "
+            "LEFT JOIN year_2000_value AS y2k "
+            "ON y2k.location_id = a.location_id "
+            "AND y2k.season = a.season "
             "WHERE a.location_id > 0"
             "), actual AS ("
             "SELECT "
@@ -514,7 +506,7 @@ def test_city_rankings_view_matches_expected_projection(
             "p90, "
             "future_lower, "
             "future_upper, "
-            "change_per_decade "
+            "change_from_2000 "
             "FROM city_rankings_view"
             "), missing AS ("
             "SELECT * FROM projected "
@@ -554,7 +546,7 @@ def test_city_rankings_view_matches_expected_projection(
         "p90",
         "future_lower",
         "future_upper",
-        "change_per_decade",
+        "change_from_2000",
     ]
 
     missing_count, extra_count, duplicate_count = diff_count_row

@@ -792,26 +792,13 @@ location_id,
 year,
 season,
 source_order
-), decade_avg AS (
-SELECT
-location_id::smallint,
-season,
-(year / 10) * 10 AS year,
-AVG (pet)::real AS pet
-FROM deduplicated_yearly_avg
-GROUP BY
-location_id,
-season,
-(year / 10) * 10
-), change_rows AS (
+), year_2000_value AS (
 SELECT
 location_id::smallint AS location_id,
 season,
-year::smallint AS year,
-ROUND ((pet - LAG (pet) OVER (PARTITION BY location_id,
-season ORDER BY year))::numeric,
-2)::real AS change
-FROM decade_avg
+pet::real AS pet
+FROM deduplicated_yearly_avg
+WHERE year = 2000
 )
 SELECT
 a.location_id::smallint,
@@ -825,7 +812,7 @@ p.p10::real,
 p.p90::real,
 f.lower::real AS future_lower,
 f.upper::real AS future_upper,
-c.change::real AS change_per_decade
+ROUND ((a.pet - y2k.pet)::numeric, 2)::real AS change_from_2000
 FROM public.pet_year_avg AS a
 JOIN public.locations AS l ON l.id = a.location_id
 JOIN public.pet_year_max AS m ON m.location_id = a.location_id
@@ -837,9 +824,8 @@ AND p.season = a.season
 LEFT JOIN public.pet_forecast AS f ON f.location_id = a.location_id
 AND f.year = 2100::smallint
 AND f.season = a.season
-LEFT JOIN change_rows AS c ON c.location_id = a.location_id
-AND c.season = a.season
-AND c.year = ((a.year / 10) * 10)::smallint
+LEFT JOIN year_2000_value AS y2k ON y2k.location_id = a.location_id
+AND y2k.season = a.season
 WHERE
 a.location_id > 0 ;
 
