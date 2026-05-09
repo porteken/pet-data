@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import io
 import logging
-import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -14,13 +13,14 @@ import psycopg
 import pyarrow.parquet as pq
 from psycopg import sql
 
+from shared_config import DATABASE_CONFIG_HINT, resolve_database_uri
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from psycopg import Connection
 
 LOGGER = logging.getLogger(__name__)
-DB_URI = os.getenv("SUPABASE_DB_URI")
 COPY_BATCH_SIZE = 50_000
 DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_]\w*)?\$")
 TABLE_NAMES = [
@@ -150,6 +150,15 @@ def execute_sql_file(conn: Connection[Any], file_path: str | Path) -> None:
         for statement in statements:
             cur.execute(cast("Any", statement))
     LOGGER.info("Successfully executed %s (%d statements).", file_path, len(statements))
+
+
+def refresh_query_planner_statistics(conn: Connection[Any]) -> None:
+    """Refresh planner statistics for the core runtime tables."""
+    LOGGER.info("Refreshing query planner statistics...")
+    with conn.cursor() as cur:
+        for table_name in TABLE_NAMES:
+            cur.execute(cast("Any", f"ANALYZE public.{table_name}"))
+    LOGGER.info("Finished refreshing query planner statistics.")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -596,6 +605,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _parse_args()
     _validate_load_shard_args(args.load_shard_index, args.load_shard_count)
+    db_uri = resolve_database_uri()
 
     if args.append_only:
         truncate_table_names: list[str] = []
@@ -607,19 +617,24 @@ def main() -> None:
     truncate_tables: set[str] = set(truncate_table_names)
     skip_tables: set[str] = set(args.skip_tables or [])
 
-    if not DB_URI:
+    if not db_uri:
         LOGGER.warning(
-            "SUPABASE_DB_URI environment variable is not set. Skipping database operations.",
+            "Postgres database credentials are not configured. %s Skipping database operations.",
+            DATABASE_CONFIG_HINT,
         )
         return
 
     LOGGER.info("Connecting to the database...")
-    conn: Connection[Any] = psycopg.connect(DB_URI)
+    conn: Connection[Any] = psycopg.connect(db_uri)
     conn.autocommit = True
+    should_refresh_schema = not args.skip_drop_views or not args.skip_create_views
 
     try:
         if not args.skip_drop_views:
             execute_sql_file(conn, "drop_views.sql")
+
+        if should_refresh_schema:
+            execute_sql_file(conn, "create_tables.sql")
 
         _load_requested_tables(
             conn,
@@ -630,6 +645,9 @@ def main() -> None:
 
         if not args.skip_create_views:
             execute_sql_file(conn, "create_views.sql")
+
+        if should_refresh_schema:
+            refresh_query_planner_statistics(conn)
 
     finally:
         conn.close()

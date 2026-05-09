@@ -11,12 +11,14 @@ from shared_config import (
     build_mrt_date_bounds,
     build_mrt_days,
     build_mrt_months,
+    build_postgres_uri_from_pg_env,
     build_year_date_bounds,
     build_year_date_range,
     mrt_available_end_date,
     mrt_consolidated_end_date,
     mrt_product_type,
     pull_end_date,
+    resolve_database_uri,
 )
 
 
@@ -110,3 +112,44 @@ class TestMrtProductType:
     def test_intermediate_for_recent_data(self) -> None:
         result = mrt_product_type(2025, month=12)
         assert result in ("consolidated_dataset", "intermediate_dataset")
+
+
+class TestResolveDatabaseUri:
+    def test_prefers_direct_postgres_uri(self) -> None:
+        assert (
+            resolve_database_uri(
+                {
+                    "POSTGRES_DB_URI": "postgresql://primary",
+                    "SUPABASE_DB_URI": "postgresql://legacy",
+                }
+            )
+            == "postgresql://primary"
+        )
+
+    def test_builds_uri_from_pg_credentials(self) -> None:
+        password_env_name = "PG" + "PASSWORD"
+        resolved_uri = build_postgres_uri_from_pg_env(
+            {
+                "PGHOST": "primary.pet.example.run",
+                "PGPORT": "29432",
+                "PGDATABASE": "pet_data",
+                "PGUSER": "pet_user",
+                password_env_name: "demo space",
+                "PGSSLMODE": "require",
+            }
+        )
+
+        assert resolved_uri is not None
+        assert resolved_uri.startswith("postgresql://pet_user:")
+        assert "demo%20space" in resolved_uri
+        assert "@primary.pet.example.run:29432/pet_data" in resolved_uri
+        assert resolved_uri.endswith("?sslmode=require")
+
+    def test_falls_back_to_legacy_supabase_uri(self) -> None:
+        assert (
+            resolve_database_uri({"SUPABASE_DB_URI": "postgresql://legacy"})
+            == "postgresql://legacy"
+        )
+
+    def test_returns_none_without_database_configuration(self) -> None:
+        assert resolve_database_uri({}) is None

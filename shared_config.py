@@ -1,8 +1,14 @@
-"""Shared configuration for weather and MRT scripts."""
+"""Shared configuration for weather, MRT, and database scripts."""
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
+from urllib.parse import quote, urlencode
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 UTC = timezone.utc
 
@@ -11,6 +17,60 @@ SHARED_AREA: tuple[float, float, float, float] = (49.25, -124.5, 24.25, -66.5)
 DECEMBER = 12
 MRT_INTERMEDIATE_LAG_DAYS = 5
 MRT_CONSOLIDATED_LAG_MONTHS = 3
+PRIMARY_DATABASE_URI_ENV_VARS: tuple[str, ...] = (
+    "POSTGRES_DB_URI",
+    "DATABASE_URL",
+    "SUPABASE_DB_URI",
+)
+POSTGRES_COMPONENT_ENV_VARS: tuple[str, ...] = (
+    "PGHOST",
+    "PGDATABASE",
+    "PGUSER",
+    "PGPASSWORD",
+)
+DATABASE_CONFIG_HINT = (
+    "Set POSTGRES_DB_URI, DATABASE_URL, or PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD."
+)
+
+
+def _resolve_environ(environ: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    """Return the supplied environment mapping or the current process environment."""
+    return os.environ if environ is None else environ
+
+
+def build_postgres_uri_from_pg_env(
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Build a Postgres connection URI from standard libpq environment variables."""
+    resolved_environ = _resolve_environ(environ)
+    if any(
+        not resolved_environ.get(env_name) for env_name in POSTGRES_COMPONENT_ENV_VARS
+    ):
+        return None
+
+    username = quote(resolved_environ["PGUSER"], safe="")
+    password = quote(resolved_environ["PGPASSWORD"], safe="")
+    database = quote(resolved_environ["PGDATABASE"], safe="")
+    netloc = f"{username}:{password}@{resolved_environ['PGHOST']}"
+    if port := resolved_environ.get("PGPORT"):
+        netloc = f"{netloc}:{port}"
+    query = ""
+    if sslmode := resolved_environ.get("PGSSLMODE"):
+        query = urlencode({"sslmode": sslmode})
+    return f"postgresql://{netloc}/{database}{f'?{query}' if query else ''}"
+
+
+def resolve_database_uri(
+    environ: Mapping[str, str] | None = None,
+    *,
+    direct_env_vars: tuple[str, ...] = PRIMARY_DATABASE_URI_ENV_VARS,
+) -> str | None:
+    """Resolve the active Postgres database URI from direct or component env vars."""
+    resolved_environ = _resolve_environ(environ)
+    for env_name in direct_env_vars:
+        if env_value := resolved_environ.get(env_name):
+            return env_value
+    return build_postgres_uri_from_pg_env(resolved_environ)
 
 
 def _resolve_current_date(current_date: date | None = None) -> date:

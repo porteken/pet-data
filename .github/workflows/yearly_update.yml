@@ -163,7 +163,7 @@ jobs:
         run: uv sync --locked --no-dev # NOSONAR
       - name: Clean Up Database Window
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
+          POSTGRES_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: uv run --locked python historical_pet_update.py delete-window "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}"
 
   load-to-db:
@@ -199,9 +199,9 @@ jobs:
           mkdir -p pet_data_csv
           echo "Syncing s3://pet-parquet-files/${PREFIX}"
           aws s3 sync "s3://pet-parquet-files/${PREFIX}" "./${PREFIX}"
-      - name: Load shard to Supabase
+      - name: Load shard to Postgres
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
+          POSTGRES_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: uv run --locked python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
 
   finalize-db-load:
@@ -222,5 +222,5 @@ jobs:
         run: uv sync --locked --no-dev # NOSONAR
       - name: Recreate Views
         env:
-          SUPABASE_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
+          POSTGRES_DB_URI: ${{ secrets.SUPABASE_DB_URI }}
         run: uv run --locked python load.py --append-only --skip-table locations --skip-table pet # NOSONAR

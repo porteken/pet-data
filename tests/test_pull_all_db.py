@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+
+from shared_config import resolve_database_uri
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -13,8 +14,6 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
 pytestmark = pytest.mark.db
-
-DB_URI = os.getenv("SUPABASE_DB_URI")
 
 REQUIRED_TABLES = [
     "locations",
@@ -37,8 +36,9 @@ REQUIRED_VIEWS = [
 @pytest.fixture(scope="module")
 def db_conn() -> Generator[Connection[Any], None, None]:
     """Yield a psycopg connection, skip if unavailable."""
-    if not DB_URI:
-        pytest.skip("SUPABASE_DB_URI not set")
+    db_uri = resolve_database_uri()
+    if not db_uri:
+        pytest.skip("Postgres database credentials are not set")
 
     try:
         import psycopg
@@ -46,7 +46,7 @@ def db_conn() -> Generator[Connection[Any], None, None]:
         pytest.skip("psycopg not installed")
 
     try:
-        conn = psycopg.connect(DB_URI)
+        conn = psycopg.connect(db_uri)
         conn.autocommit = True
     except psycopg.OperationalError as exc:
         pytest.skip(f"Cannot connect to database: {exc}")
@@ -197,8 +197,24 @@ def test_compact_schema_types(db_conn: Connection[Any]) -> None:
 
 
 def test_pet_has_id_index(db_conn: Connection[Any]) -> None:
-    """Pet should expose the requested id index for location/date access."""
-    assert _get_index_columns(db_conn, "id") == ["location_id", "date"]
+    """Pet should expose a covering location/date index for reference graph queries."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_get_indexdef(i.oid) "
+            "FROM pg_catalog.pg_class AS i "
+            "JOIN pg_catalog.pg_namespace AS n ON n.oid = i.relnamespace "
+            "WHERE n.nspname = 'public' "
+            "AND i.relname = 'pet_location_date_covering_idx'"
+        )
+        row = cur.fetchone()
+
+    assert row is not None
+    index_definition = row[0]
+    assert index_definition is not None
+    assert (
+        "ON public.pet USING btree (location_id, date) INCLUDE (pet)"
+        in index_definition
+    )
 
 
 def _get_relation_columns(conn: Connection[Any], relation: str) -> list[str]:

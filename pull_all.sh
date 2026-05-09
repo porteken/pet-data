@@ -15,8 +15,17 @@ PYTHON_BIN=${PYTHON_BIN:-python}
 GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
 AWS_BIN=${AWS_BIN:-aws}
 
-if [[ -z "${SUPABASE_DB_URI:-}" ]]; then
-    echo "WARNING: SUPABASE_DB_URI is not set. Database upload steps will be skipped."
+_database_configured() {
+    if [[ -n "${POSTGRES_DB_URI:-}" || -n "${DATABASE_URL:-}" || -n "${SUPABASE_DB_URI:-}" ]]; then
+        return 0
+    fi
+
+    [[ -n "${PGHOST:-}" && -n "${PGDATABASE:-}" && -n "${PGUSER:-}" && -n "${PGPASSWORD:-}" ]]
+    return $?
+}
+
+if ! _database_configured; then
+    echo "WARNING: Postgres database credentials are not set. Database upload steps will be skipped."
 fi
 
 export OMP_NUM_THREADS=1
@@ -40,14 +49,14 @@ S3_BUCKET=${S3_BUCKET:-pet-parquet-files}
 S3_PREFIX=${S3_PREFIX:-local-run/${USER:-unknown-user}}
 CLEAR_MAX_WORKERS=${CLEAR_MAX_WORKERS:-8}
 MERGE_EXISTING_PET_HISTORY=${MERGE_EXISTING_PET_HISTORY:-1}
-HISTORY_DB_URI_ENV=${HISTORY_DB_URI_ENV:-SUPABASE_DB_URI}
-HISTORY_FALLBACK_DB_URI_ENV=${HISTORY_FALLBACK_DB_URI_ENV:-SUPABASE_DB_URI_PRD}
+HISTORY_DB_URI_ENV=${HISTORY_DB_URI_ENV:-}
+HISTORY_FALLBACK_DB_URI_ENV=${HISTORY_FALLBACK_DB_URI_ENV:-POSTGRES_DB_URI_PRD}
 ALLOW_EMPTY_ANALYTICS=${ALLOW_EMPTY_ANALYTICS:-0}
 PROGRESS=${PROGRESS:-1}
 ERA5_PARALLEL_STRATEGY=${ERA5_PARALLEL_STRATEGY:-auto}
 
 if [[ "${SKIP_DB_LOAD}" == "1" ]]; then
-    echo "WARNING: SKIP_DB_LOAD=1 means this run will not update Supabase."
+    echo "WARNING: SKIP_DB_LOAD=1 means this run will not update Postgres."
 fi
 
 if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
@@ -335,12 +344,22 @@ _export_history_pet_csv() {
     local env_name=$1
     local output_csv=$2
 
-    if [[ -z "${env_name}" || -z "${!env_name:-}" ]]; then
+    if [[ -z "${env_name}" ]]; then
+        if ! _database_configured; then
+            _write_empty_pet_csv "${output_csv}"
+            return 0
+        fi
+
+        _run_python historical_pet_update.py export-all "${output_csv}"
+        return $?
+    fi
+
+    if [[ -z "${!env_name:-}" ]]; then
         _write_empty_pet_csv "${output_csv}"
         return 0
     fi
 
-    SUPABASE_DB_URI="${!env_name}" _run_python historical_pet_update.py export-all "${output_csv}"
+    POSTGRES_DB_URI="${!env_name}" _run_python historical_pet_update.py export-all "${output_csv}"
     return $?
 }
 
@@ -348,7 +367,7 @@ _prepare_analytics_pet_inputs() {
     DB_LOAD_PET_CSV="pet.csv"
     DB_LOAD_PREFER_PET_CSV=0
 
-    if [[ "${SKIP_DB_LOAD}" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ "${SKIP_DB_LOAD}" == "1" ]] || ! _database_configured; then
         return 0
     fi
 
@@ -593,11 +612,11 @@ _calculate_progress_total() {
 
     (( total += 1 ))
 
-    if [[ "${SKIP_DB_LOAD}" != "1" && -n "${SUPABASE_DB_URI:-}" && "${MERGE_EXISTING_PET_HISTORY}" == "1" ]]; then
+    if [[ "${SKIP_DB_LOAD}" != "1" ]] && _database_configured && [[ "${MERGE_EXISTING_PET_HISTORY}" == "1" ]]; then
         (( total += 1 ))
     fi
 
-    if [[ "${SKIP_DB_LOAD}" != "1" && -n "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ "${SKIP_DB_LOAD}" != "1" ]] && _database_configured; then
         (( total += 1 ))
         (( total += ANALYTICS_SHARD_COUNT ))
         (( total += 1 ))
@@ -811,7 +830,7 @@ _materialize_pet_csv
 _progress_advance 1 "Materialized pet.csv"
 _prepare_analytics_pet_inputs
 
-if [[ "${SKIP_DB_LOAD}" == "1" || -z "${SUPABASE_DB_URI:-}" ]]; then
+if [[ "${SKIP_DB_LOAD}" == "1" ]] || ! _database_configured; then
     echo "====== Step 3-5: Skipping DB load ======"
     echo "====== Pipeline complete! ======"
     exit 0
@@ -819,9 +838,14 @@ fi
 
 echo "====== Step 3: Prepare DB load ======"
 _run_python - <<'PY'
-import os, sys, psycopg
+import sys
 from pathlib import Path
-db_uri = os.environ.get("SUPABASE_DB_URI")
+
+import psycopg
+
+from shared_config import resolve_database_uri
+
+db_uri = resolve_database_uri()
 if not db_uri: sys.exit(0)
 with psycopg.connect(db_uri) as conn:
     conn.autocommit = True

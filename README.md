@@ -4,5 +4,5 @@ This is the automated pipeline for processing climate data and loading it into t
 
 1. **Compute**: Utilizes Google Cloud Run workers to pull ARCO-ERA5 weather and MRT data, computing PET (Physiological Equivalent Temperature) per US city grid point in parallel.
 2. **Store**: Outputs the computed PET dataset directly into an AWS S3 bucket for scalable storage.
-3. **Load**: GitHub Actions workflows shard and synchronize the processed data from S3, loading it into Supabase.
-4. **Analyze**: Database views within Supabase generate summary statistics, historical trend comparisons, and long-term forecasts.
+3. **Load**: GitHub Actions workflows shard and synchronize the processed data from S3, loading it into a Northflank-hosted Postgres database.
+4. **Analyze**: Database views within Postgres generate summary statistics, historical trend comparisons, and long-term forecasts.

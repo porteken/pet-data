@@ -20,6 +20,7 @@ from load import (
     _select_partition_shard_paths,
     _validate_load_shard_args,
     execute_sql_file,
+    refresh_query_planner_statistics,
 )
 
 
@@ -207,6 +208,18 @@ class TestExecuteSqlFile:
         execute_sql_file(cast("Any", conn), sql_path)
 
         assert conn.executed_statements == ["SELECT 1;", "SELECT 2;"]
+
+
+class TestRefreshQueryPlannerStatistics:
+    def test_analyzes_core_runtime_tables(self) -> None:
+        conn = FakeConnection()
+
+        refresh_query_planner_statistics(cast("Any", conn))
+
+        assert conn.executed_statements == [
+            "ANALYZE public.locations",
+            "ANALYZE public.pet",
+        ]
 
 
 class TestDiscoverLocationsCsvPaths:

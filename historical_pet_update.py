@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 from psycopg import sql
+
+from shared_config import DATABASE_CONFIG_HINT, resolve_database_uri
 
 if TYPE_CHECKING:
     from psycopg import Connection
@@ -54,9 +55,12 @@ def export_pet(
     output_path: str,
 ) -> None:
     """Export PET data, optionally excluding a target date window."""
-    db_uri = os.environ.get("SUPABASE_DB_URI")
+    db_uri = resolve_database_uri()
     if not db_uri:
-        print("SUPABASE_DB_URI not set, skipping database export.")
+        print(
+            "Postgres database credentials are not configured. "
+            f"{DATABASE_CONFIG_HINT} Skipping database export.",
+        )
         _write_empty_pet_csv(output_path)
         return
 
@@ -174,9 +178,12 @@ def _existing_public_tables(
 
 def delete_window(window_start: str, window_end: str) -> None:
     """Delete PET rows within a specific date window and reset analytics tables."""
-    db_uri = os.environ.get("SUPABASE_DB_URI")
+    db_uri = resolve_database_uri()
     if not db_uri:
-        print("SUPABASE_DB_URI not set, skipping database cleanup.")
+        print(
+            "Postgres database credentials are not configured. "
+            f"{DATABASE_CONFIG_HINT} Skipping database cleanup.",
+        )
         return
 
     conn = psycopg.connect(db_uri)

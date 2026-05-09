@@ -132,7 +132,7 @@ def test_export_all_writes_pet_rows(
 ) -> None:
     fake_conn = FakeConnection()
     monkeypatch.setattr(hpu.psycopg, "connect", lambda _: fake_conn)
-    monkeypatch.setenv("SUPABASE_DB_URI", "postgresql://example")
+    monkeypatch.setenv("POSTGRES_DB_URI", "postgresql://example")
 
     output_path = tmp_path / "existing_pet.csv"
     hpu.export_pet(None, None, str(output_path))
@@ -188,13 +188,21 @@ def test_export_pet_without_database_uri_writes_empty_csv(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.delenv("POSTGRES_DB_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_DB_URI", raising=False)
+    monkeypatch.delenv("PGHOST", raising=False)
+    monkeypatch.delenv("PGPORT", raising=False)
+    monkeypatch.delenv("PGDATABASE", raising=False)
+    monkeypatch.delenv("PGUSER", raising=False)
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+    monkeypatch.delenv("PGSSLMODE", raising=False)
 
     output_path = tmp_path / "existing_pet.csv"
     hpu.export_pet(None, None, str(output_path))
 
     assert output_path.read_text(encoding="utf-8") == hpu.PET_CSV_HEADER
-    assert "SUPABASE_DB_URI not set" in capsys.readouterr().out
+    assert "Postgres database credentials are not configured" in capsys.readouterr().out
 
 
 def test_export_pet_writes_empty_csv_when_pet_table_is_missing(
@@ -204,7 +212,7 @@ def test_export_pet_writes_empty_csv_when_pet_table_is_missing(
 ) -> None:
     fake_conn = FakeConnection(fetchone_values=[(None,)])
     monkeypatch.setattr(hpu.psycopg, "connect", lambda _: fake_conn)
-    monkeypatch.setenv("SUPABASE_DB_URI", "postgresql://example")
+    monkeypatch.setenv("POSTGRES_DB_URI", "postgresql://example")
 
     output_path = tmp_path / "existing_pet.csv"
     hpu.export_pet(None, None, str(output_path))
@@ -232,13 +240,19 @@ def test_delete_window_without_database_uri_skips_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.delenv("POSTGRES_DB_URI", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_DB_URI", raising=False)
+    monkeypatch.delenv("PGHOST", raising=False)
+    monkeypatch.delenv("PGPORT", raising=False)
+    monkeypatch.delenv("PGDATABASE", raising=False)
+    monkeypatch.delenv("PGUSER", raising=False)
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+    monkeypatch.delenv("PGSSLMODE", raising=False)
 
     hpu.delete_window("2024-01-01", "2024-01-31")
 
-    assert (
-        "SUPABASE_DB_URI not set, skipping database cleanup." in capsys.readouterr().out
-    )
+    assert "Postgres database credentials are not configured" in capsys.readouterr().out
 
 
 def test_delete_window_rebuilds_views_and_truncates_analytics(
@@ -249,7 +263,7 @@ def test_delete_window_rebuilds_views_and_truncates_analytics(
     conn = RecordingConnection([[("public.pet",)], []])
     monkeypatch.setattr(hpu.psycopg, "connect", lambda _: conn)
     monkeypatch.setattr(hpu, "_existing_public_tables", lambda *_args: ["pet_forecast"])
-    monkeypatch.setenv("SUPABASE_DB_URI", "postgresql://example")
+    monkeypatch.setenv("POSTGRES_DB_URI", "postgresql://example")
     monkeypatch.chdir(tmp_path)
     (tmp_path / "drop_views.sql").write_text(
         "DROP VIEW IF EXISTS pet_year;", encoding="utf-8"

@@ -540,7 +540,7 @@ pet_values
 ) AS forecast
 $$ ;
 
-CREATE MATERIALIZED VIEW public.pet_year_avg AS
+CREATE MATERIALIZED VIEW public.pet_year_stats AS
 WITH pet_with_seasons AS (
 SELECT
 p.location_id::smallint AS location_id,
@@ -558,108 +558,27 @@ SELECT
 location_id::integer AS location_id,
 year::smallint AS year,
 season,
-ROUND (AVG (pet)::numeric, 1)::real AS pet
-FROM pet_with_seasons
-GROUP BY
-location_id,
-year,
-season ;
-
-CREATE UNIQUE INDEX if not exists
-pet_year_avg_location_year_season_uidx
-ON public.pet_year_avg (location_id, year, season) ;
-
-CREATE INDEX if not exists pet_year_avg_year_idx
-ON public.pet_year_avg (year) ;
-
-CREATE INDEX if not exists pet_year_avg_season_idx
-ON public.pet_year_avg (season) ;
-
-CREATE MATERIALIZED VIEW public.pet_year_max AS
-WITH pet_with_seasons AS (
-SELECT
-p.location_id::smallint AS location_id,
-EXTRACT (YEAR FROM p.date)::smallint AS year,
-p_seasons.season,
-p.pet::real AS pet
-FROM public.pet AS p
-CROSS JOIN LATERAL (
-VALUES
-(public.pet_annual_season ()),
-(public.pet_season (p.date))
-) AS p_seasons (season)
-)
-SELECT
-location_id::smallint AS location_id,
-year::smallint AS year,
-season,
-ROUND (MAX (pet)::numeric, 1)::real AS pet
-FROM pet_with_seasons
-GROUP BY
-location_id,
-year,
-season ;
-
-CREATE UNIQUE INDEX if not exists
-pet_year_max_location_year_season_uidx
-ON public.pet_year_max (location_id, year, season) ;
-
-CREATE INDEX if not exists pet_year_max_year_idx
-ON public.pet_year_max (year) ;
-
-CREATE INDEX if not exists pet_year_max_season_idx
-ON public.pet_year_max (season) ;
-
-CREATE MATERIALIZED VIEW public.pet_year AS
-SELECT
-p.location_id::smallint AS location_id,
-p.date,
-EXTRACT (YEAR FROM p.date)::smallint AS year,
-p.pet::real AS pet
-FROM public.pet AS p ;
-
-CREATE UNIQUE INDEX if not exists pet_year_location_date_uidx
-ON public.pet_year (location_id, date) ;
-
-CREATE INDEX if not exists pet_year_location_year_idx
-ON public.pet_year (location_id, year) ;
-
-CREATE INDEX if not exists pet_year_year_idx
-ON public.pet_year (year) ;
-
-CREATE MATERIALIZED VIEW public.pet_percentiles AS
-WITH pet_with_seasons AS (
-SELECT
-EXTRACT (YEAR FROM p.date)::smallint AS year,
-p.location_id::smallint AS location_id,
-p_seasons.season,
-p.pet::real AS pet
-FROM public.pet AS p
-CROSS JOIN LATERAL (
-VALUES
-(public.pet_annual_season ()),
-(public.pet_season (p.date))
-) AS p_seasons (season)
-)
-SELECT
-year::smallint AS year,
-location_id::smallint AS location_id,
-season,
+ROUND (AVG (pet)::numeric, 1)::real AS avg_pet,
+ROUND (MAX (pet)::numeric, 1)::real AS max_pet,
 ROUND ((PERCENTILE_CONT (0.1) WITHIN GROUP (ORDER BY pet))::numeric,
 1)::real AS p10,
 ROUND ((PERCENTILE_CONT (0.9) WITHIN GROUP (ORDER BY pet))::numeric,
 1)::real AS p90
 FROM pet_with_seasons
 GROUP BY
-year,
 location_id,
+year,
 season ;
 
-CREATE UNIQUE INDEX if not exists pet_percentiles_location_year_season_uidx
-ON public.pet_percentiles (location_id, year, season) ;
+CREATE UNIQUE INDEX if not exists pet_year_stats_location_year_season_uidx
+ON public.pet_year_stats (location_id, year, season) ;
 
-CREATE INDEX if not exists pet_percentiles_year_idx
-ON public.pet_percentiles (year) ;
+CREATE INDEX if not exists pet_year_stats_year_idx
+ON public.pet_year_stats (year) ;
+
+CREATE INDEX if not exists pet_year_stats_season_idx
+ON public.pet_year_stats (season) ;
+
 
 CREATE MATERIALIZED VIEW public.pet_forecast AS
 WITH pet_with_seasons AS (
@@ -769,9 +688,9 @@ SELECT
 a.location_id::smallint AS location_id,
 a.year::smallint AS year,
 a.season,
-a.pet::real AS pet,
+a.avg_pet::real AS pet,
 0 AS source_order
-FROM public.pet_year_avg AS a
+FROM public.pet_year_stats AS a
 UNION ALL
 SELECT
 f.location_id::smallint AS location_id,
@@ -801,33 +720,27 @@ FROM deduplicated_yearly_avg
 WHERE year = 2000
 )
 SELECT
-a.location_id::smallint,
-a.year::smallint,
-a.season,
-a.pet::real AS avg_pet,
-m.pet::real AS max_pet,
+s.location_id::smallint,
+s.year::smallint,
+s.season,
+s.avg_pet::real AS avg_pet,
+s.max_pet::real AS max_pet,
 l.city,
 l.state,
-p.p10::real,
-p.p90::real,
+s.p10::real,
+s.p90::real,
 f.lower::real AS future_lower,
 f.upper::real AS future_upper,
-ROUND ((a.pet - y2k.pet)::numeric, 2)::real AS change_from_2000
-FROM public.pet_year_avg AS a
-JOIN public.locations AS l ON l.id = a.location_id
-JOIN public.pet_year_max AS m ON m.location_id = a.location_id
-AND m.year = a.year
-AND m.season = a.season
-JOIN public.pet_percentiles AS p ON p.location_id = a.location_id
-AND p.year = a.year
-AND p.season = a.season
-LEFT JOIN public.pet_forecast AS f ON f.location_id = a.location_id
+ROUND ((s.avg_pet - y2k.pet)::numeric, 2)::real AS change_from_2000
+FROM public.pet_year_stats AS s
+JOIN public.locations AS l ON l.id = s.location_id
+LEFT JOIN public.pet_forecast AS f ON f.location_id = s.location_id
 AND f.year = 2100::smallint
-AND f.season = a.season
-LEFT JOIN year_2000_value AS y2k ON y2k.location_id = a.location_id
-AND y2k.season = a.season
+AND f.season = s.season
+LEFT JOIN year_2000_value AS y2k ON y2k.location_id = s.location_id
+AND y2k.season = s.season
 WHERE
-a.location_id > 0 ;
+s.location_id > 0 ;
 
 RESET statement_timeout ;
 RESET lock_timeout ;
