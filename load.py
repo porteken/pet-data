@@ -161,7 +161,7 @@ def refresh_query_planner_statistics(conn: Connection[Any]) -> None:
     LOGGER.info("Finished refreshing query planner statistics.")
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Load shard-aware PET CSV outputs into the database and recreate views."
@@ -220,7 +220,7 @@ def _parse_args() -> argparse.Namespace:
         choices=TABLE_NAMES,
         help="Table to leave untouched during this run.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _discover_csv_inputs(

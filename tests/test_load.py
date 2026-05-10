@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
+import load
 from load import (
     TABLE_NAMES,
     _discover_csv_inputs,
@@ -48,6 +51,89 @@ class FakeConnection:
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self.executed_statements)
+
+
+class TestParseArgs:
+    def test_default_args(self) -> None:
+        args = load._parse_args([])
+        assert args.locations_csv == "locations.csv"
+        assert args.pet_csv == "pet.csv"
+        assert args.load_shard_index == 0
+        assert args.load_shard_count == 1
+
+    def test_custom_args(self) -> None:
+        args = load._parse_args(
+            [
+                "--pet-csv",
+                "other.csv",
+                "--load-shard-index",
+                "1",
+                "--load-shard-count",
+                "2",
+            ]
+        )
+        assert args.pet_csv == "other.csv"
+        assert args.load_shard_index == 1
+        assert args.load_shard_count == 2
+
+
+class TestDiscoverShardCsvInputs:
+    def test_returns_empty_when_root_none(self) -> None:
+        assert (
+            load._discover_shard_csv_inputs(
+                shard_root=None,
+                shard_file_name="f.csv",
+                shard_count=1,
+                shard_partition_key="k",
+            )
+            == []
+        )
+
+    def test_returns_empty_when_root_missing(self, tmp_path: Path) -> None:
+        assert (
+            load._discover_shard_csv_inputs(
+                shard_root=tmp_path / "missing",
+                shard_file_name="f.csv",
+                shard_count=1,
+                shard_partition_key="k",
+            )
+            == []
+        )
+
+    def test_raises_on_multiple_groups(self, tmp_path: Path) -> None:
+        root = tmp_path / "root"
+        (root / "k=1").mkdir(parents=True)
+        (root / "k=1" / "f.csv").touch()
+        (root / "k=2").mkdir(parents=True)
+        (root / "k=2" / "f.csv").touch()
+
+        with pytest.raises(RuntimeError, match="multiple analytics shard groups"):
+            load._discover_shard_csv_inputs(
+                shard_root=root,
+                shard_file_name="f.csv",
+                shard_count=None,
+                shard_partition_key="k",
+            )
+
+
+class TestExecuteSqlFileErrors:
+    def test_logs_warning_on_missing_file(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        conn = FakeConnection()
+        with caplog.at_level(logging.WARNING):
+            execute_sql_file(cast("Any", conn), "nonexistent.sql")
+        assert "SQL file nonexistent.sql not found" in caplog.text
+
+    def test_skips_empty_file(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sql_path = tmp_path / "empty.sql"
+        sql_path.touch()
+        conn = FakeConnection()
+        with caplog.at_level(logging.INFO):
+            execute_sql_file(cast("Any", conn), sql_path)
+        assert "is empty" in caplog.text
 
 
 class TestFilterPathsByPartitionValue:
@@ -220,6 +306,56 @@ class TestRefreshQueryPlannerStatistics:
             "ANALYZE public.locations",
             "ANALYZE public.pet",
         ]
+
+
+class TestMain:
+    def test_main_runs_with_defaults(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import load
+
+        # Mock dependencies to avoid actual DB and file ops
+        monkeypatch.setattr(
+            load,
+            "_parse_args",
+            lambda: argparse.Namespace(
+                locations_csv=str(tmp_path / "loc.csv"),
+                pet_csv=str(tmp_path / "pet.csv"),
+                pet_root=str(tmp_path / "pet_root"),
+                prefer_pet_csv=True,
+                analytics_root=str(tmp_path / "ana"),
+                analytics_shard_count=20,
+                load_shard_index=0,
+                load_shard_count=1,
+                copy_batch_size=10,
+                append_only=False,
+                skip_drop_views=True,
+                skip_create_views=True,
+                truncate_tables=None,
+                skip_tables=["pet"],
+            ),
+        )
+
+        monkeypatch.setattr(
+            load, "resolve_database_uri", lambda: "postgresql://user:pass@host/db"
+        )
+
+        mock_conn = MagicMock()
+        monkeypatch.setattr(load.psycopg, "connect", lambda _uri: mock_conn)
+
+        # Mock table loading
+        monkeypatch.setattr(load, "_copy_csv_file_in_batches", MagicMock())
+        monkeypatch.setattr(load, "_copy_parquet_file_in_batches", MagicMock())
+        monkeypatch.setattr(load, "execute_sql_file", MagicMock())
+        monkeypatch.setattr(load, "refresh_query_planner_statistics", MagicMock())
+
+        # Create dummy locations file
+        loc_file = tmp_path / "loc.csv"
+        loc_file.write_text("id,city,state,lat,lng\n0,A,B,1,2\n")
+
+        load.main()
+
+        assert mock_conn.close.called
 
 
 class TestDiscoverLocationsCsvPaths:

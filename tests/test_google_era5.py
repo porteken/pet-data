@@ -30,6 +30,48 @@ from google_era5 import (
 )
 
 
+class TestArcoStableEndYear:
+    def test_returns_previous_year_early_in_year(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import datetime, timezone
+
+        fake_now = datetime(2024, 3, 1, tzinfo=timezone.utc)
+
+        class FakeDatetime:
+            @classmethod
+            def now(cls, tz: object = None) -> datetime:
+                _ = (cls, tz)
+                return fake_now
+
+        monkeypatch.setattr(google_era5, "datetime", FakeDatetime)
+        assert google_era5._arco_stable_end_year() == 2022
+
+    def test_returns_last_year_later_in_year(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import datetime, timezone
+
+        fake_now = datetime(2024, 5, 1, tzinfo=timezone.utc)
+
+        class FakeDatetime:
+            @classmethod
+            def now(cls, tz: object = None) -> datetime:
+                _ = (cls, tz)
+                return fake_now
+
+        monkeypatch.setattr(google_era5, "datetime", FakeDatetime)
+        assert google_era5._arco_stable_end_year() == 2023
+
+
+class TestResolveStoreVariables:
+    def test_raises_on_missing_variables(self) -> None:
+        from google_era5 import _resolve_store_variables
+
+        with pytest.raises(KeyError, match="Required ARCO variables missing"):
+            _resolve_store_variables({"10u"})
+
+
 class TestDefaultBatchHours:
     def test_is_monthly(self) -> None:
         assert DEFAULT_BATCH_HOURS == 24 * 30
@@ -182,6 +224,54 @@ class TestLongitudeNormalization:
             normalized,
             np.array([-104.75, -80.5, -74.0, 0.0, 179.75, -179.0]),
         )
+
+
+class TestComputeLocationFrameErrors:
+    def test_warns_on_extreme_mrt(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Trigger the MRT sanity range warning."""
+        from unittest.mock import MagicMock
+
+        # Setup mock dataset
+        mock_ds = MagicMock()
+        mock_ds.__getitem__.return_value = mock_ds
+        mock_ds.sel.return_value = mock_ds
+        mock_ds.compute.return_value = mock_ds
+        mock_ds.assign_coords.return_value = mock_ds
+
+        fake_time = MagicMock()
+        fake_time.values = np.array([1000000], dtype="int64")
+        mock_ds.time = fake_time
+
+        # Each var access should return something with .values as a 2D array (n_locs, n_times)
+        mock_ds.values = np.array([[300.0], [300.0]])
+
+        # Setup thermofeel mock
+        tf = MagicMock()
+        # MRT in Kelvin. 400K is ~126.85C (>120C), 300K is ~26.85C (valid)
+        tf.calculate_mean_radiant_temperature.return_value = np.array([400.0, 300.0])
+
+        def fake_import(name: str) -> object:
+            if name == "thermofeel":
+                return tf
+            return MagicMock()
+
+        monkeypatch.setattr(google_era5, "_import_optional_module", fake_import)
+
+        cities = pd.DataFrame(
+            {"location_id": [0, 1], "lat": [40.0, 41.0], "lng": [-75.0, -76.0]}
+        )
+
+        import dask
+
+        monkeypatch.setattr(dask, "config", MagicMock())
+
+        from google_era5 import _compute_location_frame
+
+        _compute_location_frame(mock_ds, cities, start_h=0, end_h=0, compute_workers=1)
+
+        assert "Discarding 1 MRT value(s) outside sanity range" in caplog.text
 
 
 class TestComputePetChunk:

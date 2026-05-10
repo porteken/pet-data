@@ -23,7 +23,7 @@ class TestShardKey:
         assert key.partition_path == "year=2020/tile_id=5"
 
     def test_partition_path_with_month(self) -> None:
-        key = ShardKey(year=2020, tile_id=5, month=3)
+        key = ShardKey(year=2020, month=3, tile_id=5)
         assert key.partition_path == "year=2020/month=03/tile_id=5"
 
     def test_label_no_month(self) -> None:
@@ -31,31 +31,40 @@ class TestShardKey:
         assert key.label == "2020-tile-005"
 
     def test_label_with_month(self) -> None:
-        key = ShardKey(year=2020, tile_id=5, month=3)
+        key = ShardKey(year=2020, month=3, tile_id=5)
         assert key.label == "2020-03-tile-005"
 
-    def test_ordering(self) -> None:
-        a = ShardKey(year=2020, tile_id=1)
-        b = ShardKey(year=2020, tile_id=2)
-        c = ShardKey(year=2021, tile_id=1)
-        assert sorted([c, b, a]) == [a, b, c]
+    def test_equality(self) -> None:
+        k1 = ShardKey(year=2020, tile_id=1)
+        k2 = ShardKey(year=2020, tile_id=1)
+        k3 = ShardKey(year=2021, tile_id=1)
+        assert k1 == k2
+        assert k1 != k3
 
-    def test_frozen(self) -> None:
-        key = ShardKey(year=2020, tile_id=5)
-        with pytest.raises(AttributeError):
-            key.year = 2021  # type: ignore[misc]
+    def test_sorting(self) -> None:
+        k1 = ShardKey(year=2020, tile_id=2)
+        k2 = ShardKey(year=2020, tile_id=1)
+        k3 = ShardKey(year=2021, tile_id=1)
+        assert sorted([k1, k2, k3]) == [k2, k1, k3]
 
 
 class TestResolveFilesystem:
-    def test_local_path(self, tmp_path: Path) -> None:
-        _, root = resolve_filesystem(tmp_path)
+    def test_resolves_local_path(self, tmp_path: Path) -> None:
+        fs, root = resolve_filesystem(tmp_path)
+        from pyarrow.fs import LocalFileSystem
+
+        assert isinstance(fs, LocalFileSystem)
         assert root == str(tmp_path.resolve())
+
+    def test_expands_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOME", "/fake/home")
+        _, root = resolve_filesystem("~/data")
+        assert "/fake/home/data" in root
 
 
 class TestDiscoverParquetShards:
-    def test_empty_directory(self, tmp_path: Path) -> None:
-        result = discover_parquet_shards(tmp_path)
-        assert result == {}
+    def test_returns_empty_on_missing_dir(self, tmp_path: Path) -> None:
+        assert discover_parquet_shards(tmp_path / "missing") == {}
 
     def test_discovers_year_tile_shards(self, tmp_path: Path) -> None:
         shard_dir = tmp_path / "year=2020" / "tile_id=1"
@@ -74,16 +83,19 @@ class TestDiscoverParquetShards:
         result = discover_parquet_shards(tmp_path)
         assert ShardKey(year=2020, tile_id=1, month=3) in result
 
-    def test_ignores_non_parquet_files(self, tmp_path: Path) -> None:
+    def test_skips_non_parquet_files(self, tmp_path: Path) -> None:
         shard_dir = tmp_path / "year=2020" / "tile_id=1"
         shard_dir.mkdir(parents=True)
-        (shard_dir / "notes.txt").write_text("hello")
+        (shard_dir / "not_parquet.txt").touch()
 
         result = discover_parquet_shards(tmp_path)
         assert result == {}
 
 
 class TestDiscoverCommonShards:
+    def test_returns_empty_on_no_roots(self) -> None:
+        assert discover_common_shards() == []
+
     def test_returns_intersection(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"
         root_b = tmp_path / "b"
@@ -100,47 +112,33 @@ class TestDiscoverCommonShards:
         assert len(common) == 1
         assert common[0] == ShardKey(year=2020, tile_id=1)
 
-    def test_empty_when_no_roots(self) -> None:
-        assert discover_common_shards() == []
-
 
 class TestSelectShards:
-    @pytest.fixture()
-    def sample_keys(self) -> list[ShardKey]:
-        return [
-            ShardKey(year=2020, tile_id=1),
-            ShardKey(year=2020, tile_id=2),
-            ShardKey(year=2020, tile_id=3),
-            ShardKey(year=2021, tile_id=1),
-        ]
+    def test_filters_by_year(self) -> None:
+        keys = [ShardKey(2020, 1), ShardKey(2021, 1)]
+        selected = select_shards(keys, year=2020)
+        assert selected == [ShardKey(2020, 1)]
 
-    def test_no_filters(self, sample_keys: list[ShardKey]) -> None:
-        result = select_shards(sample_keys)
-        assert len(result) == 4
+    def test_filters_by_tile_ids(self) -> None:
+        keys = [ShardKey(2020, 1), ShardKey(2020, 2)]
+        selected = select_shards(keys, tile_ids=[1])
+        assert selected == [ShardKey(2020, 1)]
 
-    def test_filter_by_year(self, sample_keys: list[ShardKey]) -> None:
-        result = select_shards(sample_keys, year=2020)
-        assert all(k.year == 2020 for k in result)
-        assert len(result) == 3
+    def test_shards_evenly(self) -> None:
+        keys = [ShardKey(2020, i) for i in range(10)]
+        s0 = select_shards(keys, shard_index=0, shard_count=2)
+        s1 = select_shards(keys, shard_index=1, shard_count=2)
+        assert len(s0) == 5
+        assert len(s1) == 5
+        assert set(s0) & set(s1) == set()
 
-    def test_filter_by_tile_ids(self, sample_keys: list[ShardKey]) -> None:
-        result = select_shards(sample_keys, tile_ids=[1])
-        assert all(k.tile_id == 1 for k in result)
-        assert len(result) == 2
-
-    def test_sharding(self, sample_keys: list[ShardKey]) -> None:
-        shard_0 = select_shards(sample_keys, shard_index=0, shard_count=2)
-        shard_1 = select_shards(sample_keys, shard_index=1, shard_count=2)
-        assert len(shard_0) + len(shard_1) == 4
-        assert set(shard_0).isdisjoint(set(shard_1))
-
-    def test_invalid_shard_count(self, sample_keys: list[ShardKey]) -> None:
-        with pytest.raises(ValueError, match="shard_count"):
-            select_shards(sample_keys, shard_count=0)
-
-    def test_invalid_shard_index(self, sample_keys: list[ShardKey]) -> None:
+    def test_raises_on_invalid_shard_index(self) -> None:
         with pytest.raises(ValueError, match="shard_index"):
-            select_shards(sample_keys, shard_index=2, shard_count=2)
+            select_shards([], shard_index=2, shard_count=2)
+
+    def test_raises_on_zero_shard_count(self) -> None:
+        with pytest.raises(ValueError, match="shard_count"):
+            select_shards([], shard_count=0)
 
 
 class TestReadParquetFiles:

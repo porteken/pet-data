@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import cities
 from cities import CITY_COORD_DECIMALS, filter_bounding_box, process_cities
 
 
@@ -24,6 +27,65 @@ class TestFilterBoundingBox:
         df = pd.DataFrame({"lat": [10.0], "lng": [-130.0]})
         result = filter_bounding_box(df)
         assert len(result) == 0
+
+
+class TestLoadData:
+    def test_normalizes_column_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        df = pd.DataFrame(
+            {
+                "City": ["A"],
+                "State": ["X"],
+                "Population": [1000],
+                "lat": [30.0],
+                "lon": [-90.0],
+            }
+        )
+        monkeypatch.setattr(pd, "read_csv", lambda _url: df)
+        result = cities.load_data("http://example.com")
+        assert list(result.columns) == ["city", "state", "population", "lat", "lng"]
+
+    def test_normalizes_alternative_column_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        df = pd.DataFrame(
+            {
+                "name": ["A"],
+                "State": ["X"],
+                "pop": [1000],
+                "lat": [30.0],
+                "lon": [-90.0],
+            }
+        )
+        monkeypatch.setattr(pd, "read_csv", lambda _url: df)
+        result = cities.load_data("http://example.com")
+        assert list(result.columns) == ["city", "state", "population", "lat", "lng"]
+
+
+class TestMain:
+    def test_main_saves_csv(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import cities
+
+        df = pd.DataFrame(
+            {
+                "city": ["A"],
+                "state": ["X"],
+                "lat": [30.0],
+                "lng": [-90.0],
+                "population": [1000],
+            }
+        )
+        monkeypatch.setattr(cities, "load_data", lambda _url: df)
+        monkeypatch.setattr(cities, "filter_bounding_box", lambda df: df)
+        monkeypatch.setattr(cities, "process_cities", lambda df: df)
+
+        output_file = tmp_path / "cities.csv"
+        monkeypatch.chdir(tmp_path)
+
+        cities.main()
+
+        assert output_file.exists()
 
 
 class TestProcessCities:
