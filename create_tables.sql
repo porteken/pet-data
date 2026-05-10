@@ -73,6 +73,8 @@ ALTER COLUMN location_id TYPE smallint USING location_id::smallint,
 ALTER COLUMN pet TYPE real USING pet::real ;
 
 DO $$
+DECLARE
+public_schema constant text := 'public' ;
 BEGIN
 IF EXISTS (
 SELECT
@@ -81,7 +83,7 @@ FROM pg_catalog.pg_class AS i
 JOIN pg_catalog.pg_index AS ix ON ix.indexrelid = i.oid
 JOIN pg_catalog.pg_class AS t ON t.oid = ix.indrelid
 JOIN pg_catalog.pg_namespace AS n ON n.oid = i.relnamespace
-WHERE n.nspname = 'public'
+WHERE n.nspname = public_schema
 AND i.relname = 'id'
 AND t.relname = 'pet'
 ) THEN

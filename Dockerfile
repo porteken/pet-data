@@ -54,10 +54,14 @@ print(versions.get("asciitree", "0.3.3"))
 PY
 
 RUN ASCIITREE_VER=$(python /tmp/prepare-requirements.py) && \
-    uv pip compile --generate-hashes /tmp/reqs.in --constraint /tmp/constraints.txt -o /tmp/cloudrun-worker-requirements.txt && \
-    CMD="uv pip" && $CMD install --python "$VIRTUAL_ENV/bin/python" "asciitree==$ASCIITREE_VER"
+    uv pip compile --generate-hashes /tmp/reqs.in \
+        --constraint /tmp/constraints.txt \
+        -o /tmp/cloudrun-worker-requirements.txt && \
+    CMD="uv pip" && "$CMD" install --python "$VIRTUAL_ENV/bin/python" "asciitree==$ASCIITREE_VER"
 
-RUN uv pip install --no-build --require-hashes --python "$VIRTUAL_ENV/bin/python" --requirement /tmp/cloudrun-worker-requirements.txt
+RUN uv pip install --no-build --require-hashes \
+    --python "$VIRTUAL_ENV/bin/python" \
+    --requirement /tmp/cloudrun-worker-requirements.txt
 
 RUN "$VIRTUAL_ENV/bin/python" - <<'PY'
 import dask

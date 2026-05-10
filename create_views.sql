@@ -38,16 +38,48 @@ AS $$
 SELECT 'Annual'::text
 $$ ;
 
+CREATE OR REPLACE FUNCTION public.pet_winter ()
+RETURNS text
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+SELECT 'Winter'::text
+$$ ;
+
+CREATE OR REPLACE FUNCTION public.pet_spring ()
+RETURNS text
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+SELECT 'Spring'::text
+$$ ;
+
+CREATE OR REPLACE FUNCTION public.pet_summer ()
+RETURNS text
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+SELECT 'Summer'::text
+$$ ;
+
+CREATE OR REPLACE FUNCTION public.pet_fall ()
+RETURNS text
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+SELECT 'Fall'::text
+$$ ;
+
 CREATE OR REPLACE FUNCTION public.pet_season (input_date date)
 RETURNS text
 LANGUAGE SQL
 IMMUTABLE
 AS $$
 SELECT CASE
-WHEN EXTRACT (MONTH FROM input_date)::int IN (12, 1, 2) THEN 'Winter'
-WHEN EXTRACT (MONTH FROM input_date)::int IN (3, 4, 5) THEN 'Spring'
-WHEN EXTRACT (MONTH FROM input_date)::int IN (6, 7, 8) THEN 'Summer'
-ELSE 'Fall'
+WHEN EXTRACT (MONTH FROM input_date)::int IN (12, 1, 2) THEN public.pet_winter ()
+WHEN EXTRACT (MONTH FROM input_date)::int IN (3, 4, 5) THEN public.pet_spring ()
+WHEN EXTRACT (MONTH FROM input_date)::int IN (6, 7, 8) THEN public.pet_summer ()
+ELSE public.pet_fall ()
 END
 $$ ;
 
@@ -627,12 +659,12 @@ WHEN MOD (y.year, 4) = 0
 AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
 ELSE 365
 END
-WHEN y.season = 'Winter' THEN CASE
+WHEN y.season = public.pet_winter () THEN CASE
 WHEN MOD (y.year, 4) = 0
 AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
 ELSE 90
 END
-WHEN y.season IN ('Spring', 'Summer') THEN 92
+WHEN y.season IN (public.pet_spring (), public.pet_summer ()) THEN 92
 ELSE 91
 END
 -- noqa: enable=LT01
@@ -723,12 +755,12 @@ WHEN MOD (y.year, 4) = 0
 AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
 ELSE 365
 END
-WHEN y.season = 'Winter' THEN CASE
+WHEN y.season = public.pet_winter () THEN CASE
 WHEN MOD (y.year, 4) = 0
 AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
 ELSE 90
 END
-WHEN y.season IN ('Spring', 'Summer') THEN 92
+WHEN y.season IN (public.pet_spring (), public.pet_summer ()) THEN 92
 ELSE 91
 END
 ), forecast_inputs AS (
