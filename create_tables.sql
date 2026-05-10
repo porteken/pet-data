@@ -1,20 +1,12 @@
 -- noqa: disable=LT05
 -- squawk-ignore-file prefer-bigint-over-smallint,changing-column-type,prefer-robust-stmts,require-concurrent-index-creation
 -- noqa: enable=LT05
--- This bootstrap/migration script intentionally keeps compact types and applies
--- one-time type rewrites so the on-disk schema matches the repository's tested
--- expectations.
 
 set statement_timeout = '5s' ;
 set lock_timeout = '1s' ;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year_avg CASCADE ;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year_max CASCADE ;
 
--- Note: We use CREATE TABLE IF NOT EXISTS where possible, 
--- but for a full rebuild we might still want to DROP or just ALTER.
--- The user asked to "allow for any additional columns or changes", 
--- which implies ALTER but for simplicity in this pipeline, 
--- we can recreate or ensure columns exist.
 
 CREATE TABLE IF NOT EXISTS public.locations (
 id smallint PRIMARY KEY,
@@ -122,9 +114,3 @@ DROP TABLE public.pet_forecast CASCADE ;
 END IF ;
 END IF ;
 END $$ ;
-
--- Derived analytics now live in create_views.sql as views/materialized views:
---   public.pet_forecast
---   public.pet_year_stats
---   public.city_rankings_view
--- `pet_change` is now folded into public.city_rankings_view.

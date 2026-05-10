@@ -22,10 +22,8 @@ REQUIRED_TABLES = [
 
 REQUIRED_MATERIALIZED_VIEWS = [
     "pet_forecast",
-    "pet_percentiles",
-    "pet_year",
-    "pet_year_avg",
-    "pet_year_max",
+    "pet_forecast_max",
+    "pet_year_stats",
 ]
 
 REQUIRED_VIEWS = [

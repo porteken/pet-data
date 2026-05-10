@@ -1,6 +1,4 @@
 -- squawk-ignore-file require-concurrent-index-creation
--- This file is executed as a single script in some tools that wrap it in a
--- transaction, so plain CREATE INDEX statements are intentional here.
 
 set statement_timeout = '0' ;
 set lock_timeout = '0' ;
@@ -623,21 +621,15 @@ y.year::smallint AS year,
 y.season,
 y.pet::real AS pet
 FROM yearly_pet AS y
--- Seasons are grouped by the calendar year of each date, matching
--- public.pet_season() (for example: Winter 2024 = Jan/Feb/Dec 2024).
--- Sqruff v0.38.0 still flags these <> comparisons as LT01 even with
--- comparison_operator spacing configured as touch; keep them compact so
--- Squawk does not read "< >" as an invalid operation.
--- noqa: disable=LT01
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
 WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) <> 0 OR MOD (y.year, 400) = 0) THEN 366
+AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
 ELSE 365
 END
 WHEN y.season = 'Winter' THEN CASE
 WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) <> 0 OR MOD (y.year, 400) = 0) THEN 91
+AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
 ELSE 90
 END
 WHEN y.season IN ('Spring', 'Summer') THEN 92
@@ -681,6 +673,101 @@ ON public.pet_forecast (year) ;
 
 CREATE INDEX if not exists pet_forecast_season_idx
 ON public.pet_forecast (season) ;
+
+CREATE MATERIALIZED VIEW public.pet_forecast_max AS
+WITH pet_with_seasons AS (
+SELECT
+p.location_id::smallint AS location_id,
+p.date,
+p_seasons.season,
+p.pet::real AS pet
+FROM public.pet AS p
+CROSS JOIN LATERAL (
+VALUES
+(public.pet_annual_season ()),
+(public.pet_season (p.date))
+) AS p_seasons (season)
+), daily_pet AS (
+SELECT
+p.location_id::smallint AS location_id,
+p.date,
+p.season,
+MAX (p.pet)::real AS pet
+FROM pet_with_seasons AS p
+GROUP BY
+p.location_id,
+p.date,
+p.season
+), yearly_pet AS (
+SELECT
+d.location_id::smallint AS location_id,
+EXTRACT (YEAR FROM d.date)::smallint AS year,
+d.season,
+MAX (d.pet)::real AS pet,
+COUNT (*)::int AS days_present
+FROM daily_pet AS d
+GROUP BY
+d.location_id,
+EXTRACT (YEAR FROM d.date)::smallint,
+d.season
+), complete_yearly_pet AS (
+SELECT
+y.location_id::smallint AS location_id,
+y.year::smallint AS year,
+y.season,
+y.pet::real AS pet
+FROM yearly_pet AS y
+WHERE y.days_present = CASE
+WHEN y.season = public.pet_annual_season () THEN CASE
+WHEN MOD (y.year, 4) = 0
+AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
+ELSE 365
+END
+WHEN y.season = 'Winter' THEN CASE
+WHEN MOD (y.year, 4) = 0
+AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
+ELSE 90
+END
+WHEN y.season IN ('Spring', 'Summer') THEN 92
+ELSE 91
+END
+), forecast_inputs AS (
+SELECT
+location_id::smallint AS location_id,
+season,
+array_agg (year ORDER BY year) AS years,
+array_agg (pet ORDER BY year) AS pet_values
+FROM complete_yearly_pet
+GROUP BY
+location_id,
+season
+)
+SELECT
+forecast.location_id::smallint AS location_id,
+forecast.year::smallint AS year,
+inputs.season,
+forecast.pet::real AS pet,
+forecast.lower::real AS lower,
+forecast.upper::real AS upper,
+forecast.model_type,
+forecast.full_years_used,
+forecast.warming_rate::real AS warming_rate,
+forecast.acceleration::real AS acceleration
+FROM forecast_inputs AS inputs
+CROSS JOIN LATERAL public.pet_forecast_for_location (
+inputs.location_id::integer,
+inputs.years,
+inputs.pet_values
+) AS forecast ;
+
+CREATE UNIQUE INDEX if not exists pet_forecast_max_location_year_season_uidx
+ON public.pet_forecast_max (location_id, year, season) ;
+
+CREATE INDEX if not exists pet_forecast_max_year_idx
+ON public.pet_forecast_max (year) ;
+
+CREATE INDEX if not exists pet_forecast_max_season_idx
+ON public.pet_forecast_max (season) ;
 
 CREATE VIEW public.city_rankings_view AS
 WITH combined_yearly_avg AS (
