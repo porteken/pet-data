@@ -49,15 +49,15 @@ class PetConstants:
     tbody_set: float = 0.1 * 34.0 + 0.9 * 36.6
 
 
-def svp_murray(t_k: object) -> object:
+def svp_murray(t_k: Dyn) -> Dyn:
     """Compute saturation vapor pressure from air temperature in Kelvin."""
-    t_c = cast("Any", t_k) - 273.15
+    t_c = t_k - 273.15
     return 6.11 * 10.0 ** (7.45 * t_c / (235.0 + t_c))
 
 
-def c2k(x: object) -> object:
+def c2k(x: Dyn) -> Dyn:
     """Convert Celsius to Kelvin."""
-    return cast("Any", x) + 273.15
+    return x + 273.15
 
 
 def _prepare_context(
@@ -110,7 +110,7 @@ def _prepare_context(
 
 
 def _get_systemp_clothing(ctx: State) -> State:
-    """Calculate clothing related intermediate matrices based on input context."""
+    """Calculate clothing-related intermediate matrices based on input context."""
     icl = ctx["icl"].copy()
     icl[icl < ICL_MIN_INPUT] = ICL_MIN_VALUE
     fcl = 1.0 + (0.31 * icl)

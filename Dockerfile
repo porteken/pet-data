@@ -53,11 +53,11 @@ Path("/tmp/constraints.txt").write_text("\n".join(f"{pkg}=={ver}" for pkg, ver i
 print(versions.get("asciitree", "0.3.3"))
 PY
 
-RUN ASCIITREE_VER=$(python /tmp/prepare-requirements.py) && \
+RUN python /tmp/prepare-requirements.py > /tmp/asciitree_ver.txt && \
     uv pip compile --generate-hashes /tmp/reqs.in \
         --constraint /tmp/constraints.txt \
         -o /tmp/cloudrun-worker-requirements.txt && \
-    CMD="uv pip" && "$CMD" install --python "$VIRTUAL_ENV/bin/python" "asciitree==$ASCIITREE_VER"
+    uv pip install --python "$VIRTUAL_ENV/bin/python" "asciitree==$(cat /tmp/asciitree_ver.txt)"
 
 RUN uv pip install --no-build --require-hashes \
     --python "$VIRTUAL_ENV/bin/python" \

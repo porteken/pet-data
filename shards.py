@@ -44,7 +44,7 @@ class ShardKey:
 
 
 def resolve_filesystem(base_uri: str | Path) -> tuple[Any, str]:
-    """Return a filesystem object plus normalized root path."""
+    """Return a filesystem object plus a normalized root path."""
     uri_text = str(base_uri)
     if "://" in uri_text:
         return fs_module.FileSystem.from_uri(uri_text)

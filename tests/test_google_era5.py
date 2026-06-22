@@ -233,7 +233,7 @@ class TestComputeLocationFrameErrors:
         """Trigger the MRT sanity range warning."""
         from unittest.mock import MagicMock
 
-        # Setup mock dataset
+        # Set up mock dataset
         mock_ds = MagicMock()
         mock_ds.__getitem__.return_value = mock_ds
         mock_ds.sel.return_value = mock_ds
@@ -269,7 +269,7 @@ class TestComputeLocationFrameErrors:
 
         from google_era5 import _compute_location_frame
 
-        _compute_location_frame(mock_ds, cities, start_h=0, end_h=0, compute_workers=1)
+        _compute_location_frame(mock_ds, cities, compute_workers=1)
 
         assert "Discarding 1 MRT value(s) outside sanity range" in caplog.text
 
@@ -400,75 +400,105 @@ class TestMainExitCodes:
         logger.exception.assert_called_once_with("ERA5 processing failed.")
 
 
+class _FakeVar:
+    def __init__(self, arr: np.ndarray | None = None) -> None:
+        self.values = arr if arr is not None else np.array([])
+
+
+class _FakeSel:
+    def sel(self, *_args: object, **_kw: object) -> _FakeSel:
+        return self
+
+
+class _FakeDataset:
+    def __init__(
+        self,
+        raw: dict[str, np.ndarray] | None = None,
+        time_vals: np.ndarray | None = None,
+    ) -> None:
+        self._raw = raw if raw is not None else {}
+        self.time = _FakeVar(time_vals if time_vals is not None else np.array([]))
+
+    def __getitem__(self, key: object) -> _FakeVar | _FakeDataset:
+        if isinstance(key, (list, tuple, set)):
+            return self
+        return _FakeVar(self._raw[str(key)])
+
+    def sel(self, *_args: object, **_kw: object) -> _FakeDataset:
+        return self
+
+    def assign_coords(self, **kwargs: object) -> _FakeDataset:
+        new_time_vals = self.time.values
+        if "time" in kwargs:
+            from typing import Any
+
+            val = cast("Any", kwargs["time"])
+            new_time_vals = val.values if hasattr(val, "values") else np.asarray(val)
+        return _FakeDataset(self._raw, new_time_vals)
+
+
+fake_ds = _FakeDataset()
+
+
+def assign_coords(**kwargs: object) -> _FakeDataset:
+    copy = _FakeDataset()
+    if "time" in kwargs:
+        copy.time = _FakeVar(np.asarray(kwargs["time"]))
+    return copy
+
+
+def compute() -> object:
+    return fake_ds
+
+
+def sel(*_args: object, **_kw: object) -> _FakeSel:
+    return _FakeSel()
+
+
+def _make_fake_dataset(
+    n_times: int,
+    n_locs: int,
+    hot_temp_k: float,
+    cold_temp_k: float,
+) -> MagicMock:
+    """Return a minimal xarray-like Dataset mock with two distinct temperature profiles."""
+    temps = np.empty((n_times, n_locs), dtype=float)
+    temps[:, 0] = hot_temp_k
+    temps[:, 1] = cold_temp_k
+    dew = temps - 10.0
+
+    np.full((n_times, n_locs), np.sqrt(2.0))
+
+    rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)
+    rad_net = np.zeros((n_times, n_locs))
+
+    raw = {
+        "10u": temps * 0 + np.sqrt(2.0),
+        "10v": temps * 0 + np.sqrt(2.0),
+        "2t": temps,
+        "2d": dew,
+        "ssrd": rad_net.copy(),
+        "strd": rad_down.copy(),
+        "ssr": rad_net.copy(),
+        "str": rad_net.copy(),
+        "fdir": rad_net.copy(),
+        "msdrswrf": rad_net.copy(),
+    }
+
+    epoch = pd.Timestamp(ERA5_TIME_ORIGIN)
+    start_h = int((pd.Timestamp("2010-01-01") - epoch).total_seconds() // 3600)
+    time_vals = np.arange(start_h, start_h + n_times, dtype=int)
+
+    return _FakeDataset(raw, time_vals)  # type: ignore[return-value]
+
+
 class TestComputeLocationFrameAlignment:
     """Verify weather value alignment to location and time."""
-
-    def _make_fake_dataset(
-        self,
-        n_times: int,
-        n_locs: int,
-        hot_temp_k: float,
-        cold_temp_k: float,
-    ) -> MagicMock:
-        """Return a minimal xarray-like Dataset mock with two distinct temperature profiles."""
-        temps = np.empty((n_times, n_locs), dtype=float)
-        temps[:, 0] = hot_temp_k
-        temps[:, 1] = cold_temp_k
-        dew = temps - 10.0
-
-        np.full((n_times, n_locs), np.sqrt(2.0))
-
-        rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)
-        rad_net = np.zeros((n_times, n_locs))
-
-        raw = {
-            "10u": temps * 0 + np.sqrt(2.0),
-            "10v": temps * 0 + np.sqrt(2.0),
-            "2t": temps,
-            "2d": dew,
-            "ssrd": rad_net.copy(),
-            "strd": rad_down.copy(),
-            "ssr": rad_net.copy(),
-            "str": rad_net.copy(),
-            "fdir": rad_net.copy(),
-            "msdrswrf": rad_net.copy(),
-        }
-
-        epoch = pd.Timestamp(ERA5_TIME_ORIGIN)
-        start_h = int((pd.Timestamp("2010-01-01") - epoch).total_seconds() // 3600)
-        time_vals = np.arange(start_h, start_h + n_times, dtype=int)
-
-        class _FakeVar:
-            def __init__(self, arr: np.ndarray) -> None:
-                self.values = arr
-
-        class _FakeDataset:
-            def __init__(self) -> None:
-                self._raw = raw
-                self.time = _FakeVar(time_vals)
-
-            def __getitem__(self, key: str) -> _FakeVar:
-                return _FakeVar(self._raw[key])
-
-            def assign_coords(self, **kwargs: object) -> _FakeDataset:
-                copy = _FakeDataset()
-                if "time" in kwargs:
-                    copy.time = _FakeVar(np.asarray(kwargs["time"]))
-                return copy
-
-        return _FakeDataset()  # type: ignore[return-value]
 
     def test_hot_city_has_higher_pet_than_cold_city(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """City 0 (hot) should consistently produce higher daily max PET than city 1 (cold)."""
-        n_times = 24
-        n_locs = 2
-        hot_k = 308.15
-        cold_k = 278.15
-
-        fake_ds = self._make_fake_dataset(n_times, n_locs, hot_k, cold_k)
-
+        """City 0 (hot) should consistently produce a higher daily max PET than city 1 (cold)."""
         import dask as _dask
 
         class _FakeDaskCtx:
@@ -483,21 +513,12 @@ class TestComputeLocationFrameAlignment:
             _dask, "config", MagicMock(set=lambda **_kw: _FakeDaskCtx())
         )
 
-        class _FakeSel:
-            def sel(self, *_args: object, **_kw: object) -> _FakeSel:
-                return self
-
-            def compute(self) -> object:
-                return fake_ds
-
-        class _FakeSliceable:
-            def __getitem__(self, _keys: object) -> _FakeSliceable:
-                return self
-
-            def sel(self, *_args: object, **_kw: object) -> _FakeSel:
-                return _FakeSel()
-
-        fake_ds_with_slice = _FakeSliceable()
+        fake_ds_with_slice = _make_fake_dataset(
+            n_times=24,
+            n_locs=2,
+            hot_temp_k=300.0,
+            cold_temp_k=280.0,
+        )
 
         cities = pd.DataFrame(
             {
@@ -510,8 +531,6 @@ class TestComputeLocationFrameAlignment:
         result = _compute_location_frame(
             fake_ds_with_slice,  # type: ignore[arg-type]
             cities,
-            start_h=0,
-            end_h=n_times - 1,
             compute_workers=1,
         )
 

@@ -388,19 +388,20 @@ class _FakeExecutor:
     def __init__(self, *, max_workers: int) -> None:
         self.max_workers = max_workers
 
-    def __enter__(self) -> _FakeExecutor:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        _ = (exc_type, exc, tb)
-
     def submit(
         self,
         fn: Callable[..., int],
         *args: object,
         **kwargs: object,
     ) -> _FakeFuture:
+        _ = self.max_workers
         return _FakeFuture(fn(*args, **kwargs))
+
+    def __enter__(self) -> _FakeExecutor:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _ = (exc_type, exc, tb)
 
 
 class TestMain:

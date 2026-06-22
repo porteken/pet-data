@@ -34,7 +34,7 @@ def load_data(url: str) -> DataFrame:
 
 
 def filter_bounding_box(df: DataFrame) -> DataFrame:
-    """Filter cities within continental US."""
+    """Filter cities within the continental US."""
     min_lat, max_lat = 24.25, 49.25
     min_lng, max_lng = -124.5, -66.5
     return df[

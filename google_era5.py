@@ -153,7 +153,7 @@ def _resolve_store_variables(array_names: set[str]) -> dict[str, str]:
 
 @cache
 def _import_optional_module(module_name: str) -> object:
-    """Import an optional dependency once and reuse the module object."""
+    """Import an optional dependency at once and reuse the module object."""
     return importlib.import_module(module_name)
 
 
@@ -391,8 +391,6 @@ def _filter_frame_to_months(
 def _compute_location_frame(
     ds: Dataset,
     selected_cities: DataFrame,
-    start_h: int,
-    end_h: int,
     compute_workers: int,
 ) -> DataFrame:
     dask = cast("Any", _import_optional_module("dask"))
@@ -410,18 +408,14 @@ def _compute_location_frame(
     )
     loc_ids = selected_cities["location_id"].values
 
-    city_selection = (
-        ds[ERA5_ALL_ARCO_VARIABLES]
-        .sel(time=slice(start_h, end_h))
-        .sel(
-            latitude=xr.DataArray(lats, dims="location"),
-            longitude=xr.DataArray(selection_lons, dims="location"),
-            method="nearest",
-        )
+    city_selection = ds[ERA5_ALL_ARCO_VARIABLES].sel(
+        latitude=xr.DataArray(lats, dims="location"),
+        longitude=xr.DataArray(selection_lons, dims="location"),
+        method="nearest",
     )
 
     with dask.config.set(scheduler="threads", num_workers=compute_workers):
-        city_data = city_selection.compute()
+        city_data = city_selection
 
     city_data = city_data.assign_coords(
         time=pd.to_datetime(city_data.time.values, unit="h", origin=ERA5_TIME_ORIGIN),
@@ -515,6 +509,7 @@ def _compute_location_frame(
     if not chunks:
         return pd.DataFrame(columns=["location_id", "date", "pet"])
 
+    results: list[DataFrame] = []
     n_chunk_workers = max(1, min(compute_workers, len(chunks)))
     if n_chunk_workers == 1:
         results = [_compute_pet_chunk(chunk) for chunk in chunks]
@@ -588,8 +583,6 @@ def _process_era5_batch_job(
     year: int,
     city_shard_index: int,
     batch_index: int,
-    start_h: int,
-    end_h: int,
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
@@ -606,9 +599,7 @@ def _process_era5_batch_job(
     frame = _compute_location_frame(
         ds,
         pending_batch_df,
-        start_h=start_h,
-        end_h=end_h,
-        compute_workers=compute_workers,
+        compute_workers,
     )
     frame = _filter_frame_to_months(frame, allowed_months)
 
@@ -633,8 +624,6 @@ def _process_era5_batch_with_thread_dataset(
     year: int,
     city_shard_index: int,
     batch_index: int,
-    start_h: int,
-    end_h: int,
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
@@ -656,8 +645,6 @@ def _process_era5_batch_with_thread_dataset(
                 year=year,
                 city_shard_index=city_shard_index,
                 batch_index=batch_index,
-                start_h=start_h,
-                end_h=end_h,
                 pending_batch_df=pending_batch_df,
                 compute_workers=compute_workers,
                 allowed_months=allowed_months,
@@ -726,7 +713,7 @@ def _run_era5_batch_jobs(
 
     if worker_count == 1:
         ds = _open_zarr_store()
-        for batch_index, start_h, end_h, pending_df in tqdm(
+        for batch_index, _start_h, _end_h, pending_df in tqdm(
             batch_jobs,
             desc=f"ERA5->PET {year}",
         ):
@@ -736,8 +723,6 @@ def _run_era5_batch_jobs(
                 year=year,
                 city_shard_index=city_shard_index,
                 batch_index=batch_index,
-                start_h=start_h,
-                end_h=end_h,
                 pending_batch_df=pending_df,
                 compute_workers=dask_workers,
                 allowed_months=allowed_months,
@@ -753,8 +738,6 @@ def _run_era5_batch_jobs(
                     year=year,
                     city_shard_index=city_shard_index,
                     batch_index=batch_index,
-                    start_h=start_h,
-                    end_h=end_h,
                     pending_batch_df=pending_df,
                     compute_workers=dask_workers,
                     allowed_months=allowed_months,

@@ -355,7 +355,7 @@ def test_pet_year_max_has_annual_and_seasons(db_conn: Connection[Any]) -> None:
 
 
 def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
-    """pet_percentiles should match yearly season-specific 10th/90th quantiles from pet."""
+    """pet_percentiles should yearly match season-specific 10th/90th quantiles from pet."""
     with db_conn.cursor() as cur:
         cur.execute(
             "WITH pet_with_seasons AS ("

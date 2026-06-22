@@ -40,10 +40,11 @@ class FakeCursor:
         """Initialize the fake cursor."""
         self.copy_query = ""
         self.copy_params: tuple[str, str] | None = None
+        self.execute_calls: list[tuple[object, object | None]] = []
         self._fetchone_values = list(fetchone_values or [("public.pet",)])
 
     def execute(self, query: object, params: object | None = None) -> None:
-        _ = (query, params)
+        self.execute_calls.append((query, params))
 
     def fetchone(self) -> FetchoneValue:
         if not self._fetchone_values:
@@ -71,12 +72,13 @@ class FakeConnection:
     ) -> None:
         """Initialize fake connection."""
         self.cursor_instance = FakeCursor(fetchone_values)
+        self.closed = False
 
     def cursor(self) -> FakeCursor:
         return self.cursor_instance
 
     def close(self) -> None:
-        return None
+        self.closed = True
 
 
 class RecordingCursor:

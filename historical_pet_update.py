@@ -117,7 +117,7 @@ def merge_csvs(
     source_files: list[str],
     output_file: str,
 ) -> None:
-    """Merge multiple PET CSV/parquet sources into one de-duplicated CSV."""
+    """Merge multiple PET CSV/parquet sources into one deduplicated CSV."""
     pd = importlib.import_module("pandas")
 
     print(f"Merging PET data into {output_file}...")

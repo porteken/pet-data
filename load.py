@@ -320,9 +320,9 @@ def _validate_load_shard_args(shard_index: int, shard_count: int) -> None:
 
 def _partition_sort_key(partition_value: str) -> tuple[int, object]:
     try:
-        return (0, int(partition_value))
+        return 0, int(partition_value)
     except ValueError:
-        return (1, partition_value)
+        return 1, partition_value
 
 
 def _select_partition_shard_paths(

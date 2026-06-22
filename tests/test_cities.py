@@ -41,7 +41,7 @@ class TestLoadData:
             }
         )
         monkeypatch.setattr(pd, "read_csv", lambda _url: df)
-        result = cities.load_data("http://example.com")
+        result = cities.load_data("https://example.com")
         assert list(result.columns) == ["city", "state", "population", "lat", "lng"]
 
     def test_normalizes_alternative_column_names(
@@ -57,7 +57,7 @@ class TestLoadData:
             }
         )
         monkeypatch.setattr(pd, "read_csv", lambda _url: df)
-        result = cities.load_data("http://example.com")
+        result = cities.load_data("https://example.com")
         assert list(result.columns) == ["city", "state", "population", "lat", "lng"]
 
 
@@ -77,8 +77,8 @@ class TestMain:
             }
         )
         monkeypatch.setattr(cities, "load_data", lambda _url: df)
-        monkeypatch.setattr(cities, "filter_bounding_box", lambda df: df)
-        monkeypatch.setattr(cities, "process_cities", lambda df: df)
+        monkeypatch.setattr(cities, "filter_bounding_box", lambda d: d)
+        monkeypatch.setattr(cities, "process_cities", lambda d: d)
 
         output_file = tmp_path / "cities.csv"
         monkeypatch.chdir(tmp_path)
