@@ -422,7 +422,7 @@ class _FakeDataset:
     def __getitem__(self, key: object) -> _FakeVar | _FakeDataset:
         if isinstance(key, (list, tuple, set)):
             return self
-        return _FakeVar(self._raw[str(key)])
+        return _FakeVar(self._raw[cast("str", key)])
 
     def sel(self, *_args: object, **_kw: object) -> _FakeDataset:
         return self

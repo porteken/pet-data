@@ -185,20 +185,28 @@ def test_build_export_copy_query_with_window_filters_out_target_range() -> None:
     assert params == ("2024-01-01", "2024-01-31")
 
 
+def _clear_db_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear all postgres database connection env vars."""
+    for var in (
+        "POSTGRES_DB_URI",
+        "DATABASE_URL",
+        "SUPABASE_DB_URI",
+        "PGHOST",
+        "PGPORT",
+        "PGDATABASE",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGSSLMODE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_export_pet_without_database_uri_writes_empty_csv(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.delenv("POSTGRES_DB_URI", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_DB_URI", raising=False)
-    monkeypatch.delenv("PGHOST", raising=False)
-    monkeypatch.delenv("PGPORT", raising=False)
-    monkeypatch.delenv("PGDATABASE", raising=False)
-    monkeypatch.delenv("PGUSER", raising=False)
-    monkeypatch.delenv("PGPASSWORD", raising=False)
-    monkeypatch.delenv("PGSSLMODE", raising=False)
+    _clear_db_env(monkeypatch)
 
     output_path = tmp_path / "existing_pet.csv"
     hpu.export_pet(None, None, str(output_path))
@@ -242,15 +250,7 @@ def test_delete_window_without_database_uri_skips_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.delenv("POSTGRES_DB_URI", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_DB_URI", raising=False)
-    monkeypatch.delenv("PGHOST", raising=False)
-    monkeypatch.delenv("PGPORT", raising=False)
-    monkeypatch.delenv("PGDATABASE", raising=False)
-    monkeypatch.delenv("PGUSER", raising=False)
-    monkeypatch.delenv("PGPASSWORD", raising=False)
-    monkeypatch.delenv("PGSSLMODE", raising=False)
+    _clear_db_env(monkeypatch)
 
     hpu.delete_window("2024-01-01", "2024-01-31")
 

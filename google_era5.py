@@ -651,7 +651,7 @@ def _process_era5_batch_with_thread_dataset(
                 filesystem=filesystem,
                 base_path=base_path,
             )
-        except Exception:  # noqa: PERF203
+        except OSError:  # noqa: PERF203
             if attempt == GCS_BATCH_MAX_RETRIES:
                 raise
 
@@ -849,7 +849,16 @@ def main() -> None:
         LOGGER.warning("ERA5 processing interrupted by user.")
     except SystemExit:
         raise
-    except Exception:
+    except (
+        RuntimeError,
+        ValueError,
+        KeyError,
+        OSError,
+        ImportError,
+        AttributeError,
+        TypeError,
+        IndexError,
+    ):
         exit_code = 1
         LOGGER.exception("ERA5 processing failed.")
 

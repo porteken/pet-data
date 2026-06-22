@@ -41,6 +41,7 @@ def db_conn() -> Generator[Connection[Any], None, None]:
     try:
         import psycopg
     except ImportError:
+        psycopg = None
         pytest.skip("psycopg not installed")
 
     try:

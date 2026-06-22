@@ -103,9 +103,14 @@ def _month_end(year: int, month: int) -> date:
     return date(year, month + 1, 1) - timedelta(days=1)
 
 
-def build_year_date_bounds(year: int, *, month: int | None = None) -> tuple[date, date]:
-    """Return the supported inclusive start/end dates for a year or month."""
-    end_date = pull_end_date()
+def _build_bounds(
+    year: int,
+    end_date: date,
+    *,
+    month: int | None = None,
+    name: str = "Requested window",
+) -> tuple[date, date]:
+    """Build bounds and validate ranges."""
     range_start = max(PULL_START_DATE, date(year, 1, 1))
     range_end = min(end_date, date(year, 12, 31))
 
@@ -116,7 +121,7 @@ def build_year_date_bounds(year: int, *, month: int | None = None) -> tuple[date
 
     if range_start > range_end:
         msg = (
-            f"Requested window for year {year}"
+            f"{name} for year {year}"
             f"{'' if month is None else f', month {month:02d}'} "
             f"falls outside the supported pull window "
             f"{PULL_START_DATE.isoformat()} to {end_date.isoformat()}."
@@ -124,6 +129,11 @@ def build_year_date_bounds(year: int, *, month: int | None = None) -> tuple[date
         raise ValueError(msg)
 
     return range_start, range_end
+
+
+def build_year_date_bounds(year: int, *, month: int | None = None) -> tuple[date, date]:
+    """Return the supported inclusive start/end dates for a year or month."""
+    return _build_bounds(year, pull_end_date(), month=month)
 
 
 def mrt_available_end_date(current_date: date | None = None) -> date:
@@ -149,25 +159,12 @@ def mrt_consolidated_end_date(current_date: date | None = None) -> date:
 
 def build_mrt_date_bounds(year: int, *, month: int | None = None) -> tuple[date, date]:
     """Return the supported inclusive MRT start/end dates for a year or month."""
-    end_date = mrt_available_end_date()
-    range_start = max(PULL_START_DATE, date(year, 1, 1))
-    range_end = min(end_date, date(year, 12, 31))
-
-    if month is not None:
-        month_start = date(year, month, 1)
-        range_start = max(range_start, month_start)
-        range_end = min(range_end, _month_end(year, month))
-
-    if range_start > range_end:
-        msg = (
-            f"Requested MRT window for year {year}"
-            f"{'' if month is None else f', month {month:02d}'} "
-            f"falls outside the supported pull window "
-            f"{PULL_START_DATE.isoformat()} to {end_date.isoformat()}."
-        )
-        raise ValueError(msg)
-
-    return range_start, range_end
+    return _build_bounds(
+        year,
+        mrt_available_end_date(),
+        month=month,
+        name="Requested MRT window",
+    )
 
 
 def build_mrt_months(year: int, *, month: int | None = None) -> list[str]:
