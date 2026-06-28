@@ -29,24 +29,24 @@ def _build_export_copy_query(
     window_end: str | None,
 ) -> tuple[LiteralString, tuple[str, str] | None]:
     if window_start is None or window_end is None:
-        return (
+        return cast(
+            "LiteralString",
             "COPY ("
             "SELECT location_id, date, pet "
             "FROM public.pet "
             "ORDER BY location_id, date"
             ") TO STDOUT WITH CSV HEADER",
-            None,
-        )
+        ), None
 
-    return (
+    return cast(
+        "LiteralString",
         "COPY ("
         "SELECT location_id, date, pet "
         "FROM public.pet "
         "WHERE date < %s::date OR date > %s::date "
         "ORDER BY location_id, date"
         ") TO STDOUT WITH CSV HEADER",
-        (window_start, window_end),
-    )
+    ), (window_start, window_end)
 
 
 def export_pet(

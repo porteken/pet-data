@@ -19,7 +19,7 @@ def test_main_saves_csv(
     sample = pd.DataFrame(
         {
             "id": [0],
-            "city": ["Testville"],
+            "city": ["Test ville"],
             "state": ["TS"],
             "lat": [30.123],
             "lng": [-90.456],
@@ -41,7 +41,7 @@ def test_build_locations_frame_renames_location_id_to_id(
     sample = pd.DataFrame(
         {
             "location_id": [0],
-            "city": ["Testville"],
+            "city": ["Test ville"],
             "state": ["TS"],
             "lat": [30.123],
             "lng": [-90.456],
