@@ -35,7 +35,9 @@ def _resolve_environ(
     environ: Mapping[str, str] | None = None,
 ) -> Mapping[str, str]:
     """Return the supplied environment mapping or the current process environment."""
-    return os.environ if environ is None else environ
+    if environ is None:
+        environ = os.environ
+    return environ
 
 
 def build_postgres_uri_from_pg_env(
