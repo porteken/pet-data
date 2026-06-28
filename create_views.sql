@@ -610,76 +610,68 @@ ON public.pet_year_stats (season) ;
 
 
 CREATE MATERIALIZED VIEW public.pet_forecast AS
-WITH pet_with_seasons AS (
-SELECT
-p.location_id::smallint AS location_id,
+WITH pet_with_seasons AS (SELECT p.location_id::smallint AS location_id,
 p.date,
 p_seasons.season,
 p.pet::real AS pet
 FROM public.pet AS p
 CROSS JOIN LATERAL (
-VALUES
-(public.pet_annual_season ()),
+VALUES (public.pet_annual_season ()),
 (public.pet_season (p.date))
-) AS p_seasons (season)
-), daily_pet AS (
-SELECT
-p.location_id::smallint AS location_id,
+) AS p_seasons (season)),
+daily_pet AS (SELECT p.location_id::smallint AS location_id,
 p.date,
 p.season,
 AVG (p.pet)::real AS pet
 FROM pet_with_seasons AS p
-GROUP BY
-p.location_id,
+GROUP BY p.location_id,
 p.date,
-p.season
-), yearly_pet AS (
-SELECT
-d.location_id::smallint AS location_id,
+p.season),
+yearly_pet AS (SELECT d.location_id::smallint AS location_id,
 EXTRACT (YEAR FROM d.date)::smallint AS year,
 d.season,
 AVG (d.pet)::real AS pet,
 COUNT (*)::int AS days_present
 FROM daily_pet AS d
-GROUP BY
-d.location_id,
+GROUP BY d.location_id,
 EXTRACT (YEAR FROM d.date)::smallint,
-d.season
-), complete_yearly_pet AS (
-SELECT
-y.location_id::smallint AS location_id,
+d.season),
+complete_yearly_pet AS (SELECT y.location_id::smallint AS location_id,
 y.year::smallint AS year,
 y.season,
 y.pet::real AS pet
 FROM yearly_pet AS y
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
-WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
+WHEN
+MOD (y.year, 4) =
+0
+AND
+(MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0)
+THEN 366
 ELSE 365
 END
 WHEN y.season = public.pet_winter () THEN CASE
-WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
+WHEN
+MOD (y.year, 4) =
+0
+AND
+(MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0)
+THEN 91
 ELSE 90
 END
-WHEN y.season IN (public.pet_spring (), public.pet_summer ()) THEN 92
+WHEN y.season IN (public.pet_spring (), public.pet_summer ())
+THEN 92
 ELSE 91
-END
--- noqa: enable=LT01
-), forecast_inputs AS (
-SELECT
-location_id::smallint AS location_id,
+END),
+forecast_inputs AS (SELECT location_id::smallint AS location_id,
 season,
 array_agg (year ORDER BY year) AS years,
 array_agg (pet ORDER BY year) AS pet_values
 FROM complete_yearly_pet
-GROUP BY
-location_id,
-season
-)
-SELECT
-forecast.location_id::smallint AS location_id,
+GROUP BY location_id,
+season)
+SELECT forecast.location_id::smallint AS location_id,
 forecast.year::smallint AS year,
 inputs.season,
 forecast.pet::real AS pet,
@@ -694,7 +686,7 @@ CROSS JOIN LATERAL public.pet_forecast_for_location (
 inputs.location_id::integer,
 inputs.years,
 inputs.pet_values
-) AS forecast ;
+) AS forecast ; ;
 
 CREATE UNIQUE INDEX if not exists pet_forecast_location_year_season_uidx
 ON public.pet_forecast (location_id, year, season) ;
@@ -706,75 +698,68 @@ CREATE INDEX if not exists pet_forecast_season_idx
 ON public.pet_forecast (season) ;
 
 CREATE MATERIALIZED VIEW public.pet_forecast_max AS
-WITH pet_with_seasons AS (
-SELECT
-p.location_id::smallint AS location_id,
+WITH pet_with_seasons AS (SELECT p.location_id::smallint AS location_id,
 p.date,
 p_seasons.season,
 p.pet::real AS pet
 FROM public.pet AS p
 CROSS JOIN LATERAL (
-VALUES
-(public.pet_annual_season ()),
+VALUES (public.pet_annual_season ()),
 (public.pet_season (p.date))
-) AS p_seasons (season)
-), daily_pet AS (
-SELECT
-p.location_id::smallint AS location_id,
+) AS p_seasons (season)),
+daily_pet AS (SELECT p.location_id::smallint AS location_id,
 p.date,
 p.season,
 MAX (p.pet)::real AS pet
 FROM pet_with_seasons AS p
-GROUP BY
-p.location_id,
+GROUP BY p.location_id,
 p.date,
-p.season
-), yearly_pet AS (
-SELECT
-d.location_id::smallint AS location_id,
+p.season),
+yearly_pet AS (SELECT d.location_id::smallint AS location_id,
 EXTRACT (YEAR FROM d.date)::smallint AS year,
 d.season,
 MAX (d.pet)::real AS pet,
 COUNT (*)::int AS days_present
 FROM daily_pet AS d
-GROUP BY
-d.location_id,
+GROUP BY d.location_id,
 EXTRACT (YEAR FROM d.date)::smallint,
-d.season
-), complete_yearly_pet AS (
-SELECT
-y.location_id::smallint AS location_id,
+d.season),
+complete_yearly_pet AS (SELECT y.location_id::smallint AS location_id,
 y.year::smallint AS year,
 y.season,
 y.pet::real AS pet
 FROM yearly_pet AS y
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
-WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 366
+WHEN
+MOD (y.year, 4) =
+0
+AND
+(MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0)
+THEN 366
 ELSE 365
 END
 WHEN y.season = public.pet_winter () THEN CASE
-WHEN MOD (y.year, 4) = 0
-AND (MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0) THEN 91
+WHEN
+MOD (y.year, 4) =
+0
+AND
+(MOD (y.year, 100) < > 0 OR MOD (y.year, 400) = 0)
+THEN 91
 ELSE 90
 END
-WHEN y.season IN (public.pet_spring (), public.pet_summer ()) THEN 92
+WHEN y.season IN (public.pet_spring (), public.pet_summer ())
+THEN 92
 ELSE 91
-END
-), forecast_inputs AS (
-SELECT
-location_id::smallint AS location_id,
+END),
+forecast_inputs AS (SELECT location_id::smallint AS location_id,
 season,
 array_agg (year ORDER BY year) AS years,
 array_agg (pet ORDER BY year) AS pet_values
 FROM complete_yearly_pet
-GROUP BY
-location_id,
-season
-)
-SELECT
-forecast.location_id::smallint AS location_id,
+GROUP BY location_id,
+season)
+SELECT forecast.location_id::smallint AS location_id,
 forecast.year::smallint AS year,
 inputs.season,
 forecast.pet::real AS pet,
@@ -789,7 +774,7 @@ CROSS JOIN LATERAL public.pet_forecast_for_location (
 inputs.location_id::integer,
 inputs.years,
 inputs.pet_values
-) AS forecast ;
+) AS forecast ; ;
 
 CREATE UNIQUE INDEX if not exists pet_forecast_max_location_year_season_uidx
 ON public.pet_forecast_max (location_id, year, season) ;
