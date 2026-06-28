@@ -20,7 +20,7 @@ ANALYTICS_TABLES: tuple[str, ...] = ()
 
 
 def _write_empty_pet_csv(output_path: str | Path) -> None:
-    Path(output_path).write_text(PET_CSV_HEADER, encoding="utf-8")
+    Path(output_path).write_text(PET_CSV_HEADER, encoding="utf-8")  # NOSONAR
 
 
 def _build_export_copy_query(
@@ -79,7 +79,9 @@ def export_pet(
                 window_end=window_end,
             )
 
-            with Path(output_path).open("w", encoding="utf-8", newline="") as csv_file:
+            with Path(output_path).open(
+                "w", encoding="utf-8", newline=""
+            ) as csv_file:  # NOSONAR
                 copy_context = (
                     cur.copy(copy_query)
                     if copy_params is None

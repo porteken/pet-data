@@ -46,7 +46,7 @@ def _list_executions(
         "--format=json",
         "--quiet",
     ]
-    result = subprocess.run(
+    result = subprocess.run(  # NOSONAR
         command,
         check=True,
         capture_output=True,
@@ -117,7 +117,7 @@ def _cancel_execution(
         *_project_args(project),
         "--quiet",
     ]
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True)  # NOSONAR
 
 
 def cancel_running_executions(

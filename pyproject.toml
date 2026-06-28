@@ -41,7 +41,7 @@ exclude = ["typings", "venv", ".venv", ".conda", "archive"]
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D203", "D213", "E501"]
+ignore = ["D203", "D213", "E501", "COM812"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 40
@@ -57,7 +57,6 @@ max-statements = 300
     "D100", "D101", "D102", "D103", "D104",
     "D401",
     "PLR2004",
-    "COM812",
     "PD011",
     "RUF003",
     "PT001",

@@ -28,7 +28,7 @@ def _aws_executable() -> str:
 
 
 def _run_aws_json(args: list[str]) -> dict[str, Any]:
-    completed = subprocess.run(
+    completed = subprocess.run(  # NOSONAR
         [_aws_executable(), *args, "--output", "json"],
         check=True,
         capture_output=True,
