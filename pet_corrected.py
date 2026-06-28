@@ -264,7 +264,7 @@ def _compute_sweat_and_enbal(
     swm[tbody <= consts.tbody_set] = 0.0
     swm[ctx["sex"] == "female"] = swm[ctx["sex"] == "female"] * 0.7
 
-    esweat = -swm * consts.lvap
+    esweat: Dyn = np.asarray(-swm * consts.lvap)
     hm = 0.633 * hc / (consts.p * consts.cair)
     fec = 1.0 / (1.0 + 0.92 * hc * rcl)
     emax = hm * (vpa - vpts) * adu * consts.lvap * fec
