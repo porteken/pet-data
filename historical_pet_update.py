@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 import psycopg
 from psycopg import sql
@@ -27,7 +27,7 @@ def _build_export_copy_query(
     *,
     window_start: str | None,
     window_end: str | None,
-) -> tuple[str, tuple[str, str] | None]:
+) -> tuple[LiteralString, tuple[str, str] | None]:
     if window_start is None or window_end is None:
         return (
             "COPY ("
@@ -81,9 +81,9 @@ def export_pet(
 
             with Path(output_path).open("w", encoding="utf-8", newline="") as csv_file:
                 copy_context = (
-                    cur.copy(cast("Any", copy_query))
+                    cur.copy(copy_query)
                     if copy_params is None
-                    else cur.copy(cast("Any", copy_query), copy_params)
+                    else cur.copy(copy_query, copy_params)
                 )
                 with copy_context as copy:
                     csv_file.writelines(cast("Any", copy))
@@ -192,11 +192,17 @@ def delete_window(window_start: str, window_end: str) -> None:
         with conn.cursor() as cur:
             if Path("drop_views.sql").exists():
                 cur.execute(
-                    cast("Any", Path("drop_views.sql").read_text(encoding="utf-8")),
+                    cast(
+                        "LiteralString",
+                        Path("drop_views.sql").read_text(encoding="utf-8"),
+                    ),
                 )
             if Path("create_tables.sql").exists():
                 cur.execute(
-                    cast("Any", Path("create_tables.sql").read_text(encoding="utf-8")),
+                    cast(
+                        "LiteralString",
+                        Path("create_tables.sql").read_text(encoding="utf-8"),
+                    ),
                 )
 
             cur.execute("SELECT to_regclass('public.pet')")

@@ -7,7 +7,7 @@ import io
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 import psycopg
 import pyarrow.parquet as pq
@@ -148,7 +148,7 @@ def execute_sql_file(conn: Connection[Any], file_path: str | Path) -> None:
 
     with conn.cursor() as cur:
         for statement in statements:
-            cur.execute(cast("Any", statement))
+            cur.execute(cast("LiteralString", statement))
     LOGGER.info("Successfully executed %s (%d statements).", file_path, len(statements))
 
 
@@ -157,7 +157,7 @@ def refresh_query_planner_statistics(conn: Connection[Any]) -> None:
     LOGGER.info("Refreshing query planner statistics...")
     with conn.cursor() as cur:
         for table_name in TABLE_NAMES:
-            cur.execute(cast("Any", f"ANALYZE public.{table_name}"))
+            cur.execute(cast("LiteralString", f"ANALYZE public.{table_name}"))
     LOGGER.info("Finished refreshing query planner statistics.")
 
 
