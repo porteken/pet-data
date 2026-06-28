@@ -79,9 +79,11 @@ def export_pet(
                 window_end=window_end,
             )
 
-            with Path(output_path).open(
-                "w", encoding="utf-8", newline=""
-            ) as csv_file:  # NOSONAR
+            with Path(output_path).open(  # NOSONAR
+                "w",
+                encoding="utf-8",
+                newline="",  # NOSONAR
+            ) as csv_file:
                 copy_context = (
                     cur.copy(copy_query)
                     if copy_params is None
