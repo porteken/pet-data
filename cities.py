@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 from importlib import import_module
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 
 GRID_DEG: float = 0.25
 
-DataFrame: TypeAlias = Any
+type DataFrame = Any
 np: Any = cast("Any", import_module("numpy"))
 pd: Any = cast("Any", import_module("pandas"))
 

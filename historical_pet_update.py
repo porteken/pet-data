@@ -69,7 +69,7 @@ def export_pet(
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.pet')")
             regclass = cur.fetchone()
-            if regclass is None or regclass[0] is None:
+            if regclass is None or regclass[0] is None:  # type: ignore[index]
                 print("Table 'pet' does not exist. Creating empty export.")
                 _write_empty_pet_csv(output_path)
                 return
@@ -171,7 +171,7 @@ def _existing_public_tables(
         for table_name in table_names:
             cur.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
             row = cur.fetchone()
-            if row is not None and row[0] is not None:
+            if row is not None and row[0] is not None:  # type: ignore[index]
                 existing_tables.append(table_name)
     return existing_tables
 
@@ -201,7 +201,7 @@ def delete_window(window_start: str, window_end: str) -> None:
 
             cur.execute("SELECT to_regclass('public.pet')")
             regclass = cur.fetchone()
-            if regclass is not None and regclass[0] is not None:
+            if regclass is not None and regclass[0] is not None:  # type: ignore[index]
                 print(f"Deleting PET data in window [{window_start}, {window_end}]...")
                 cur.execute(
                     "DELETE FROM public.pet WHERE date BETWEEN %s::date AND %s::date",

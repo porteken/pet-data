@@ -12,9 +12,9 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import cache
-from typing import Any, Protocol, TypeAlias, cast
+from typing import Any, Protocol, cast
 
 from tqdm.auto import tqdm
 
@@ -32,9 +32,9 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-DataFrame: TypeAlias = Any
-Dataset: TypeAlias = Any
-ArrayLike: TypeAlias = Any
+type DataFrame = Any
+type Dataset = Any
+type ArrayLike = Any
 
 GRID_DEG: float = 0.25
 DEGREES_PER_CIRCLE: float = 360.0
@@ -128,7 +128,7 @@ except (ImportError, AttributeError) as error:
 
 
 def _arco_stable_end_year() -> int:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return now.year - 2 if now.month < SAFE_STABLE_DATA_MONTH else now.year - 1
 
 
@@ -651,7 +651,7 @@ def _process_era5_batch_with_thread_dataset(
                 filesystem=filesystem,
                 base_path=base_path,
             )
-        except OSError:  # noqa: PERF203
+        except OSError:
             if attempt == GCS_BATCH_MAX_RETRIES:
                 raise
 

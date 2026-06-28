@@ -15,6 +15,7 @@
     ],
     "venvPath": ".",
     "venv": ".venv",
+    "pythonVersion": "3.14",
     "reportMissingImports": false,
     "reportUnknownMemberType": "none",
     "reportUnknownArgumentType": "none",

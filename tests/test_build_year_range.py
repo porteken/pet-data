@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from typing import TYPE_CHECKING
 
 import build_year_range
@@ -14,15 +14,15 @@ if TYPE_CHECKING:
 class _FrozenMarchDateTime:
     @classmethod
     def now(cls, tz: timezone | None = None) -> datetime:
-        assert tz is timezone.utc
-        return datetime(2025, 3, 15, tzinfo=timezone.utc)
+        assert tz is UTC
+        return datetime(2025, 3, 15, tzinfo=UTC)
 
 
 class _FrozenJulyDateTime:
     @classmethod
     def now(cls, tz: timezone | None = None) -> datetime:
-        assert tz is timezone.utc
-        return datetime(2025, 7, 15, tzinfo=timezone.utc)
+        assert tz is UTC
+        return datetime(2025, 7, 15, tzinfo=UTC)
 
 
 def test_main_shell_outputs_expected_ranges(

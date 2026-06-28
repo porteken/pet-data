@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import warnings
 from importlib import import_module
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 
 np: Any = cast("Any", import_module("numpy"))
-Dyn: TypeAlias = Any
-State: TypeAlias = dict[str, Dyn]
+type Dyn = Any
+type State = dict[str, Dyn]
 
 ICL_MIN_INPUT = 0.03
 ICL_MIN_VALUE = 0.02
@@ -569,7 +569,7 @@ def _pet_prep_reference(
     swm[tbody <= consts.tbody_set] = 0.0
     swm[ctx["sex"] == "female"] = swm[ctx["sex"] == "female"] * 0.7
 
-    esweat = esw_real.copy()
+    esweat: Dyn = esw_real.copy()
     hc = (2.67 + 6.5 * v_air_ref**0.67) * ((consts.p / consts.po) ** 0.55)
 
     feff_val = 0.725
@@ -581,12 +581,12 @@ def _pet_prep_reference(
     )
     acl = ctx["adu"] * facl + ctx["adu"] * ((1.0 + 0.31 * icl_ref) - 1.0)
 
-    emax = (
+    emax: Dyn = np.asarray(
         (0.633 * hc / (consts.p * consts.cair))
         * (vpa_ref - vpts)
         * ctx["adu"]
         * consts.lvap
-        * (1.0 / (1.0 + 0.92 * hc * 0.155 * icl_ref))
+        * (1.0 / (1.0 + 0.92 * hc * 0.155 * icl_ref)),
     )
     wetsk = esweat / emax
 

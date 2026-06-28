@@ -366,7 +366,6 @@ LANGUAGE plpgsql
 IMMUTABLE
 AS $$
 DECLARE
-n integer := COALESCE(array_length(years, 1), 0) ;
 linear_model public.pet_trend_model ;
 BEGIN
 linear_model := public.pet_fit_polynomial_model(years, pet_values, 1) ;

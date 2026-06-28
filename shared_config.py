@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
-UTC = timezone.utc
 
 PULL_START_DATE = date(2000, 1, 1)
 SHARED_AREA: tuple[float, float, float, float] = (49.25, -124.5, 24.25, -66.5)
@@ -33,7 +31,9 @@ DATABASE_CONFIG_HINT = (
 )
 
 
-def _resolve_environ(environ: Mapping[str, str] | None = None) -> Mapping[str, str]:
+def _resolve_environ(
+    environ: Mapping[str, str] | None = None,
+) -> Mapping[str, str]:
     """Return the supplied environment mapping or the current process environment."""
     return os.environ if environ is None else environ
 

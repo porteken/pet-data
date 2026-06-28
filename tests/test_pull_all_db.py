@@ -32,7 +32,7 @@ REQUIRED_VIEWS = [
 
 
 @pytest.fixture(scope="module")
-def db_conn() -> Generator[Connection[Any], None, None]:
+def db_conn() -> Generator[Connection[Any]]:
     """Yield a psycopg connection, skip if unavailable."""
     db_uri = resolve_database_uri()
     if not db_uri:
@@ -60,12 +60,12 @@ def _row_count(conn: Connection[Any], relation: str) -> int:
             "SELECT COUNT(*) FROM pg_class WHERE relname = %s",
             (relation,),
         )
-        row = cur.fetchone()
+        row = cast("tuple[Any, ...]", cur.fetchone())
         assert row is not None
         if row[0] == 0:
             pytest.fail(f"Relation {relation!r} does not exist")
         cur.execute(cast("Any", f"SELECT COUNT(*) FROM {relation}"))
-        count_row = cur.fetchone()
+        count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert count_row is not None
         return count_row[0]
 
@@ -80,9 +80,8 @@ def _get_relation_kind(conn: Connection[Any], relation: str) -> str:
             "AND c.relname = %s",
             (relation,),
         )
-        row = cur.fetchone()
-        if row is None:
-            pytest.fail(f"Relation {relation!r} does not exist")
+        row = cast("tuple[Any, ...]", cur.fetchone())
+        assert row is not None, f"Relation {relation!r} does not exist"
         return row[0]
 
 
@@ -113,7 +112,7 @@ def test_pet_covers_year_range(db_conn: Connection[Any]) -> None:
             "SELECT MIN(EXTRACT(YEAR FROM date))::int, "
             "MAX(EXTRACT(YEAR FROM date))::int FROM pet"
         )
-        result = cur.fetchone()
+        result = cast("tuple[Any, ...]", cur.fetchone())
         assert result is not None
         min_year, max_year = result
     assert min_year is not None, "pet table has no date data"
@@ -205,7 +204,7 @@ def test_pet_has_id_index(db_conn: Connection[Any]) -> None:
             "WHERE n.nspname = 'public' "
             "AND i.relname = 'pet_location_date_covering_idx'"
         )
-        row = cur.fetchone()
+        row = cast("tuple[Any, ...]", cur.fetchone())
 
     assert row is not None
     index_definition = row[0]
@@ -284,7 +283,7 @@ def _assert_year_season_pet_view(
                 ") AS duplicates",
             )
         )
-        duplicate_count_row = cur.fetchone()
+        duplicate_count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert duplicate_count_row is not None
 
         cur.execute(
@@ -326,7 +325,7 @@ def _assert_year_season_pet_view(
                 "(SELECT COUNT(*) FROM extra)",
             )
         )
-        diff_count_row = cur.fetchone()
+        diff_count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert diff_count_row is not None
 
         cur.execute(cast("Any", f"SELECT DISTINCT season FROM {view} ORDER BY season"))
@@ -408,7 +407,7 @@ def test_pet_percentiles_match_pet_quantiles(db_conn: Connection[Any]) -> None:
             "HAVING COUNT(*) > 1"
             ") AS duplicates)"
         )
-        diff_count_row = cur.fetchone()
+        diff_count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert diff_count_row is not None
 
     columns = _get_relation_columns(db_conn, "pet_percentiles")
@@ -542,7 +541,7 @@ def test_city_rankings_view_matches_expected_projection(
             "HAVING COUNT(*) > 1"
             ") AS duplicates)"
         )
-        diff_count_row = cur.fetchone()
+        diff_count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert diff_count_row is not None
 
         cur.execute("SELECT DISTINCT season FROM city_rankings_view ORDER BY season")
@@ -674,7 +673,7 @@ def test_pet_forecast_has_annual_and_seasons(db_conn: Connection[Any]) -> None:
             "HAVING COUNT(*) > 1"
             ") AS duplicates)"
         )
-        diff_count_row = cur.fetchone()
+        diff_count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert diff_count_row is not None
 
         cur.execute("SELECT DISTINCT season FROM pet_forecast ORDER BY season")
@@ -709,7 +708,7 @@ def test_pet_forecast_matches_legacy_table_when_present(
     """Compare Annual derived pet_forecast rows to any preserved legacy table rows."""
     with db_conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.pet_forecast_legacy')")
-        legacy_relation_row = cur.fetchone()
+        legacy_relation_row = cast("tuple[Any, ...]", cur.fetchone())
         assert legacy_relation_row is not None
         if legacy_relation_row[0] is None:
             pytest.skip("pet_forecast_legacy not present for migration comparison")
@@ -753,7 +752,7 @@ def test_pet_forecast_matches_legacy_table_when_present(
             "(SELECT COUNT(*) FROM missing), "
             "(SELECT COUNT(*) FROM extra)"
         )
-        diff_count_row = cur.fetchone()
+        diff_count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert diff_count_row is not None
 
     missing_count, extra_count = diff_count_row

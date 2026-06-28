@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-from typing import cast
+from datetime import UTC
+from types import SimpleNamespace
+from typing import Self, cast
 from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
 import pytest
-from typing_extensions import Self
 
 import google_era5
 from google_era5 import (
@@ -25,6 +26,7 @@ from google_era5 import (
     _resolve_era5_max_workers,
     _run_era5_batch_jobs,
     _select_time_shard_batches,
+    _ThermofeelModule,
     _wrap_longitudes_for_arco_selection,
     _year_time_slice,
 )
@@ -34,9 +36,9 @@ class TestArcoStableEndYear:
     def test_returns_previous_year_early_in_year(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        fake_now = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        fake_now = datetime(2024, 3, 1, tzinfo=UTC)
 
         class FakeDatetime:
             @classmethod
@@ -50,9 +52,9 @@ class TestArcoStableEndYear:
     def test_returns_last_year_later_in_year(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        fake_now = datetime(2024, 5, 1, tzinfo=timezone.utc)
+        fake_now = datetime(2024, 5, 1, tzinfo=UTC)
 
         class FakeDatetime:
             @classmethod
@@ -191,7 +193,7 @@ class TestApproximateDsrp:
         thermofeel.approximate_dsrp.return_value = np.array([500.0, 300.0, 100.0])
 
         result = _approximate_dsrp(
-            thermofeel,
+            cast("_ThermofeelModule", cast("object", thermofeel)),
             fdir_flux=np.array([50.0, 60.0, 70.0]),
             cossza=np.array([0.5, 0.2, 0.05]),
             _ssrd_flux=np.array([100.0, 80.0, 90.0]),
@@ -512,10 +514,44 @@ class TestComputeLocationFrameAlignment:
         monkeypatch.setattr(
             _dask, "config", MagicMock(set=lambda **_kw: _FakeDaskCtx())
         )
+        original_import_optional_module = google_era5._import_optional_module
+
+        def fake_data_array(data: object, dims: str) -> object:
+            _ = dims
+            return data
+
+        n_times = 24
+        n_locs = 2
+
+        def fake_approximate_dsrp(
+            fdir: object, cossza: object, threshold: float = 0.1
+        ) -> object:
+            _ = (cossza, threshold)
+            return np.asarray(fdir)
+
+        def fake_calculate_mean_radiant_temperature(**_kwargs: object) -> object:
+            return np.full(n_times * n_locs, 300.0)
+
+        fake_xarray = SimpleNamespace(DataArray=fake_data_array)
+        fake_thermofeel = SimpleNamespace(
+            approximate_dsrp=fake_approximate_dsrp,
+            calculate_mean_radiant_temperature=fake_calculate_mean_radiant_temperature,
+        )
+
+        def fake_import_optional_module(module_name: str) -> object:
+            if module_name == "xarray":
+                return fake_xarray
+            if module_name == "thermofeel":
+                return fake_thermofeel
+            return original_import_optional_module(module_name)
+
+        monkeypatch.setattr(
+            google_era5, "_import_optional_module", fake_import_optional_module
+        )
 
         fake_ds_with_slice = _make_fake_dataset(
-            n_times=24,
-            n_locs=2,
+            n_times=n_times,
+            n_locs=n_locs,
             hot_temp_k=300.0,
             cold_temp_k=280.0,
         )

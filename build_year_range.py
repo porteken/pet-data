@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from shared_config import mrt_available_end_date
 
 
 def main() -> None:
     """Output year ranges for PET data processing."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     prev_year = now.year - 1
 
     era5_start = 2000

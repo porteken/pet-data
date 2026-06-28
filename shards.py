@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -15,9 +15,9 @@ pa = cast("Any", import_module("pyarrow"))
 dataset_module = cast("Any", import_module("pyarrow.dataset"))
 fs_module = cast("Any", import_module("pyarrow.fs"))
 
-DataFrame: TypeAlias = Any
+type DataFrame = Any
 LOGGER = logging.getLogger(__name__)
-ShardMapping: TypeAlias = dict["ShardKey", list[str]]
+type ShardMapping = dict["ShardKey", list[str]]
 
 
 @dataclass(frozen=True, order=True)
@@ -160,5 +160,5 @@ def _parse_shard_key(root_path: str, file_path: str) -> ShardKey | None:
             month=int(partitions.get("month", "0")),
             tile_id=int(partitions["tile_id"]),
         )
-    except (KeyError, ValueError):
+    except KeyError, ValueError:
         return None
