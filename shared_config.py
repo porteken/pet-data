@@ -31,13 +31,9 @@ DATABASE_CONFIG_HINT = (
 )
 
 
-def _resolve_environ(
-    environ: Mapping[str, str] | None = None,
-) -> Mapping[str, str]:
+def _resolve_environ(environ: Mapping[str, str] | None = None) -> Mapping[str, str]:
     """Return the supplied environment mapping or the current process environment."""
-    if environ is None:
-        environ = os.environ
-    return environ
+    return os.environ if environ is None else environ
 
 
 def build_postgres_uri_from_pg_env(
