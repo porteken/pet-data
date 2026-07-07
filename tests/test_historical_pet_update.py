@@ -190,7 +190,6 @@ def _clear_db_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in (
         "POSTGRES_DB_URI",
         "DATABASE_URL",
-        "SUPABASE_DB_URI",
         "PGHOST",
         "PGPORT",
         "PGDATABASE",

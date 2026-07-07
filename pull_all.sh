@@ -16,7 +16,7 @@ GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
 AWS_BIN=${AWS_BIN:-aws}
 
 _database_configured() {
-    if [[ -n "${POSTGRES_DB_URI:-}" || -n "${DATABASE_URL:-}" || -n "${SUPABASE_DB_URI:-}" ]]; then
+    if [[ -n "${POSTGRES_DB_URI:-}" || -n "${DATABASE_URL:-}" ]]; then
         return 0
     fi
 

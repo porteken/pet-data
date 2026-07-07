@@ -120,7 +120,7 @@ class TestResolveDatabaseUri:
             resolve_database_uri(
                 {
                     "POSTGRES_DB_URI": "postgresql://primary",
-                    "SUPABASE_DB_URI": "postgresql://legacy",
+                    "DATABASE_URL": "postgresql://fallback",
                 }
             )
             == "postgresql://primary"
@@ -145,10 +145,10 @@ class TestResolveDatabaseUri:
         assert "@primary.pet.example.run:29432/pet_data" in resolved_uri
         assert resolved_uri.endswith("?sslmode=require")
 
-    def test_falls_back_to_legacy_supabase_uri(self) -> None:
+    def test_falls_back_to_database_url(self) -> None:
         assert (
-            resolve_database_uri({"SUPABASE_DB_URI": "postgresql://legacy"})
-            == "postgresql://legacy"
+            resolve_database_uri({"DATABASE_URL": "postgresql://fallback"})
+            == "postgresql://fallback"
         )
 
     def test_returns_none_without_database_configuration(self) -> None:
