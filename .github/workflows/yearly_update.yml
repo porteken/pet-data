@@ -84,6 +84,12 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/ --max-workers 8
+      - name: Clear Wetbulb Prefix
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix wetbulb_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/ --max-workers 8
 
   provision-cloud-run:
     if: github.ref_name == 'prd'
@@ -211,6 +217,17 @@ jobs:
           mkdir -p pet_data_csv
           echo "Syncing s3://pet-parquet-files/${PREFIX}"
           aws s3 sync "s3://pet-parquet-files/${PREFIX}" "./${PREFIX}"
+      - name: Sync shard wetbulb data from S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          PREFIX: wetbulb_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/
+        run: |
+          echo "Syncing wetbulb data for year: ${{ needs.build-target-window.outputs.target_year }}"
+          mkdir -p wetbulb_data_csv
+          echo "Syncing s3://pet-parquet-files/${PREFIX}"
+          aws s3 sync "s3://pet-parquet-files/${PREFIX}" "./${PREFIX}"
       - name: Load shard to Postgres
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
@@ -235,4 +252,4 @@ jobs:
       - name: Recreate Views
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
-        run: uv run --locked python load.py --append-only --skip-table locations --skip-table pet # NOSONAR
+        run: uv run --locked python load.py --append-only --skip-table locations --skip-table pet --skip-table wetbulb # NOSONAR

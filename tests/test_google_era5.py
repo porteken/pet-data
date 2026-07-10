@@ -20,9 +20,12 @@ from google_era5 import (
     _approximate_dsrp,
     _compute_location_frame,
     _compute_pet_chunk,
+    _compute_wetbulb_series,
     _hourly_flux_from_accumulation,
     _iter_time_batches,
     _normalize_longitudes_for_solar_geometry,
+    _PartitionTarget,
+    _process_era5_batch_job,
     _resolve_era5_max_workers,
     _run_era5_batch_jobs,
     _select_time_shard_batches,
@@ -300,6 +303,125 @@ class TestComputePetChunk:
         assert result["pet"].tolist() == pytest.approx([22.0])
 
 
+class TestComputeWetbulbSeries:
+    def test_discards_wetbulb_values_outside_sanity_range(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            google_era5,
+            "wetbulb_stull",
+            lambda *_args, **_kwargs: np.array([20.0, 999.0, -999.0]),
+        )
+
+        result = _compute_wetbulb_series(
+            np.array([25.0, 25.0, 25.0]),
+            np.array([50.0, 50.0, 50.0]),
+        )
+
+        assert np.isfinite(result[0])
+        assert np.isnan(result[1])
+        assert np.isnan(result[2])
+
+
+class TestProcessEra5BatchJob:
+    def test_writes_pet_and_wetbulb_partitions(self, tmp_path: pathlib.Path) -> None:
+        frame = pd.DataFrame(
+            {
+                "location_id": [1, 1],
+                "date": [
+                    pd.Timestamp("2020-01-01").date(),
+                    pd.Timestamp("2020-01-02").date(),
+                ],
+                "pet": [20.0, 21.0],
+                "wetbulb": [15.0, 16.0],
+            },
+        )
+
+        def fake_compute_location_frame(
+            _ds: object,
+            _cities: object,
+            _compute_workers: int,
+        ) -> pd.DataFrame:
+            return frame
+
+        original_compute_location_frame = google_era5._compute_location_frame
+        google_era5._compute_location_frame = fake_compute_location_frame
+        try:
+            pet_root = tmp_path / "pet"
+            wetbulb_root = tmp_path / "wetbulb"
+
+            _process_era5_batch_job(
+                ds=MagicMock(),
+                pet_target=_PartitionTarget(str(pet_root)),
+                wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                year=2020,
+                city_shard_index=0,
+                batch_index=0,
+                pending_batch_df=pd.DataFrame(
+                    {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
+                ),
+                compute_workers=1,
+            )
+        finally:
+            google_era5._compute_location_frame = original_compute_location_frame
+
+        pet_files = sorted((pet_root / "year=2020").glob("pet_batch_*.parquet"))
+        wetbulb_files = sorted(
+            (wetbulb_root / "year=2020").glob("wetbulb_batch_*.parquet"),
+        )
+        assert len(pet_files) == 1
+        assert len(wetbulb_files) == 1
+
+        pet_df = pd.read_parquet(pet_files[0])
+        wetbulb_df = pd.read_parquet(wetbulb_files[0])
+        assert list(pet_df.columns) == ["location_id", "date", "pet"]
+        assert list(wetbulb_df.columns) == ["location_id", "date", "wetbulb"]
+
+    def test_skips_wetbulb_partition_when_all_nan(self, tmp_path: pathlib.Path) -> None:
+        frame = pd.DataFrame(
+            {
+                "location_id": [1],
+                "date": [pd.Timestamp("2020-01-01").date()],
+                "pet": [20.0],
+                "wetbulb": [np.nan],
+            },
+        )
+
+        def fake_compute_location_frame(
+            _ds: object,
+            _cities: object,
+            _compute_workers: int,
+        ) -> pd.DataFrame:
+            return frame
+
+        original_compute_location_frame = google_era5._compute_location_frame
+        google_era5._compute_location_frame = fake_compute_location_frame
+        try:
+            pet_root = tmp_path / "pet"
+            wetbulb_root = tmp_path / "wetbulb"
+
+            _process_era5_batch_job(
+                ds=MagicMock(),
+                pet_target=_PartitionTarget(str(pet_root)),
+                wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                year=2020,
+                city_shard_index=0,
+                batch_index=0,
+                pending_batch_df=pd.DataFrame(
+                    {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
+                ),
+                compute_workers=1,
+            )
+        finally:
+            google_era5._compute_location_frame = original_compute_location_frame
+
+        pet_files = sorted((pet_root / "year=2020").glob("pet_batch_*.parquet"))
+        assert len(pet_files) == 1
+        assert not wetbulb_root.exists() or not any(
+            (wetbulb_root / "year=2020").glob("wetbulb_batch_*.parquet"),
+        )
+
+
 class TestRunEra5BatchJobs:
     def test_parallel_branch_uses_threads(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -339,6 +461,7 @@ class TestRunEra5BatchJobs:
             selected_batches=[(0, 0, 23), (1, 24, 47)],
             shard_df=shard_df,
             era5_root=str(tmp_path / "era5"),
+            wetbulb_root=str(tmp_path / "wetbulb"),
             year=2001,
             city_shard_index=0,
             city_shard_count=1,
@@ -578,4 +701,12 @@ class TestComputeLocationFrameAlignment:
             f"Hot city PET ({pet_hot}) should exceed cold city PET ({pet_cold}). "
             "This failure typically means the (n_times, n_locs) arrays are being "
             "raveled without transposition, scrambling loc/time alignment."
+        )
+
+        assert "wetbulb" in result.columns
+        wetbulb_hot = result.loc[result["location_id"] == 0, "wetbulb"].max()
+        wetbulb_cold = result.loc[result["location_id"] == 1, "wetbulb"].max()
+        assert wetbulb_hot > wetbulb_cold, (
+            f"Hot city wetbulb ({wetbulb_hot}) should exceed cold city wetbulb "
+            f"({wetbulb_cold})."
         )

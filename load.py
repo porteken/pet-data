@@ -26,6 +26,7 @@ DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_]\w*)?\$")
 TABLE_NAMES = [
     "locations",
     "pet",
+    "wetbulb",
 ]
 
 
@@ -181,6 +182,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Load the explicit --pet-csv input even when PET parquet shards are "
             "also present under --pet-root."
+        ),
+    )
+    parser.add_argument("--wetbulb-csv", default="wetbulb.csv")
+    parser.add_argument("--wetbulb-root", default="wetbulb_data_csv")
+    parser.add_argument(
+        "--prefer-wetbulb-csv",
+        action="store_true",
+        help=(
+            "Load the explicit --wetbulb-csv input even when wetbulb parquet "
+            "shards are also present under --wetbulb-root."
         ),
     )
     parser.add_argument("--analytics-root", default="analytics_data_csv")
@@ -518,29 +529,56 @@ def _discover_locations_csv_paths(args: argparse.Namespace) -> list[Path]:
     return [Path(args.locations_csv)]
 
 
-def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
-    pet_csv_path = Path(args.pet_csv)
-    if args.prefer_pet_csv and pet_csv_path.exists():
+def _discover_batch_parquet_paths(
+    args: argparse.Namespace,
+    *,
+    direct_csv: str,
+    root: str,
+    file_glob: str,
+    prefer_direct: bool,
+) -> list[Path]:
+    direct_csv_path = Path(direct_csv)
+    if prefer_direct and direct_csv_path.exists():
         return _select_partition_shard_paths(
-            [pet_csv_path],
-            root_path=Path(args.pet_root),
+            [direct_csv_path],
+            root_path=Path(root),
             partition_key="year",
             shard_index=args.load_shard_index,
             shard_count=args.load_shard_count,
         )
 
-    pet_paths = _discover_csv_inputs(
-        args.pet_csv,
-        shard_root=args.pet_root,
-        shard_file_name="pet_batch_*.parquet",
+    csv_paths = _discover_csv_inputs(
+        direct_csv,
+        shard_root=root,
+        shard_file_name=file_glob,
         shard_partition_key=None,
     )
     return _select_partition_shard_paths(
-        pet_paths,
-        root_path=Path(args.pet_root),
+        csv_paths,
+        root_path=Path(root),
         partition_key="year",
         shard_index=args.load_shard_index,
         shard_count=args.load_shard_count,
+    )
+
+
+def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
+    return _discover_batch_parquet_paths(
+        args,
+        direct_csv=args.pet_csv,
+        root=args.pet_root,
+        file_glob="pet_batch_*.parquet",
+        prefer_direct=args.prefer_pet_csv,
+    )
+
+
+def _discover_wetbulb_csv_paths(args: argparse.Namespace) -> list[Path]:
+    return _discover_batch_parquet_paths(
+        args,
+        direct_csv=args.wetbulb_csv,
+        root=args.wetbulb_root,
+        file_glob="wetbulb_batch_*.parquet",
+        prefer_direct=args.prefer_wetbulb_csv,
     )
 
 
@@ -584,6 +622,7 @@ def _load_requested_tables(
     table_csv_resolvers = (
         ("locations", _discover_locations_csv_paths),
         ("pet", _discover_pet_csv_paths),
+        ("wetbulb", _discover_wetbulb_csv_paths),
     )
 
     for table_name, csv_resolver in table_csv_resolvers:

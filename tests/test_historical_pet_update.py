@@ -14,10 +14,14 @@ import historical_pet_update as hpu
 FetchoneValue = tuple[str | None] | None
 
 
+DEFAULT_COPY_CHUNKS = (b"location_id,date,pet\n", b"1,2000-05-01,20.0\n")
+
+
 class FakeCopy:
-    def __init__(self, cursor: FakeCursor) -> None:
+    def __init__(self, cursor: FakeCursor, chunks: tuple[bytes, ...]) -> None:
         """Initialize the fake COPY context manager."""
         self.cursor = cursor
+        self.chunks = chunks
 
     def __enter__(self) -> FakeCopy:
         """Enter context manager."""
@@ -27,21 +31,23 @@ class FakeCopy:
         """Exit context manager."""
         _ = (exc_type, exc, tb)
 
-    def __iter__(self) -> Iterator[str]:
-        """Yield exported CSV lines."""
-        return iter(["location_id,date,pet\n1,2000-05-01,20.0\n"])
+    def __iter__(self) -> Iterator[memoryview]:
+        """Yield exported CSV chunks the way psycopg streams COPY output."""
+        return iter([memoryview(chunk) for chunk in self.chunks])
 
 
 class FakeCursor:
     def __init__(
         self,
         fetchone_values: list[FetchoneValue] | None = None,
+        copy_chunks: tuple[bytes, ...] = DEFAULT_COPY_CHUNKS,
     ) -> None:
         """Initialize the fake cursor."""
         self.copy_query = ""
         self.copy_params: tuple[str, str] | None = None
         self.execute_calls: list[tuple[object, object | None]] = []
         self._fetchone_values = list(fetchone_values or [("public.pet",)])
+        self._copy_chunks = copy_chunks
 
     def execute(self, query: object, params: object | None = None) -> None:
         self.execute_calls.append((query, params))
@@ -54,7 +60,7 @@ class FakeCursor:
     def copy(self, query: str, params: tuple[str, str] | None = None) -> FakeCopy:
         self.copy_query = query
         self.copy_params = params
-        return FakeCopy(self)
+        return FakeCopy(self, self._copy_chunks)
 
     def __enter__(self) -> FakeCursor:
         """Enter context manager."""
@@ -69,9 +75,10 @@ class FakeConnection:
     def __init__(
         self,
         fetchone_values: list[FetchoneValue] | None = None,
+        copy_chunks: tuple[bytes, ...] = DEFAULT_COPY_CHUNKS,
     ) -> None:
         """Initialize fake connection."""
-        self.cursor_instance = FakeCursor(fetchone_values)
+        self.cursor_instance = FakeCursor(fetchone_values, copy_chunks)
         self.closed = False
 
     def cursor(self) -> FakeCursor:
@@ -143,6 +150,22 @@ def test_export_all_writes_pet_rows(
     assert "FROM public.pet" in fake_conn.cursor_instance.copy_query
     assert "ORDER BY location_id, date" in fake_conn.cursor_instance.copy_query
     assert fake_conn.cursor_instance.copy_params is None
+
+
+def test_export_all_preserves_multibyte_characters_split_across_chunks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A UTF-8 character straddling two COPY chunks must survive the write."""
+    payload = "location_id,date,pet\n1,2000-05-01,20.0,Cañón\n".encode()
+    split_at = payload.index(b"\xc3\xb1") + 1
+    fake_conn = FakeConnection(copy_chunks=(payload[:split_at], payload[split_at:]))
+    monkeypatch.setattr(hpu.psycopg, "connect", lambda _: fake_conn)
+    monkeypatch.setenv("POSTGRES_DB_URI", "postgresql://example")
+
+    output_path = tmp_path / "existing_pet.csv"
+    hpu.export_pet(None, None, str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == payload.decode("utf-8")
 
 
 def test_merge_csvs_prefers_later_sources_for_duplicates(tmp_path: Path) -> None:
@@ -291,6 +314,50 @@ def test_delete_window_rebuilds_views_and_truncates_analytics(
     assert "Truncating analytics tables..." in captured
 
 
+def test_delete_window_deletes_both_pet_and_wetbulb(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn = RecordingConnection(
+        [[("public.pet",), ("public.wetbulb",)], []],
+    )
+    monkeypatch.setattr(hpu.psycopg, "connect", lambda _: conn)
+    monkeypatch.setattr(hpu, "_existing_public_tables", lambda *_args: [])
+    monkeypatch.setenv("POSTGRES_DB_URI", "postgresql://example")
+    monkeypatch.chdir(tmp_path)
+
+    hpu.delete_window("2024-01-01", "2024-01-31")
+
+    assert any(
+        call[0] == "DELETE FROM public.pet WHERE date BETWEEN %s::date AND %s::date"
+        and call[1] == ("2024-01-01", "2024-01-31")
+        for call in conn.execute_calls
+    )
+    assert any(
+        call[0] == "DELETE FROM public.wetbulb WHERE date BETWEEN %s::date AND %s::date"
+        and call[1] == ("2024-01-01", "2024-01-31")
+        for call in conn.execute_calls
+    )
+    captured = capsys.readouterr().out
+    assert "Deleting PET data in window [2024-01-01, 2024-01-31]..." in captured
+    assert "Deleting wetbulb data in window [2024-01-01, 2024-01-31]..." in captured
+
+
+def test_export_pet_with_table_wetbulb_queries_wetbulb_table(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(hpu.psycopg, "connect", lambda _: fake_conn)
+    monkeypatch.setenv("POSTGRES_DB_URI", "postgresql://example")
+
+    output_path = tmp_path / "existing_wetbulb.csv"
+    hpu.export_pet(None, None, str(output_path), product="wetbulb")
+
+    assert "FROM public.wetbulb" in fake_conn.cursor_instance.copy_query
+    assert "SELECT location_id, date, wetbulb" in fake_conn.cursor_instance.copy_query
+
+
 @pytest.mark.parametrize(
     ("argv", "expected_call"),
     [
@@ -342,13 +409,19 @@ def test_main_dispatches_supported_commands(
     recorded_calls: list[tuple[str, tuple[Any, ...]]] = []
 
     monkeypatch.setattr(
-        hpu, "export_pet", lambda *args: recorded_calls.append(("export", args))
+        hpu,
+        "export_pet",
+        lambda *args, **_kwargs: recorded_calls.append(("export", args)),
     )
     monkeypatch.setattr(
-        hpu, "merge_csvs", lambda *args: recorded_calls.append(("merge", args))
+        hpu,
+        "merge_csvs",
+        lambda *args, **_kwargs: recorded_calls.append(("merge", args)),
     )
     monkeypatch.setattr(
-        hpu, "delete_window", lambda *args: recorded_calls.append(("delete", args))
+        hpu,
+        "delete_window",
+        lambda *args, **_kwargs: recorded_calls.append(("delete", args)),
     )
     monkeypatch.setattr(hpu.sys, "argv", argv)
 
@@ -361,4 +434,44 @@ def test_main_rejects_unknown_command(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hpu.sys, "argv", ["historical_pet_update.py", "mystery"])
 
     with pytest.raises(SystemExit, match="Unknown command: mystery"):
+        hpu.main()
+
+
+def test_main_dispatches_export_all_with_table_wetbulb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded_calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    monkeypatch.setattr(
+        hpu,
+        "export_pet",
+        lambda *args, **kwargs: recorded_calls.append(("export", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        hpu.sys,
+        "argv",
+        [
+            "historical_pet_update.py",
+            "export-all",
+            "wetbulb_full.csv",
+            "--table",
+            "wetbulb",
+        ],
+    )
+
+    hpu.main()
+
+    assert recorded_calls == [
+        ("export", (None, None, "wetbulb_full.csv"), {"product": "wetbulb"})
+    ]
+
+
+def test_main_rejects_unknown_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        hpu.sys,
+        "argv",
+        ["historical_pet_update.py", "export-all", "out.csv", "--table", "bogus"],
+    )
+
+    with pytest.raises(SystemExit, match="Unknown --table value: bogus"):
         hpu.main()
