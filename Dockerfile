@@ -1,4 +1,4 @@
-FROM python:3.10-slim AS builder
+FROM python:3.13-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -77,7 +77,7 @@ import zarr
 print("Cloud Run worker dependencies verified.")
 PY
 
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -87,7 +87,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
-COPY entrypoint.sh cities.py google_era5.py pet_corrected.py shards.py ./
+COPY entrypoint.sh cities.py google_era5.py pet_corrected.py shards.py wetbulb.py ./
 
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
     && chown -R appuser:appuser /app \
