@@ -577,6 +577,15 @@ class _PartitionTarget(NamedTuple):
     base_path: str | None = None
 
 
+class _ProductPlan(NamedTuple):
+    """Which data products to write and where their parquet trees live."""
+
+    pet_root: str
+    wetbulb_root: str
+    write_pet: bool = True
+    write_wetbulb: bool = True
+
+
 def _write_batch_partition(
     root: str,
     year: int,
@@ -680,6 +689,8 @@ def _process_era5_batch_job(
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
+    write_pet: bool = True,
+    write_wetbulb: bool = True,
 ) -> int:
     LOGGER.info(
         "Computing ERA5->PET for year %s batch %s over %s cities.",
@@ -698,32 +709,34 @@ def _process_era5_batch_job(
     if frame.empty:
         return batch_index
 
-    _write_pet_partition(
-        pet_target.root,
-        year,
-        city_shard_index,
-        frame[["location_id", "date", "pet"]].copy(),
-        batch_index,
-        filesystem=pet_target.filesystem,
-        base_path=pet_target.base_path,
-    )
-    wetbulb_frame = (
-        frame[["location_id", "date", "wetbulb"]]
-        .dropna(
-            subset=["wetbulb"],
-        )
-        .copy()
-    )
-    if not wetbulb_frame.empty:
-        _write_wetbulb_partition(
-            wetbulb_target.root,
+    if write_pet:
+        _write_pet_partition(
+            pet_target.root,
             year,
             city_shard_index,
-            wetbulb_frame,
+            frame[["location_id", "date", "pet"]].copy(),
             batch_index,
-            filesystem=wetbulb_target.filesystem,
-            base_path=wetbulb_target.base_path,
+            filesystem=pet_target.filesystem,
+            base_path=pet_target.base_path,
         )
+    if write_wetbulb:
+        wetbulb_frame = (
+            frame[["location_id", "date", "wetbulb"]]
+            .dropna(
+                subset=["wetbulb"],
+            )
+            .copy()
+        )
+        if not wetbulb_frame.empty:
+            _write_wetbulb_partition(
+                wetbulb_target.root,
+                year,
+                city_shard_index,
+                wetbulb_frame,
+                batch_index,
+                filesystem=wetbulb_target.filesystem,
+                base_path=wetbulb_target.base_path,
+            )
     return batch_index
 
 
@@ -737,6 +750,8 @@ def _process_era5_batch_with_thread_dataset(
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
+    write_pet: bool = True,
+    write_wetbulb: bool = True,
 ) -> int:
     for attempt in range(1, GCS_BATCH_MAX_RETRIES + 1):
         try:
@@ -757,6 +772,8 @@ def _process_era5_batch_with_thread_dataset(
                 pending_batch_df=pending_batch_df,
                 compute_workers=compute_workers,
                 allowed_months=allowed_months,
+                write_pet=write_pet,
+                write_wetbulb=write_wetbulb,
             )
         except OSError:
             if attempt == GCS_BATCH_MAX_RETRIES:
@@ -768,12 +785,22 @@ def _process_era5_batch_with_thread_dataset(
     return batch_index
 
 
+PRODUCT_CHOICES = ("pet", "wetbulb", "both")
+
+
+def _resolve_products(products: str) -> tuple[bool, bool]:
+    """Map a --products choice to (write_pet, write_wetbulb) flags."""
+    if products not in PRODUCT_CHOICES:
+        msg = f"products must be one of {PRODUCT_CHOICES}, got {products!r}"
+        raise ValueError(msg)
+    return products in ("pet", "both"), products in ("wetbulb", "both")
+
+
 def _run_era5_batch_jobs(
     *,
     selected_batches: list[tuple[int, int, int]],
     shard_df: DataFrame,
-    era5_root: str,
-    wetbulb_root: str,
+    plan: _ProductPlan,
     year: int,
     city_shard_index: int,
     city_shard_count: int,
@@ -783,6 +810,10 @@ def _run_era5_batch_jobs(
     allowed_months: list[int] | None = None,
     force: bool = False,
 ) -> bool:
+    era5_root = plan.pet_root
+    wetbulb_root = plan.wetbulb_root
+    write_pet = plan.write_pet
+    write_wetbulb = plan.write_wetbulb
     concurrency_profile = os.environ.get("ERA5_CONCURRENCY_PROFILE", "balanced")
     if concurrency_profile == "aggressive":
         dask_workers = 8
@@ -799,24 +830,31 @@ def _run_era5_batch_jobs(
     )
     batch_jobs: list[tuple[int, int, int, DataFrame]] = []
     for batch_index, start_h, end_h in selected_batches:
-        pet_exists = _pet_batch_exists(
-            era5_root,
-            year,
-            city_shard_index,
-            batch_index,
-            filesystem=filesystem,
-            base_path=base_path,
-        )
-        wetbulb_exists = _pet_batch_exists(
-            wetbulb_root,
-            year,
-            city_shard_index,
-            batch_index,
-            file_prefix="wetbulb",
-            filesystem=wetbulb_filesystem,
-            base_path=wetbulb_base_path,
-        )
-        if force or not (pet_exists and wetbulb_exists):
+        required_exist = []
+        if write_pet:
+            required_exist.append(
+                _pet_batch_exists(
+                    era5_root,
+                    year,
+                    city_shard_index,
+                    batch_index,
+                    filesystem=filesystem,
+                    base_path=base_path,
+                )
+            )
+        if write_wetbulb:
+            required_exist.append(
+                _pet_batch_exists(
+                    wetbulb_root,
+                    year,
+                    city_shard_index,
+                    batch_index,
+                    file_prefix="wetbulb",
+                    filesystem=wetbulb_filesystem,
+                    base_path=wetbulb_base_path,
+                )
+            )
+        if force or not all(required_exist):
             batch_jobs.append((batch_index, start_h, end_h, shard_df))
 
     if not batch_jobs:
@@ -850,6 +888,8 @@ def _run_era5_batch_jobs(
                 pending_batch_df=pending_df,
                 compute_workers=dask_workers,
                 allowed_months=allowed_months,
+                write_pet=write_pet,
+                write_wetbulb=write_wetbulb,
             )
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -864,6 +904,8 @@ def _run_era5_batch_jobs(
                     pending_batch_df=pending_df,
                     compute_workers=dask_workers,
                     allowed_months=allowed_months,
+                    write_pet=write_pet,
+                    write_wetbulb=write_wetbulb,
                 )
                 for batch_index, start_h, end_h, pending_df in batch_jobs
             ]
@@ -889,8 +931,10 @@ def process_era5(
     batch_hours: int,
     concurrency_profile: str,
     months: list[int] | None = None,
+    products: str = "both",
 ) -> None:
     """Download ERA5 data from ARCO, compute PET and wetbulb, and save as parquet shards."""
+    write_pet, write_wetbulb = _resolve_products(products)
     _configure_concurrency(concurrency_profile)
     os.environ["ERA5_CONCURRENCY_PROFILE"] = concurrency_profile
     pet_root = f"{out_dir}/pet_data_csv"
@@ -914,8 +958,7 @@ def process_era5(
     _run_era5_batch_jobs(
         selected_batches=selected_batches,
         shard_df=shard_df,
-        era5_root=pet_root,
-        wetbulb_root=wetbulb_root,
+        plan=_ProductPlan(pet_root, wetbulb_root, write_pet, write_wetbulb),
         year=year,
         city_shard_index=city_shard_index,
         city_shard_count=city_shard_count,
@@ -947,6 +990,12 @@ def _parse_args() -> argparse.Namespace:
         choices=["conservative", "balanced", "aggressive"],
         default="aggressive",
     )
+    parser.add_argument(
+        "--products",
+        choices=list(PRODUCT_CHOICES),
+        default="both",
+        help="Which parquet trees to write: pet, wetbulb, or both (default).",
+    )
     return parser.parse_args()
 
 
@@ -966,6 +1015,7 @@ def main() -> None:
             batch_hours=args.batch_hours,
             concurrency_profile=args.concurrency_profile,
             months=args.months,
+            products=args.products,
         )
     except KeyboardInterrupt:
         exit_code = 130

@@ -26,7 +26,9 @@ from google_era5 import (
     _normalize_longitudes_for_solar_geometry,
     _PartitionTarget,
     _process_era5_batch_job,
+    _ProductPlan,
     _resolve_era5_max_workers,
+    _resolve_products,
     _run_era5_batch_jobs,
     _select_time_shard_batches,
     _ThermofeelModule,
@@ -421,6 +423,83 @@ class TestProcessEra5BatchJob:
             (wetbulb_root / "year=2020").glob("wetbulb_batch_*.parquet"),
         )
 
+    def _run_with_products(
+        self,
+        tmp_path: pathlib.Path,
+        *,
+        write_pet: bool,
+        write_wetbulb: bool,
+    ) -> tuple[pathlib.Path, pathlib.Path]:
+        frame = pd.DataFrame(
+            {
+                "location_id": [1],
+                "date": [pd.Timestamp("2020-01-01").date()],
+                "pet": [20.0],
+                "wetbulb": [15.0],
+            },
+        )
+
+        def fake_compute_location_frame(
+            _ds: object,
+            _cities: object,
+            _compute_workers: int,
+        ) -> pd.DataFrame:
+            return frame
+
+        original = google_era5._compute_location_frame
+        google_era5._compute_location_frame = fake_compute_location_frame
+        pet_root = tmp_path / "pet"
+        wetbulb_root = tmp_path / "wetbulb"
+        try:
+            _process_era5_batch_job(
+                ds=MagicMock(),
+                pet_target=_PartitionTarget(str(pet_root)),
+                wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                year=2020,
+                city_shard_index=0,
+                batch_index=0,
+                pending_batch_df=pd.DataFrame(
+                    {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
+                ),
+                compute_workers=1,
+                write_pet=write_pet,
+                write_wetbulb=write_wetbulb,
+            )
+        finally:
+            google_era5._compute_location_frame = original
+        return pet_root, wetbulb_root
+
+    def test_wetbulb_only_skips_pet_partition(self, tmp_path: pathlib.Path) -> None:
+        pet_root, wetbulb_root = self._run_with_products(
+            tmp_path, write_pet=False, write_wetbulb=True
+        )
+        assert not pet_root.exists()
+        assert (
+            len(list((wetbulb_root / "year=2020").glob("wetbulb_batch_*.parquet"))) == 1
+        )
+
+    def test_pet_only_skips_wetbulb_partition(self, tmp_path: pathlib.Path) -> None:
+        pet_root, wetbulb_root = self._run_with_products(
+            tmp_path, write_pet=True, write_wetbulb=False
+        )
+        assert len(list((pet_root / "year=2020").glob("pet_batch_*.parquet"))) == 1
+        assert not wetbulb_root.exists()
+
+
+class TestResolveProducts:
+    def test_both_enables_both(self) -> None:
+        assert _resolve_products("both") == (True, True)
+
+    def test_pet_only(self) -> None:
+        assert _resolve_products("pet") == (True, False)
+
+    def test_wetbulb_only(self) -> None:
+        assert _resolve_products("wetbulb") == (False, True)
+
+    def test_invalid_raises(self) -> None:
+        with pytest.raises(ValueError, match="products must be one of"):
+            _resolve_products("humidex")
+
 
 class TestRunEra5BatchJobs:
     def test_parallel_branch_uses_threads(
@@ -460,8 +539,10 @@ class TestRunEra5BatchJobs:
         wrote_batches = _run_era5_batch_jobs(
             selected_batches=[(0, 0, 23), (1, 24, 47)],
             shard_df=shard_df,
-            era5_root=str(tmp_path / "era5"),
-            wetbulb_root=str(tmp_path / "wetbulb"),
+            plan=_ProductPlan(
+                str(tmp_path / "era5"),
+                str(tmp_path / "wetbulb"),
+            ),
             year=2001,
             city_shard_index=0,
             city_shard_count=1,
@@ -490,6 +571,7 @@ class TestMainExitCodes:
             max_workers=1,
             batch_hours=DEFAULT_BATCH_HOURS,
             concurrency_profile="balanced",
+            products="both",
         )
 
     def test_successful_main_exits_zero(

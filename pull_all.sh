@@ -54,6 +54,21 @@ HISTORY_FALLBACK_DB_URI_ENV=${HISTORY_FALLBACK_DB_URI_ENV:-POSTGRES_DB_URI_PRD}
 ALLOW_EMPTY_ANALYTICS=${ALLOW_EMPTY_ANALYTICS:-0}
 PROGRESS=${PROGRESS:-1}
 ERA5_PARALLEL_STRATEGY=${ERA5_PARALLEL_STRATEGY:-auto}
+PRODUCTS=${PRODUCTS:-both}
+
+case "${PRODUCTS}" in
+    pet) DO_PET=1 ; DO_WETBULB=0 ;;
+    wetbulb) DO_PET=0 ; DO_WETBULB=1 ;;
+    both) DO_PET=1 ; DO_WETBULB=1 ;;
+    *)
+        echo "PRODUCTS must be 'pet', 'wetbulb', or 'both' (got '${PRODUCTS}')." >&2
+        exit 1
+        ;;
+esac
+
+if [[ "${PRODUCTS}" != "both" ]]; then
+    echo "PRODUCTS=${PRODUCTS}: only the ${PRODUCTS} data product will be computed and loaded; the other table is left untouched."
+fi
 
 if [[ "${SKIP_DB_LOAD}" == "1" ]]; then
     echo "WARNING: SKIP_DB_LOAD=1 means this run will not update Postgres."
@@ -433,53 +448,57 @@ _prepare_analytics_pet_inputs() {
         return 0
     fi
 
-    echo "====== Step 2.75: Merge historical PET for DB load ======"
-    rm -f "${HISTORY_EXPORT_CSV}" "${FULL_PET_CSV}"
-
     local primary_env=${HISTORY_DB_URI_ENV}
     local fallback_env=${HISTORY_FALLBACK_DB_URI_ENV}
 
-    _export_history_pet_csv "${primary_env}" "${HISTORY_EXPORT_CSV}"
-    _run_python historical_pet_update.py merge "${FULL_PET_CSV}" "${HISTORY_EXPORT_CSV}" --dirs pet_data_csv
+    if (( DO_PET )); then
+        echo "====== Step 2.75: Merge historical PET for DB load ======"
+        rm -f "${HISTORY_EXPORT_CSV}" "${FULL_PET_CSV}"
 
-    local merged_year_count
-    merged_year_count=$(_count_csv_years "${FULL_PET_CSV}")
-    if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "${fallback_env}" ]] && [[ "${fallback_env}" != "${primary_env}" ]] && [[ -n "${!fallback_env:-}" ]]; then
-        echo "Primary history source did not provide enough PET history; retrying with ${fallback_env}."
-        _export_history_pet_csv "${fallback_env}" "${HISTORY_EXPORT_CSV}"
+        _export_history_pet_csv "${primary_env}" "${HISTORY_EXPORT_CSV}"
         _run_python historical_pet_update.py merge "${FULL_PET_CSV}" "${HISTORY_EXPORT_CSV}" --dirs pet_data_csv
+
+        local merged_year_count
         merged_year_count=$(_count_csv_years "${FULL_PET_CSV}")
+        if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "${fallback_env}" ]] && [[ "${fallback_env}" != "${primary_env}" ]] && [[ -n "${!fallback_env:-}" ]]; then
+            echo "Primary history source did not provide enough PET history; retrying with ${fallback_env}."
+            _export_history_pet_csv "${fallback_env}" "${HISTORY_EXPORT_CSV}"
+            _run_python historical_pet_update.py merge "${FULL_PET_CSV}" "${HISTORY_EXPORT_CSV}" --dirs pet_data_csv
+            merged_year_count=$(_count_csv_years "${FULL_PET_CSV}")
+        fi
+
+        if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
+            echo "Need at least ${MIN_PET_YEARS_FOR_FORECAST} PET years to derive pet_forecast (and the downstream city_rankings_view change fields). Found ${merged_year_count} year(s) in ${FULL_PET_CSV}." >&2
+            echo "Either widen the historical source or set MERGE_EXISTING_PET_HISTORY=0 and accept empty analytics." >&2
+            exit 1
+        fi
+
+        DB_LOAD_PET_CSV="${FULL_PET_CSV}"
+        DB_LOAD_PREFER_PET_CSV=1
     fi
 
-    if (( merged_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
-        echo "Need at least ${MIN_PET_YEARS_FOR_FORECAST} PET years to derive pet_forecast (and the downstream city_rankings_view change fields). Found ${merged_year_count} year(s) in ${FULL_PET_CSV}." >&2
-        echo "Either widen the historical source or set MERGE_EXISTING_PET_HISTORY=0 and accept empty analytics." >&2
-        exit 1
-    fi
+    if (( DO_WETBULB )); then
+        echo "====== Step 2.85: Merge historical wetbulb for DB load ======"
+        rm -f "${HISTORY_EXPORT_WETBULB_CSV}" "${FULL_WETBULB_CSV}"
 
-    DB_LOAD_PET_CSV="${FULL_PET_CSV}"
-    DB_LOAD_PREFER_PET_CSV=1
-
-    echo "====== Step 2.85: Merge historical wetbulb for DB load ======"
-    rm -f "${HISTORY_EXPORT_WETBULB_CSV}" "${FULL_WETBULB_CSV}"
-
-    _export_history_wetbulb_csv "${primary_env}" "${HISTORY_EXPORT_WETBULB_CSV}"
-    _run_python historical_pet_update.py merge "${FULL_WETBULB_CSV}" "${HISTORY_EXPORT_WETBULB_CSV}" --dirs wetbulb_data_csv --table wetbulb
-
-    local merged_wetbulb_year_count
-    merged_wetbulb_year_count=$(_count_csv_years "${FULL_WETBULB_CSV}")
-    if (( merged_wetbulb_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "${fallback_env}" ]] && [[ "${fallback_env}" != "${primary_env}" ]] && [[ -n "${!fallback_env:-}" ]]; then
-        echo "Primary history source did not provide enough wetbulb history; retrying with ${fallback_env}."
-        _export_history_wetbulb_csv "${fallback_env}" "${HISTORY_EXPORT_WETBULB_CSV}"
+        _export_history_wetbulb_csv "${primary_env}" "${HISTORY_EXPORT_WETBULB_CSV}"
         _run_python historical_pet_update.py merge "${FULL_WETBULB_CSV}" "${HISTORY_EXPORT_WETBULB_CSV}" --dirs wetbulb_data_csv --table wetbulb
-        merged_wetbulb_year_count=$(_count_csv_years "${FULL_WETBULB_CSV}")
-    fi
 
-    if (( merged_wetbulb_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
-        echo "WARNING: Found only ${merged_wetbulb_year_count} wetbulb year(s) in ${FULL_WETBULB_CSV}; wetbulb_forecast/wetbulb_forecast_max will be empty until more history is backfilled." >&2
-    else
-        DB_LOAD_WETBULB_CSV="${FULL_WETBULB_CSV}"
-        DB_LOAD_PREFER_WETBULB_CSV=1
+        local merged_wetbulb_year_count
+        merged_wetbulb_year_count=$(_count_csv_years "${FULL_WETBULB_CSV}")
+        if (( merged_wetbulb_year_count < MIN_PET_YEARS_FOR_FORECAST )) && [[ -n "${fallback_env}" ]] && [[ "${fallback_env}" != "${primary_env}" ]] && [[ -n "${!fallback_env:-}" ]]; then
+            echo "Primary history source did not provide enough wetbulb history; retrying with ${fallback_env}."
+            _export_history_wetbulb_csv "${fallback_env}" "${HISTORY_EXPORT_WETBULB_CSV}"
+            _run_python historical_pet_update.py merge "${FULL_WETBULB_CSV}" "${HISTORY_EXPORT_WETBULB_CSV}" --dirs wetbulb_data_csv --table wetbulb
+            merged_wetbulb_year_count=$(_count_csv_years "${FULL_WETBULB_CSV}")
+        fi
+
+        if (( merged_wetbulb_year_count < MIN_PET_YEARS_FOR_FORECAST )); then
+            echo "WARNING: Found only ${merged_wetbulb_year_count} wetbulb year(s) in ${FULL_WETBULB_CSV}; wetbulb_forecast/wetbulb_forecast_max will be empty until more history is backfilled." >&2
+        else
+            DB_LOAD_WETBULB_CSV="${FULL_WETBULB_CSV}"
+            DB_LOAD_PREFER_WETBULB_CSV=1
+        fi
     fi
 
     _progress_advance 1 "Merged historical PET/wetbulb inputs"
@@ -555,6 +574,7 @@ _build_cloud_run_args_csv() {
         "--max-workers=${ERA5_BATCH_WORKERS}"
         "--batch-hours=${ERA5_BATCH_HOURS}"
         "--concurrency-profile=${ERA5_CONCURRENCY_PROFILE}"
+        "--products=${PRODUCTS}"
         "--out-dir=${REMOTE_OUT_DIR}"
     )
 
@@ -784,8 +804,8 @@ echo "====== Step 1: Compute year ranges + setup locations ======"
 mkdir -p output_tiles pet_data_csv wetbulb_data_csv analytics_data_csv
 if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
     for YEAR in "${ALL_YEARS_ARRAY[@]}"; do
-        rm -rf "pet_data_csv/year=${YEAR}"
-        rm -rf "wetbulb_data_csv/year=${YEAR}"
+        (( DO_PET )) && rm -rf "pet_data_csv/year=${YEAR}"
+        (( DO_WETBULB )) && rm -rf "wetbulb_data_csv/year=${YEAR}"
     done
 fi
 rm -rf analytics_data_csv/shard_count=*
@@ -870,8 +890,8 @@ if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
             _progress_advance 1 "Provisioned Cloud Run worker"
         fi
         if [[ "${SKIP_REMOTE_CLEAR}" != "1" ]]; then
-            _clear_remote_pet_prefix
-            _clear_remote_wetbulb_prefix
+            (( DO_PET )) && _clear_remote_pet_prefix
+            (( DO_WETBULB )) && _clear_remote_wetbulb_prefix
             _progress_advance 1 "Cleared remote PET/wetbulb prefixes"
         fi
     fi
@@ -907,6 +927,7 @@ if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
                         --batch-hours "${ERA5_BATCH_HOURS}"
                         --max-workers "${ERA5_BATCH_WORKERS}"
                         --concurrency-profile "${ERA5_CONCURRENCY_PROFILE}"
+                        --products "${PRODUCTS}"
                         --out-dir .
                     )
                     if (( ${#ERA5_MONTHS[@]} > 0 )); then
@@ -920,20 +941,20 @@ if [[ "${SKIP_ERA5_PULL}" != "1" ]]; then
     _wait_phase "pull-google-era5-pet"
 
     if [[ "${USE_CLOUD_RUN}" == "1" ]]; then
-        _sync_pet_from_s3
-        _sync_wetbulb_from_s3
+        (( DO_PET )) && _sync_pet_from_s3
+        (( DO_WETBULB )) && _sync_wetbulb_from_s3
         _progress_advance 1 "Synced PET/wetbulb shards from S3"
     fi
 elif [[ "${USE_CLOUD_RUN}" == "1" && "${SYNC_PET_FROM_S3}" == "1" ]]; then
     _require_executable "${AWS_BIN}"
-    _sync_pet_from_s3
-    _sync_wetbulb_from_s3
+    (( DO_PET )) && _sync_pet_from_s3
+    (( DO_WETBULB )) && _sync_wetbulb_from_s3
     _progress_advance 1 "Synced PET/wetbulb shards from S3"
 fi
 
-_assert_pet_output_available
-_materialize_pet_csv
-_materialize_wetbulb_csv
+(( DO_PET )) && _assert_pet_output_available
+(( DO_PET )) && _materialize_pet_csv
+(( DO_WETBULB )) && _materialize_wetbulb_csv
 _progress_advance 1 "Materialized pet.csv and wetbulb.csv"
 _prepare_analytics_pet_inputs
 
@@ -944,7 +965,11 @@ if [[ "${SKIP_DB_LOAD}" == "1" ]] || ! _database_configured; then
 fi
 
 echo "====== Step 3: Prepare DB load ======"
-_run_python - <<'PY'
+TRUNCATE_TABLES="locations"
+(( DO_PET )) && TRUNCATE_TABLES="${TRUNCATE_TABLES}, pet"
+(( DO_WETBULB )) && TRUNCATE_TABLES="${TRUNCATE_TABLES}, wetbulb"
+TRUNCATE_TABLES="${TRUNCATE_TABLES}" _run_python - <<'PY'
+import os
 import sys
 from pathlib import Path
 
@@ -954,12 +979,13 @@ from shared_config import resolve_database_uri
 
 db_uri = resolve_database_uri()
 if not db_uri: sys.exit(0)
+truncate_tables = os.environ["TRUNCATE_TABLES"]
 with psycopg.connect(db_uri) as conn:
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(Path("drop_views.sql").read_text(encoding="utf-8"))
         cur.execute(Path("create_tables.sql").read_text(encoding="utf-8"))
-        cur.execute("TRUNCATE TABLE locations, pet, wetbulb CASCADE")
+        cur.execute(f"TRUNCATE TABLE {truncate_tables} CASCADE")  # noqa: S608
 PY
 
 _run_python load.py --append-only --skip-drop-views --skip-create-views --skip-table pet --skip-table wetbulb
@@ -973,16 +999,24 @@ for (( LOAD_SHARD=0; LOAD_SHARD<ANALYTICS_SHARD_COUNT; LOAD_SHARD++ )); do
         --skip-drop-views
         --skip-create-views
         --skip-table locations
-        --pet-csv "${DB_LOAD_PET_CSV}"
-        --wetbulb-csv "${DB_LOAD_WETBULB_CSV}"
         --load-shard-index "${LOAD_SHARD}"
         --load-shard-count "${ANALYTICS_SHARD_COUNT}"
     )
-    if [[ "${DB_LOAD_PREFER_PET_CSV}" == "1" ]]; then
-        LOAD_ARGS+=(--prefer-pet-csv)
+    if (( DO_PET )); then
+        LOAD_ARGS+=(--pet-csv "${DB_LOAD_PET_CSV}")
+        if [[ "${DB_LOAD_PREFER_PET_CSV}" == "1" ]]; then
+            LOAD_ARGS+=(--prefer-pet-csv)
+        fi
+    else
+        LOAD_ARGS+=(--skip-table pet)
     fi
-    if [[ "${DB_LOAD_PREFER_WETBULB_CSV}" == "1" ]]; then
-        LOAD_ARGS+=(--prefer-wetbulb-csv)
+    if (( DO_WETBULB )); then
+        LOAD_ARGS+=(--wetbulb-csv "${DB_LOAD_WETBULB_CSV}")
+        if [[ "${DB_LOAD_PREFER_WETBULB_CSV}" == "1" ]]; then
+            LOAD_ARGS+=(--prefer-wetbulb-csv)
+        fi
+    else
+        LOAD_ARGS+=(--skip-table wetbulb)
     fi
     _launch "${COMPUTE_JOB_LIMIT}" "DB load shard $(( LOAD_SHARD + 1 ))/${ANALYTICS_SHARD_COUNT}" _run_python "${LOAD_ARGS[@]}"
 done
