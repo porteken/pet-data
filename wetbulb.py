@@ -31,8 +31,8 @@ def wetbulb_stull(tair: object = 20.0, rh: object = 50.0) -> object:
             )
             raise ValueError(msg)
 
-    t = np.broadcast_to(inputs[0], max_len).copy()
-    rh_pct = np.broadcast_to(inputs[1], max_len).copy()
+    t = np.broadcast_to(inputs[0], max_len)
+    rh_pct = np.broadcast_to(inputs[1], max_len)
 
     tw = (
         t * np.arctan(_STULL_C1 * np.sqrt(rh_pct + _STULL_C2))

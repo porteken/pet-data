@@ -365,14 +365,14 @@ def _approximate_dsrp(
 
 
 def _compute_pet_chunk(df_chunk: DataFrame) -> DataFrame:
-    t_vals = df_chunk["t"].to_numpy(dtype="float64")
-    mrt_vals = df_chunk["mrt"].to_numpy(dtype="float64")
-    v_vals = df_chunk["v"].to_numpy(dtype="float64")
-    rh_vals = df_chunk["rh"].to_numpy(dtype="float64")
+    t_vals = df_chunk["t"].to_numpy(dtype="float32")
+    mrt_vals = df_chunk["mrt"].to_numpy(dtype="float32")
+    v_vals = df_chunk["v"].to_numpy(dtype="float32")
+    rh_vals = df_chunk["rh"].to_numpy(dtype="float32")
 
     pet_results = np.asarray(
         pet_corrected(t_vals, mrt_vals, v_vals, rh_vals, icl=0.5),
-        dtype="float64",
+        dtype="float32",
     )
     invalid_pet = (
         ~np.isfinite(pet_results)
@@ -396,9 +396,9 @@ def _compute_pet_chunk(df_chunk: DataFrame) -> DataFrame:
 def _compute_wetbulb_series(temp_c: ArrayLike, rh: ArrayLike) -> ArrayLike:
     wetbulb_results = np.asarray(
         wetbulb_stull(
-            np.asarray(temp_c, dtype="float64"), np.asarray(rh, dtype="float64")
+            np.asarray(temp_c, dtype="float32"), np.asarray(rh, dtype="float32")
         ),
-        dtype="float64",
+        dtype="float32",
     )
     invalid_wetbulb = (
         ~np.isfinite(wetbulb_results)
@@ -586,6 +586,15 @@ class _ProductPlan(NamedTuple):
     write_wetbulb: bool = True
 
 
+class _BatchWriteTargets(NamedTuple):
+    """Where to write each product and whether it should be written."""
+
+    pet_target: _PartitionTarget
+    wetbulb_target: _PartitionTarget
+    write_pet: bool = True
+    write_wetbulb: bool = True
+
+
 def _write_batch_partition(
     root: str,
     year: int,
@@ -681,16 +690,15 @@ def _pet_batch_exists(
 def _process_era5_batch_job(
     *,
     ds: Dataset,
-    pet_target: _PartitionTarget,
-    wetbulb_target: _PartitionTarget,
+    targets: _BatchWriteTargets,
     year: int,
     city_shard_index: int,
     batch_index: int,
+    start_h: int,
+    end_h: int,
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
-    write_pet: bool = True,
-    write_wetbulb: bool = True,
 ) -> int:
     LOGGER.info(
         "Computing ERA5->PET for year %s batch %s over %s cities.",
@@ -700,7 +708,7 @@ def _process_era5_batch_job(
     )
 
     frame = _compute_location_frame(
-        ds,
+        ds.sel(time=slice(start_h, end_h)),
         pending_batch_df,
         compute_workers,
     )
@@ -709,17 +717,17 @@ def _process_era5_batch_job(
     if frame.empty:
         return batch_index
 
-    if write_pet:
+    if targets.write_pet:
         _write_pet_partition(
-            pet_target.root,
+            targets.pet_target.root,
             year,
             city_shard_index,
             frame[["location_id", "date", "pet"]].copy(),
             batch_index,
-            filesystem=pet_target.filesystem,
-            base_path=pet_target.base_path,
+            filesystem=targets.pet_target.filesystem,
+            base_path=targets.pet_target.base_path,
         )
-    if write_wetbulb:
+    if targets.write_wetbulb:
         wetbulb_frame = (
             frame[["location_id", "date", "wetbulb"]]
             .dropna(
@@ -729,29 +737,28 @@ def _process_era5_batch_job(
         )
         if not wetbulb_frame.empty:
             _write_wetbulb_partition(
-                wetbulb_target.root,
+                targets.wetbulb_target.root,
                 year,
                 city_shard_index,
                 wetbulb_frame,
                 batch_index,
-                filesystem=wetbulb_target.filesystem,
-                base_path=wetbulb_target.base_path,
+                filesystem=targets.wetbulb_target.filesystem,
+                base_path=targets.wetbulb_target.base_path,
             )
     return batch_index
 
 
 def _process_era5_batch_with_thread_dataset(
     *,
-    pet_target: _PartitionTarget,
-    wetbulb_target: _PartitionTarget,
+    targets: _BatchWriteTargets,
     year: int,
     city_shard_index: int,
     batch_index: int,
+    start_h: int,
+    end_h: int,
     pending_batch_df: DataFrame,
     compute_workers: int,
     allowed_months: list[int] | None = None,
-    write_pet: bool = True,
-    write_wetbulb: bool = True,
 ) -> int:
     for attempt in range(1, GCS_BATCH_MAX_RETRIES + 1):
         try:
@@ -764,16 +771,15 @@ def _process_era5_batch_with_thread_dataset(
 
             return _process_era5_batch_job(
                 ds=ds,
-                pet_target=pet_target,
-                wetbulb_target=wetbulb_target,
+                targets=targets,
                 year=year,
                 city_shard_index=city_shard_index,
                 batch_index=batch_index,
+                start_h=start_h,
+                end_h=end_h,
                 pending_batch_df=pending_batch_df,
                 compute_workers=compute_workers,
                 allowed_months=allowed_months,
-                write_pet=write_pet,
-                write_wetbulb=write_wetbulb,
             )
         except OSError:
             if attempt == GCS_BATCH_MAX_RETRIES:
@@ -828,6 +834,7 @@ def _run_era5_batch_jobs(
     wetbulb_target = _PartitionTarget(
         wetbulb_root, wetbulb_filesystem, wetbulb_base_path
     )
+    targets = _BatchWriteTargets(pet_target, wetbulb_target, write_pet, write_wetbulb)
     batch_jobs: list[tuple[int, int, int, DataFrame]] = []
     for batch_index, start_h, end_h in selected_batches:
         required_exist = []
@@ -880,32 +887,30 @@ def _run_era5_batch_jobs(
         ):
             _process_era5_batch_job(
                 ds=ds,
-                pet_target=pet_target,
-                wetbulb_target=wetbulb_target,
+                targets=targets,
                 year=year,
                 city_shard_index=city_shard_index,
                 batch_index=batch_index,
+                start_h=_start_h,
+                end_h=_end_h,
                 pending_batch_df=pending_df,
                 compute_workers=dask_workers,
                 allowed_months=allowed_months,
-                write_pet=write_pet,
-                write_wetbulb=write_wetbulb,
             )
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = [
                 executor.submit(
                     _process_era5_batch_with_thread_dataset,
-                    pet_target=pet_target,
-                    wetbulb_target=wetbulb_target,
+                    targets=targets,
                     year=year,
                     city_shard_index=city_shard_index,
                     batch_index=batch_index,
+                    start_h=start_h,
+                    end_h=end_h,
                     pending_batch_df=pending_df,
                     compute_workers=dask_workers,
                     allowed_months=allowed_months,
-                    write_pet=write_pet,
-                    write_wetbulb=write_wetbulb,
                 )
                 for batch_index, start_h, end_h, pending_df in batch_jobs
             ]

@@ -18,6 +18,7 @@ from google_era5 import (
     DEFAULT_BATCH_HOURS,
     ERA5_TIME_ORIGIN,
     _approximate_dsrp,
+    _BatchWriteTargets,
     _compute_location_frame,
     _compute_pet_chunk,
     _compute_wetbulb_series,
@@ -354,11 +355,15 @@ class TestProcessEra5BatchJob:
 
             _process_era5_batch_job(
                 ds=MagicMock(),
-                pet_target=_PartitionTarget(str(pet_root)),
-                wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                targets=_BatchWriteTargets(
+                    pet_target=_PartitionTarget(str(pet_root)),
+                    wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                ),
                 year=2020,
                 city_shard_index=0,
                 batch_index=0,
+                start_h=0,
+                end_h=23,
                 pending_batch_df=pd.DataFrame(
                     {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
                 ),
@@ -404,11 +409,15 @@ class TestProcessEra5BatchJob:
 
             _process_era5_batch_job(
                 ds=MagicMock(),
-                pet_target=_PartitionTarget(str(pet_root)),
-                wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                targets=_BatchWriteTargets(
+                    pet_target=_PartitionTarget(str(pet_root)),
+                    wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                ),
                 year=2020,
                 city_shard_index=0,
                 batch_index=0,
+                start_h=0,
+                end_h=23,
                 pending_batch_df=pd.DataFrame(
                     {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
                 ),
@@ -453,17 +462,21 @@ class TestProcessEra5BatchJob:
         try:
             _process_era5_batch_job(
                 ds=MagicMock(),
-                pet_target=_PartitionTarget(str(pet_root)),
-                wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                targets=_BatchWriteTargets(
+                    pet_target=_PartitionTarget(str(pet_root)),
+                    wetbulb_target=_PartitionTarget(str(wetbulb_root)),
+                    write_pet=write_pet,
+                    write_wetbulb=write_wetbulb,
+                ),
                 year=2020,
                 city_shard_index=0,
                 batch_index=0,
+                start_h=0,
+                end_h=23,
                 pending_batch_df=pd.DataFrame(
                     {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
                 ),
                 compute_workers=1,
-                write_pet=write_pet,
-                write_wetbulb=write_wetbulb,
             )
         finally:
             google_era5._compute_location_frame = original
