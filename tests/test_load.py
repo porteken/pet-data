@@ -23,6 +23,7 @@ from load import (
     _normalize_copy_column_names,
     _select_partition_shard_paths,
     _validate_load_shard_args,
+    _validated_load_path,
     execute_sql_file,
     refresh_query_planner_statistics,
 )
@@ -170,6 +171,38 @@ class TestFilterPathsByPartitionValue:
             [p1], root_path=root, partition_key="shard_index", partition_value="00001"
         )
         assert result1 == []
+
+
+class TestValidatedLoadPath:
+    def test_accepts_path_inside_base_dir(self, tmp_path: Path) -> None:
+        nested = tmp_path / "sub" / "data.csv"
+        nested.parent.mkdir()
+        nested.write_text("id\n1\n")
+
+        assert _validated_load_path(nested, base_dir=tmp_path) == nested.resolve()
+
+    def test_accepts_base_dir_itself(self, tmp_path: Path) -> None:
+        assert _validated_load_path(tmp_path, base_dir=tmp_path) == tmp_path.resolve()
+
+    def test_rejects_path_outside_base_dir(self, tmp_path: Path) -> None:
+        outside = tmp_path.parent / "outside.csv"
+
+        with pytest.raises(ValueError, match="outside the allowed directory"):
+            _validated_load_path(outside, base_dir=tmp_path)
+
+    def test_rejects_traversal_escaping_base_dir(self, tmp_path: Path) -> None:
+        traversal = tmp_path / "sub" / ".." / ".." / "secret.csv"
+
+        with pytest.raises(ValueError, match="outside the allowed directory"):
+            _validated_load_path(traversal, base_dir=tmp_path)
+
+    def test_rejects_sibling_directory_with_shared_prefix(self, tmp_path: Path) -> None:
+        base_dir = tmp_path / "data"
+        base_dir.mkdir()
+        sibling = tmp_path / "data-secret" / "leak.csv"
+
+        with pytest.raises(ValueError, match="outside the allowed directory"):
+            _validated_load_path(sibling, base_dir=base_dir)
 
 
 class TestValidateLoadShardArgs:
@@ -353,6 +386,10 @@ class TestMain:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         import load
+
+        # load.py confines file loads to the current working directory, so
+        # run from tmp_path like the CLI is run from the repo checkout root.
+        monkeypatch.chdir(tmp_path)
 
         # Mock dependencies to avoid actual DB and file ops
         monkeypatch.setattr(

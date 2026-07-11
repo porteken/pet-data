@@ -15,6 +15,8 @@ from shared_config import DATABASE_CONFIG_HINT, resolve_database_uri
 if TYPE_CHECKING:
     from psycopg import Connection
 
+_TO_REGCLASS_QUERY: LiteralString = "SELECT to_regclass(%s)"
+
 DATA_PRODUCTS: dict[str, dict[str, str]] = {
     "pet": {
         "table": "pet",
@@ -93,7 +95,7 @@ def export_pet(
     conn = psycopg.connect(db_uri)
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+            cur.execute(_TO_REGCLASS_QUERY, (f"public.{table}",))
             regclass = cur.fetchone()
             if regclass is None or regclass[0] is None:  # type: ignore[index]
                 print(f"Table '{table}' does not exist. Creating empty export.")
@@ -215,7 +217,7 @@ def _existing_public_tables(
     existing_tables: list[str] = []
     with conn.cursor() as cur:
         for table_name in table_names:
-            cur.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
+            cur.execute(_TO_REGCLASS_QUERY, (f"public.{table_name}",))
             row = cur.fetchone()
             if row is not None and row[0] is not None:  # type: ignore[index]
                 existing_tables.append(table_name)
@@ -254,7 +256,7 @@ def delete_window(window_start: str, window_end: str) -> None:
             for product in WINDOWED_PRODUCTS:
                 table = DATA_PRODUCTS[product]["table"]
                 label = DATA_PRODUCTS[product]["label"]
-                cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+                cur.execute(_TO_REGCLASS_QUERY, (f"public.{table}",))
                 regclass = cur.fetchone()
                 if regclass is None or regclass[0] is None:  # type: ignore[index]
                     continue

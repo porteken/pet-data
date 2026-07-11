@@ -802,6 +802,46 @@ def _resolve_products(products: str) -> tuple[bool, bool]:
     return products in ("pet", "both"), products in ("wetbulb", "both")
 
 
+def _collect_pending_batch_jobs(
+    *,
+    selected_batches: list[tuple[int, int, int]],
+    shard_df: DataFrame,
+    targets: _BatchWriteTargets,
+    year: int,
+    city_shard_index: int,
+    force: bool,
+) -> list[tuple[int, int, int, DataFrame]]:
+    batch_jobs: list[tuple[int, int, int, DataFrame]] = []
+    for batch_index, start_h, end_h in selected_batches:
+        required_exist = []
+        if targets.write_pet:
+            required_exist.append(
+                _pet_batch_exists(
+                    targets.pet_target.root,
+                    year,
+                    city_shard_index,
+                    batch_index,
+                    filesystem=targets.pet_target.filesystem,
+                    base_path=targets.pet_target.base_path,
+                )
+            )
+        if targets.write_wetbulb:
+            required_exist.append(
+                _pet_batch_exists(
+                    targets.wetbulb_target.root,
+                    year,
+                    city_shard_index,
+                    batch_index,
+                    file_prefix="wetbulb",
+                    filesystem=targets.wetbulb_target.filesystem,
+                    base_path=targets.wetbulb_target.base_path,
+                )
+            )
+        if force or not all(required_exist):
+            batch_jobs.append((batch_index, start_h, end_h, shard_df))
+    return batch_jobs
+
+
 def _run_era5_batch_jobs(
     *,
     selected_batches: list[tuple[int, int, int]],
@@ -835,34 +875,14 @@ def _run_era5_batch_jobs(
         wetbulb_root, wetbulb_filesystem, wetbulb_base_path
     )
     targets = _BatchWriteTargets(pet_target, wetbulb_target, write_pet, write_wetbulb)
-    batch_jobs: list[tuple[int, int, int, DataFrame]] = []
-    for batch_index, start_h, end_h in selected_batches:
-        required_exist = []
-        if write_pet:
-            required_exist.append(
-                _pet_batch_exists(
-                    era5_root,
-                    year,
-                    city_shard_index,
-                    batch_index,
-                    filesystem=filesystem,
-                    base_path=base_path,
-                )
-            )
-        if write_wetbulb:
-            required_exist.append(
-                _pet_batch_exists(
-                    wetbulb_root,
-                    year,
-                    city_shard_index,
-                    batch_index,
-                    file_prefix="wetbulb",
-                    filesystem=wetbulb_filesystem,
-                    base_path=wetbulb_base_path,
-                )
-            )
-        if force or not all(required_exist):
-            batch_jobs.append((batch_index, start_h, end_h, shard_df))
+    batch_jobs = _collect_pending_batch_jobs(
+        selected_batches=selected_batches,
+        shard_df=shard_df,
+        targets=targets,
+        year=year,
+        city_shard_index=city_shard_index,
+        force=force,
+    )
 
     if not batch_jobs:
         return False

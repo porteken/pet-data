@@ -450,6 +450,21 @@ def _copy_csv_file_in_batches(
     return total_rows
 
 
+def _validated_load_path(path: Path, *, base_dir: Path | None = None) -> Path:
+    """Resolve `path` and reject it if it escapes `base_dir` (defaults to CWD).
+
+    CLI arguments may be supplied by an agent acting on untrusted input, so
+    file paths derived from them must not be allowed to traverse outside the
+    directory the tool was invoked from before being opened.
+    """
+    base = (base_dir or Path.cwd()).resolve()
+    resolved = path.resolve()
+    if resolved != base and base not in resolved.parents:
+        msg = f"Path {path} resolves outside the allowed directory {base}"
+        raise ValueError(msg)
+    return resolved
+
+
 def bulk_insert_csv_files(
     conn: Connection[Any],
     csv_paths: list[Path],
@@ -483,7 +498,8 @@ def bulk_insert_csv_files(
         )
 
     total_rows: int = 0
-    for file_path in csv_paths:
+    for raw_file_path in csv_paths:
+        file_path = _validated_load_path(raw_file_path)
         LOGGER.info("Loading %s into %s...", file_path, table_name)
         if file_path.suffix == ".parquet":
             total_rows += _copy_parquet_file_in_batches(
