@@ -5,31 +5,21 @@ description = "PET data pipeline for ERA5 ingestion, analytics, and Postgres loa
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "numpy",
-    "pandas",
-    "pyarrow",
-    "psycopg[binary]",
-    "python-dotenv",
-    "prophet",
-    "requests",
-    "tqdm",
+  "numpy",
+  "pandas",
+  "pyarrow",
+  "psycopg[binary]",
+  "python-dotenv",
+  "prophet",
+  "requests",
+  "tqdm",
 ]
 
 [project.optional-dependencies]
-gcs = [
-    "dask",
-    "gcsfs",
-    "thermofeel",
-    "xarray",
-    "zarr",
-]
+gcs = ["dask", "gcsfs", "thermofeel", "xarray", "zarr"]
 
 [dependency-groups]
-dev = [
-    "pytest",
-    "pytest-cov>=7.1.0",
-    "ruff",
-]
+dev = ["pytest", "pytest-cov>=7.1.0", "ruff"]
 
 [tool.uv]
 package = false
@@ -53,19 +43,23 @@ max-statements = 300
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
-    "S101",     
-    "D100", "D101", "D102", "D103", "D104",
-    "D401",
-    "PLR2004",
-    "PD011",
-    "RUF003",
-    "PT001",
-    "TC003",
-    "PERF401",
-    "PLC0415",
-    "SLF001",
-    "PYI034",
-    "S608",
+  "S101",
+  "D100",
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D401",
+  "PLR2004",
+  "PD011",
+  "RUF003",
+  "PT001",
+  "TC003",
+  "PERF401",
+  "PLC0415",
+  "SLF001",
+  "PYI034",
+  "S608",
 ]
 "build_year_range.py" = ["T201"]
 "historical_pet_update.py" = ["T201", "PLR2004", "ANN401", "S608"]
