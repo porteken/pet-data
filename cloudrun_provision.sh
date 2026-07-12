@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . .env
+  set +a
+fi
+
 GCP_PROJECT_ID=${GCP_PROJECT_ID:-weather-ai-478502}
 CLOUD_RUN_JOB_NAME=${CLOUD_RUN_JOB_NAME:-era5-worker}
 CLOUD_RUN_REGION=${CLOUD_RUN_REGION:-us-east1}
