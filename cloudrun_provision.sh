@@ -26,7 +26,11 @@ AWS_SECRET_SECRET_NAME=${AWS_SECRET_SECRET_NAME:-${CLOUD_RUN_JOB_NAME}-aws-secre
 NLDAS_CLOUD_RUN_JOB_NAME=${NLDAS_CLOUD_RUN_JOB_NAME:-nldas-worker}
 NLDAS_CLOUD_RUN_JOB_CPU=${NLDAS_CLOUD_RUN_JOB_CPU:-1}
 NLDAS_CLOUD_RUN_JOB_MEMORY=${NLDAS_CLOUD_RUN_JOB_MEMORY:-2Gi}
-NLDAS_CLOUD_RUN_TASK_TIMEOUT=${NLDAS_CLOUD_RUN_TASK_TIMEOUT:-1800s}
+# NLDAS historical batches download and parse 720 hourly NetCDF granules per
+# task.  With Earthdata throttling and request retries, that work regularly
+# exceeds 30 minutes; keep a generous default while allowing an operator to
+# override it for a smaller smoke run.
+NLDAS_CLOUD_RUN_TASK_TIMEOUT=${NLDAS_CLOUD_RUN_TASK_TIMEOUT:-14400s}
 EARTHDATA_USERNAME_SECRET_NAME=${EARTHDATA_USERNAME_SECRET_NAME:-${NLDAS_CLOUD_RUN_JOB_NAME}-earthdata-username}
 EARTHDATA_PASSWORD_SECRET_NAME=${EARTHDATA_PASSWORD_SECRET_NAME:-${NLDAS_CLOUD_RUN_JOB_NAME}-earthdata-password}
 
