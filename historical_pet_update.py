@@ -225,7 +225,11 @@ def _existing_public_tables(
 
 
 def delete_window(window_start: str, window_end: str) -> None:
-    """Delete PET/wetbulb rows within a specific date window and reset analytics tables."""
+    """Delete PET/wetbulb rows within a specific date window and reset analytics tables.
+
+    Views are left untouched: materialized views do not block row deletion and
+    are refreshed (or recreated) by the load pipeline afterwards.
+    """
     db_uri = resolve_database_uri()
     if not db_uri:
         print(
@@ -238,21 +242,6 @@ def delete_window(window_start: str, window_end: str) -> None:
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            if Path("drop_views.sql").exists():
-                cur.execute(
-                    cast(
-                        "LiteralString",
-                        Path("drop_views.sql").read_text(encoding="utf-8"),
-                    ),
-                )
-            if Path("create_tables.sql").exists():
-                cur.execute(
-                    cast(
-                        "LiteralString",
-                        Path("create_tables.sql").read_text(encoding="utf-8"),
-                    ),
-                )
-
             for product in WINDOWED_PRODUCTS:
                 table = DATA_PRODUCTS[product]["table"]
                 label = DATA_PRODUCTS[product]["label"]

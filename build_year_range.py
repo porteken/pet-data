@@ -4,9 +4,52 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.request
 from datetime import UTC, date, datetime
 
 from shared_config import mrt_available_end_date
+
+# Root attributes of the ARCO-ERA5 store publish the range that holds final
+# (non-preliminary) data; the time axis itself is pre-allocated decades ahead,
+# so array shape says nothing about availability.
+ARCO_ZATTRS_URL = (
+    "https://storage.googleapis.com/gcp-public-data-arco-era5/ar/"
+    "full_37-1h-0p25deg-chunk-1.zarr-v3/.zattrs"
+)
+ARCO_CHECK_TIMEOUT_SECONDS = 30.0
+
+
+def arco_final_data_end_date() -> date:
+    """Return the last date covered by final ERA5 data in the ARCO store."""
+    request = urllib.request.Request(  # noqa: S310 - fixed https URL
+        ARCO_ZATTRS_URL,
+        headers={"User-Agent": "pet-data-preflight"},
+    )
+    with urllib.request.urlopen(  # noqa: S310 - fixed https URL
+        request,
+        timeout=ARCO_CHECK_TIMEOUT_SECONDS,
+    ) as response:
+        attrs = json.load(response)
+    return date.fromisoformat(attrs["valid_time_stop"])
+
+
+def check_arco_year_coverage(target_year: int) -> None:
+    """Fail fast when ARCO's final data does not yet cover the target year."""
+    available_through = arco_final_data_end_date()
+    required_through = date(target_year, 12, 31)
+    if available_through < required_through:
+        msg = (
+            f"ARCO-ERA5 final data is only available through "
+            f"{available_through.isoformat()}, but the yearly update needs "
+            f"coverage through {required_through.isoformat()}. "
+            "Re-run once the store has been consolidated (usually by April)."
+        )
+        raise SystemExit(msg)
+    print(
+        f"ARCO final data available through {available_through.isoformat()}; "
+        f"year {target_year} is fully covered.",
+        file=sys.stderr,
+    )
 
 
 def main() -> None:
@@ -56,11 +99,12 @@ def main() -> None:
     elif "--github" in sys.argv:
         if "--yearly" in sys.argv:
             target_year = prev_year
+            if "--check-arco" in sys.argv:
+                check_arco_year_coverage(target_year)
             print(f"target_year={target_year}")
             print(f"window_start={target_year}-01-01")
             print(f"window_end={target_year}-12-31")
             print(f"months={json.dumps(list(range(1, 13)))}")
-            print(f"analytics_shards={json.dumps(list(range(20)))}")
         else:
             print(f"start_year={era5_start}")
             print(f"end_year={end_date.year}")

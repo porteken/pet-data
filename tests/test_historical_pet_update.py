@@ -279,7 +279,7 @@ def test_delete_window_without_database_uri_skips_cleanup(
     assert "Postgres database credentials are not configured" in capsys.readouterr().out
 
 
-def test_delete_window_rebuilds_views_and_truncates_analytics(
+def test_delete_window_deletes_rows_and_truncates_analytics(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -300,8 +300,13 @@ def test_delete_window_rebuilds_views_and_truncates_analytics(
 
     assert conn.autocommit is True
     assert conn.closed is True
-    assert any(
+    # Views must be left untouched: the DDL files exist but are not executed.
+    assert not any(
         call[0] == "DROP VIEW IF EXISTS pet_year;" for call in conn.execute_calls
+    )
+    assert not any(
+        call[0] == "CREATE TABLE IF NOT EXISTS pet(id int);"
+        for call in conn.execute_calls
     )
     assert any(
         call[0] == "DELETE FROM public.pet WHERE date BETWEEN %s::date AND %s::date"

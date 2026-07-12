@@ -10,9 +10,10 @@ import psycopg
 
 from load import (
     COPY_BATCH_SIZE,
+    DEFAULT_LOAD_WORKERS,
     _discover_wetbulb_csv_paths,
+    _load_table_files,
     _validate_load_shard_args,
-    bulk_insert_csv_files,
 )
 from shared_config import DATABASE_CONFIG_HINT, resolve_database_uri
 
@@ -43,6 +44,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--load-shard-index", type=int, default=0)
     parser.add_argument("--load-shard-count", type=int, default=1)
     parser.add_argument("--copy-batch-size", type=int, default=COPY_BATCH_SIZE)
+    parser.add_argument(
+        "--load-workers",
+        type=int,
+        default=DEFAULT_LOAD_WORKERS,
+        help=(
+            "Parallel database connections used to load files "
+            "(append/upsert loads only; truncating loads stay serial)."
+        ),
+    )
     parser.add_argument(
         "--truncate",
         action="store_true",
@@ -97,12 +107,14 @@ def main() -> None:
             )
             raise SystemExit(msg)
 
-        bulk_insert_csv_files(
+        _load_table_files(
             conn,
+            db_uri,
             csv_paths,
             TABLE_NAME,
             batch_size=args.copy_batch_size,
             truncate=args.truncate,
+            workers=args.load_workers,
         )
 
         if not args.skip_analyze:

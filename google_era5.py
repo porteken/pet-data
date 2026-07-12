@@ -453,8 +453,11 @@ def _compute_location_frame(
         method="nearest",
     )
 
+    # Materialize every variable in one parallel pass: computing here (instead
+    # of at each later `.values` access) downloads all nine variables from GCS
+    # concurrently with the requested worker count.
     with dask.config.set(scheduler="threads", num_workers=compute_workers):
-        city_data = city_selection
+        city_data = city_selection.compute()
 
     city_data = city_data.assign_coords(
         time=pd.to_datetime(city_data.time.values, unit="h", origin=ERA5_TIME_ORIGIN),
@@ -619,8 +622,18 @@ def _write_batch_partition(
         frame[float_cols] = frame[float_cols].astype("float32")
 
     table = pa.Table.from_pandas(frame, preserve_index=False)
-    with fs.open_output_stream(output_path) as out_stream:
-        pq.write_table(table, out_stream, compression="snappy")
+    if getattr(fs, "type_name", "") == "local":
+        # Write-then-rename so an interrupted run never leaves a partial file
+        # at the final path (which the resume check would treat as complete).
+        # S3 writes need no equivalent: an incomplete multipart upload never
+        # materializes the object.
+        temp_path = f"{output_path}.tmp"
+        with fs.open_output_stream(temp_path) as out_stream:
+            pq.write_table(table, out_stream, compression="snappy")
+        fs.move(temp_path, output_path)
+    else:
+        with fs.open_output_stream(output_path) as out_stream:
+            pq.write_table(table, out_stream, compression="snappy")
 
 
 def _write_pet_partition(
@@ -682,9 +695,14 @@ def _pet_batch_exists(
     fs: Any = filesystem
     path = f"{base_path}/year={year}/{file_prefix}_batch_{batch_index:04d}_{city_shard_index:02d}.parquet"
     try:
-        return fs.get_file_info(path).type != 0
-    except OSError:
+        if fs.get_file_info(path).type == 0:
+            return False
+        # Validate the footer (a cheap ranged read) so a truncated or corrupt
+        # file from an interrupted run is recomputed instead of skipped.
+        pq.read_metadata(path, filesystem=fs)
+    except OSError, pa.ArrowException:
         return False
+    return True
 
 
 def _process_era5_batch_job(
@@ -1006,7 +1024,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=str, default=".")
     parser.add_argument("--city-shard-index", type=int, default=0)
     parser.add_argument("--city-shard-count", type=int, default=1)
-    parser.add_argument("--time-shard-index", type=int, default=0)
+    parser.add_argument(
+        "--time-shard-index",
+        type=int,
+        default=None,
+        help=(
+            "Time shard to process. Defaults to the CLOUD_RUN_TASK_INDEX "
+            "environment variable (0 outside Cloud Run), so a single Cloud "
+            "Run execution with --tasks=N fans out across time shards."
+        ),
+    )
     parser.add_argument("--time-shard-count", type=int, default=1)
     parser.add_argument("--max-workers", type=int, default=-1)
     parser.add_argument("--batch-hours", type=int, default=DEFAULT_BATCH_HOURS)
@@ -1021,7 +1048,10 @@ def _parse_args() -> argparse.Namespace:
         default="both",
         help="Which parquet trees to write: pet, wetbulb, or both (default).",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.time_shard_index is None:
+        args.time_shard_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    return args
 
 
 def main() -> None:

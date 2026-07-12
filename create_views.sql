@@ -1,7 +1,8 @@
 -- squawk-ignore-file require-concurrent-index-creation
 
-set statement_timeout = '0' ;
-set lock_timeout = '0' ;
+-- SET LOCAL keeps these scoped to this file's transaction.
+SET LOCAL statement_timeout = '0' ;
+SET LOCAL lock_timeout = '0' ;
 
 CREATE OR REPLACE FUNCTION public.pet_array_median (years integer [])
 RETURNS double precision
@@ -1132,6 +1133,3 @@ LEFT JOIN year_2000_value AS y2k ON y2k.location_id = s.location_id
 AND y2k.season = s.season
 WHERE
 s.location_id > 0 ;
-
-RESET statement_timeout ;
-RESET lock_timeout ;

@@ -88,12 +88,12 @@ class TestMain:
             load_wetbulb, "resolve_database_uri", lambda: "postgresql://x"
         )
         monkeypatch.setattr(load_wetbulb.psycopg, "connect", lambda _uri: conn)
-        monkeypatch.setattr(load_wetbulb, "bulk_insert_csv_files", bulk_insert)
+        monkeypatch.setattr(load_wetbulb, "_load_table_files", bulk_insert)
 
         load_wetbulb.main()
 
-        assert bulk_insert.call_args.args[1] == [batch_path]
-        assert bulk_insert.call_args.args[2] == "wetbulb"
+        assert bulk_insert.call_args.args[2] == [batch_path]
+        assert bulk_insert.call_args.args[3] == "wetbulb"
         assert bulk_insert.call_args.kwargs["truncate"] is False
         assert ("ANALYZE public.wetbulb", None) in conn.executed_statements
         assert conn.closed is True
@@ -112,7 +112,7 @@ class TestMain:
             load_wetbulb, "resolve_database_uri", lambda: "postgresql://x"
         )
         monkeypatch.setattr(load_wetbulb.psycopg, "connect", lambda _uri: conn)
-        monkeypatch.setattr(load_wetbulb, "bulk_insert_csv_files", bulk_insert)
+        monkeypatch.setattr(load_wetbulb, "_load_table_files", bulk_insert)
 
         load_wetbulb.main()
 
@@ -131,7 +131,7 @@ class TestMain:
             load_wetbulb, "resolve_database_uri", lambda: "postgresql://x"
         )
         monkeypatch.setattr(load_wetbulb.psycopg, "connect", lambda _uri: conn)
-        monkeypatch.setattr(load_wetbulb, "bulk_insert_csv_files", MagicMock())
+        monkeypatch.setattr(load_wetbulb, "_load_table_files", MagicMock())
 
         load_wetbulb.main()
 
@@ -149,7 +149,7 @@ class TestMain:
             load_wetbulb, "resolve_database_uri", lambda: "postgresql://x"
         )
         monkeypatch.setattr(load_wetbulb.psycopg, "connect", lambda _uri: conn)
-        monkeypatch.setattr(load_wetbulb, "bulk_insert_csv_files", MagicMock())
+        monkeypatch.setattr(load_wetbulb, "_load_table_files", MagicMock())
 
         with pytest.raises(SystemExit, match="does not exist"):
             load_wetbulb.main()

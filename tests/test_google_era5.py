@@ -647,6 +647,9 @@ class _FakeDataset:
     def sel(self, *_args: object, **_kw: object) -> _FakeDataset:
         return self
 
+    def compute(self, *_args: object, **_kw: object) -> _FakeDataset:
+        return self
+
     def assign_coords(self, **kwargs: object) -> _FakeDataset:
         new_time_vals = self.time.values
         if "time" in kwargs:

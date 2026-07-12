@@ -1,4 +1,6 @@
-FROM python:3.13-slim AS builder
+# Keep in sync with requires-python in pyproject.toml: shards.py uses PEP 758
+# syntax (unparenthesized except) that only parses on Python 3.14+.
+FROM python:3.14-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -9,8 +11,11 @@ WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.9 /uv /uvx /bin/
 
+# build-essential + python3-dev: numpy/numcodecs have no prebuilt wheels yet
+# for this Python version, so they must build from their hash-pinned sdists.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    build-essential \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY uv.lock ./
@@ -59,7 +64,11 @@ RUN python /tmp/prepare-requirements.py > /tmp/asciitree_ver.txt && \
         -o /tmp/cloudrun-worker-requirements.txt && \
     uv pip install --python "$VIRTUAL_ENV/bin/python" "asciitree==$(cat /tmp/asciitree_ver.txt)"
 
-RUN uv pip install --no-build --require-hashes \
+# --no-build is intentionally omitted: numcodecs (a transitive zarr
+# dependency) has no prebuilt wheel for this Python version yet, only a
+# hash-pinned sdist, so it must be built here (gcc is installed above for
+# exactly this). --require-hashes still pins every package to uv.lock.
+RUN uv pip install --require-hashes \
     --python "$VIRTUAL_ENV/bin/python" \
     --requirement /tmp/cloudrun-worker-requirements.txt
 
@@ -77,7 +86,7 @@ import zarr
 print("Cloud Run worker dependencies verified.")
 PY
 
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

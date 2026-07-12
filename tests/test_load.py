@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 import load
 from load import (
@@ -18,7 +22,6 @@ from load import (
     _discover_pet_csv_paths,
     _discover_wetbulb_csv_paths,
     _extract_partition_marker,
-    _filter_paths_by_partition_value,
     _iter_sql_statements,
     _normalize_copy_column_names,
     _select_partition_shard_paths,
@@ -50,9 +53,15 @@ class FakeConnection:
     def __init__(self) -> None:
         """Initialize the fake connection."""
         self.executed_statements: list[str] = []
+        self.transaction_count = 0
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self.executed_statements)
+
+    @contextmanager
+    def transaction(self) -> Generator[None]:
+        self.transaction_count += 1
+        yield
 
 
 class TestParseArgs:
@@ -136,41 +145,6 @@ class TestExecuteSqlFileErrors:
         with caplog.at_level(logging.INFO):
             execute_sql_file(cast("Any", conn), sql_path)
         assert "is empty" in caplog.text
-
-
-class TestFilterPathsByPartitionValue:
-    def test_filters_partitioned_files(self, tmp_path: Path) -> None:
-        root = tmp_path / "analytics"
-        p1 = root / "shard_index=00000" / "data.parquet"
-        p2 = root / "shard_index=00001" / "data.parquet"
-        p1.parent.mkdir(parents=True)
-        p2.parent.mkdir(parents=True)
-        p1.touch()
-        p2.touch()
-
-        result = _filter_paths_by_partition_value(
-            [p1, p2],
-            root_path=root,
-            partition_key="shard_index",
-            partition_value="00000",
-        )
-        assert result == [p1]
-
-    def test_handles_unpartitioned_files(self, tmp_path: Path) -> None:
-        root = tmp_path / "analytics"
-        root.mkdir()
-        p1 = tmp_path / "data.parquet"
-        p1.touch()
-
-        result0 = _filter_paths_by_partition_value(
-            [p1], root_path=root, partition_key="shard_index", partition_value="00000"
-        )
-        assert result0 == [p1]
-
-        result1 = _filter_paths_by_partition_value(
-            [p1], root_path=root, partition_key="shard_index", partition_value="00001"
-        )
-        assert result1 == []
 
 
 class TestValidatedLoadPath:
@@ -366,6 +340,7 @@ class TestExecuteSqlFile:
         execute_sql_file(cast("Any", conn), sql_path)
 
         assert conn.executed_statements == ["SELECT 1;", "SELECT 2;"]
+        assert conn.transaction_count == 1
 
 
 class TestRefreshQueryPlannerStatistics:
@@ -403,14 +378,14 @@ class TestMain:
                 wetbulb_csv=str(tmp_path / "wetbulb.csv"),
                 wetbulb_root=str(tmp_path / "wetbulb_root"),
                 prefer_wetbulb_csv=False,
-                analytics_root=str(tmp_path / "ana"),
-                analytics_shard_count=20,
                 load_shard_index=0,
                 load_shard_count=1,
                 copy_batch_size=10,
+                load_workers=1,
                 append_only=False,
                 skip_drop_views=True,
                 skip_create_views=True,
+                ensure_schema=False,
                 truncate_tables=None,
                 skip_tables=["pet"],
             ),
@@ -424,8 +399,7 @@ class TestMain:
         monkeypatch.setattr(load.psycopg, "connect", lambda _uri: mock_conn)
 
         # Mock table loading
-        monkeypatch.setattr(load, "_copy_csv_file_in_batches", MagicMock())
-        monkeypatch.setattr(load, "_copy_parquet_file_in_batches", MagicMock())
+        monkeypatch.setattr(load, "bulk_insert_csv_files", MagicMock())
         monkeypatch.setattr(load, "execute_sql_file", MagicMock())
         monkeypatch.setattr(load, "refresh_query_planner_statistics", MagicMock())
 
@@ -524,3 +498,240 @@ class TestTableNames:
         assert "pet_forecast" not in TABLE_NAMES
         assert "pet_percentiles" not in TABLE_NAMES
         assert "pet_change" not in TABLE_NAMES
+
+
+class _CopyContext:
+    def __init__(self, payloads: list[bytes]) -> None:
+        self._payloads = payloads
+
+    def write(self, data: bytes | str) -> None:
+        self._payloads.append(data.encode() if isinstance(data, str) else bytes(data))
+
+    def __enter__(self) -> _CopyContext:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _ = (exc_type, exc, tb)
+
+
+class CopyRecordingCursor:
+    def __init__(self, connection: CopyRecordingConnection) -> None:
+        """Record statements against the parent connection."""
+        self._connection = connection
+        self.rowcount = connection.rowcount
+
+    def execute(self, statement: object, params: object = None) -> None:
+        _ = params
+        rendered = (
+            statement if isinstance(statement, str) else statement.as_string(None)  # type: ignore[union-attr]
+        )
+        self._connection.statements.append(rendered)
+
+    def copy(self, statement: object) -> _CopyContext:
+        rendered = (
+            statement if isinstance(statement, str) else statement.as_string(None)  # type: ignore[union-attr]
+        )
+        self._connection.statements.append(rendered)
+        return _CopyContext(self._connection.copy_payloads)
+
+    def __enter__(self) -> CopyRecordingCursor:
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Exit context manager."""
+        _ = (exc_type, exc, tb)
+
+
+class CopyRecordingConnection:
+    def __init__(self, rowcount: int = 1) -> None:
+        """Record statements, COPY payloads, and transaction usage."""
+        self.statements: list[str] = []
+        self.copy_payloads: list[bytes] = []
+        self.rowcount = rowcount
+        self.transaction_count = 0
+
+    def cursor(self) -> CopyRecordingCursor:
+        return CopyRecordingCursor(self)
+
+    @contextmanager
+    def transaction(self) -> Generator[None]:
+        self.transaction_count += 1
+        yield
+
+
+class TestFileCopyColumnNames:
+    def test_reads_csv_header(self, tmp_path: Path) -> None:
+        csv_path = tmp_path / "pet.csv"
+        csv_path.write_text("location_id,date,pet\n1,2020-01-01,10\n")
+
+        assert load._file_copy_column_names("pet", csv_path) == [
+            "location_id",
+            "date",
+            "pet",
+        ]
+
+    def test_reads_parquet_schema_and_normalizes(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        parquet_path = tmp_path / "locations.parquet"
+        pd.DataFrame({"location_id": [1], "city": ["A"]}).to_parquet(
+            parquet_path, index=False
+        )
+
+        assert load._file_copy_column_names("locations", parquet_path) == [
+            "id",
+            "city",
+        ]
+
+    def test_empty_csv_returns_no_columns(self, tmp_path: Path) -> None:
+        csv_path = tmp_path / "empty.csv"
+        csv_path.touch()
+
+        assert load._file_copy_column_names("pet", csv_path) == []
+
+
+class TestBulkInsertStaging:
+    def _write_parquet(self, path: Path) -> None:
+        import pandas as pd
+
+        pd.DataFrame(
+            {
+                "location_id": [1, 2],
+                "date": ["2024-01-01", "2024-01-02"],
+                "pet": [10.0, 11.0],
+            }
+        ).to_parquet(path, index=False)
+
+    def test_stages_and_upserts_in_one_transaction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        parquet_path = tmp_path / "pet_batch_0000_00.parquet"
+        self._write_parquet(parquet_path)
+        conn = CopyRecordingConnection(rowcount=2)
+
+        load.bulk_insert_csv_files(
+            cast("Any", conn),
+            [parquet_path],
+            "pet",
+            batch_size=1000,
+            truncate=False,
+        )
+
+        assert conn.transaction_count == 1
+        create = next(s for s in conn.statements if s.startswith("CREATE TEMP TABLE"))
+        assert '"pet_load_staging"' in create
+        assert "WITH NO DATA" in create
+        copy = next(s for s in conn.statements if s.startswith("COPY"))
+        assert '"pet_load_staging"' in copy
+        upsert = next(s for s in conn.statements if s.startswith("INSERT INTO"))
+        assert 'ON CONFLICT ("location_id", "date")' in upsert
+        assert 'DO UPDATE SET "pet" = EXCLUDED."pet"' in upsert
+        assert 'SELECT DISTINCT ON ("location_id", "date")' in upsert
+        assert b'1,"2024-01-01",10' in b"".join(conn.copy_payloads)
+
+    def test_truncate_runs_inside_the_load_transaction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        parquet_path = tmp_path / "pet_batch_0000_00.parquet"
+        self._write_parquet(parquet_path)
+        conn = CopyRecordingConnection(rowcount=2)
+
+        load.bulk_insert_csv_files(
+            cast("Any", conn),
+            [parquet_path],
+            "pet",
+            batch_size=1000,
+            truncate=True,
+        )
+
+        assert conn.statements[0] == 'TRUNCATE TABLE "pet" CASCADE'
+
+    def test_no_paths_warns_and_skips(self, caplog: pytest.LogCaptureFixture) -> None:
+        conn = CopyRecordingConnection()
+
+        with caplog.at_level(logging.WARNING):
+            load.bulk_insert_csv_files(
+                cast("Any", conn), [], "pet", batch_size=10, truncate=False
+            )
+
+        assert conn.statements == []
+        assert "No data inputs" in caplog.text
+
+
+class TestUpsertFromStaging:
+    def test_plain_insert_without_key_columns(self) -> None:
+        conn = CopyRecordingConnection(rowcount=3)
+
+        affected = load._upsert_from_staging(
+            cast("Any", conn), "pet", "pet_load_staging", ["location_id"], ()
+        )
+
+        assert affected == 3
+        assert "ON CONFLICT" not in conn.statements[0]
+
+    def test_do_nothing_when_all_columns_are_keys(self) -> None:
+        conn = CopyRecordingConnection(rowcount=0)
+
+        load._upsert_from_staging(
+            cast("Any", conn),
+            "pet",
+            "pet_load_staging",
+            ["location_id", "date"],
+            ("location_id", "date"),
+        )
+
+        assert "DO NOTHING" in conn.statements[0]
+
+
+class TestLoadTableFiles:
+    def test_truncate_stays_single_connection(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        bulk = MagicMock()
+        monkeypatch.setattr(load, "bulk_insert_csv_files", bulk)
+        group_loader = MagicMock()
+        monkeypatch.setattr(load, "_load_file_group", group_loader)
+        paths = [tmp_path / "a.parquet", tmp_path / "b.parquet"]
+
+        load._load_table_files(
+            cast("Any", MagicMock()),
+            "postgresql://x",
+            paths,
+            "pet",
+            batch_size=10,
+            truncate=True,
+            workers=4,
+        )
+
+        assert bulk.called
+        assert not group_loader.called
+
+    def test_parallel_workers_split_files_round_robin(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(load, "bulk_insert_csv_files", MagicMock())
+        groups: list[list[Path]] = []
+
+        def record_group(
+            _db_uri: str, csv_paths: list[Path], _table: str, **_kwargs: object
+        ) -> None:
+            groups.append(csv_paths)
+
+        monkeypatch.setattr(load, "_load_file_group", record_group)
+        paths = [tmp_path / f"{i}.parquet" for i in range(5)]
+
+        load._load_table_files(
+            cast("Any", MagicMock()),
+            "postgresql://x",
+            paths,
+            "pet",
+            batch_size=10,
+            truncate=False,
+            workers=2,
+        )
+
+        assert sorted(p for group in groups for p in group) == sorted(paths)
+        assert len(groups) == 2

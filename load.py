@@ -6,10 +6,12 @@ import argparse
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 import psycopg
+import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 from psycopg import sql
 
@@ -22,12 +24,22 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 COPY_BATCH_SIZE = 50_000
+CSV_COPY_CHUNK_BYTES = 8 * 1024 * 1024
+DEFAULT_LOAD_WORKERS = 4
 DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_]\w*)?\$")
 TABLE_NAMES = [
     "locations",
     "pet",
     "wetbulb",
 ]
+# Conflict targets that make loads idempotent: rows are COPYed into a temp
+# staging table and upserted, so re-running a load (or retrying a failed one)
+# can never produce duplicates.
+TABLE_UNIQUE_KEYS: dict[str, tuple[str, ...]] = {
+    "locations": ("id",),
+    "pet": ("location_id", "date"),
+    "wetbulb": ("location_id", "date"),
+}
 
 
 def _consume_line_comment(sql_text: str, index: int) -> int:
@@ -135,7 +147,12 @@ def _iter_sql_statements(sql_text: str) -> Iterator[str]:
 
 
 def execute_sql_file(conn: Connection[Any], file_path: str | Path) -> None:
-    """Execute a raw SQL file."""
+    """Execute a raw SQL file atomically in a single transaction.
+
+    Running inside one transaction keeps SET LOCAL timeouts in the SQL files
+    scoped to the file itself instead of leaking into later COPY/DELETE
+    statements on the same connection.
+    """
     path = Path(file_path)
     if not path.exists():
         LOGGER.warning("SQL file %s not found. Skipping.", file_path)
@@ -147,7 +164,7 @@ def execute_sql_file(conn: Connection[Any], file_path: str | Path) -> None:
         LOGGER.info("SQL file %s is empty. Skipping.", file_path)
         return
 
-    with conn.cursor() as cur:
+    with conn.transaction(), conn.cursor() as cur:
         for statement in statements:
             cur.execute(cast("LiteralString", statement))
     LOGGER.info("Successfully executed %s (%d statements).", file_path, len(statements))
@@ -194,11 +211,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "shards are also present under --wetbulb-root."
         ),
     )
-    parser.add_argument("--analytics-root", default="analytics_data_csv")
-    parser.add_argument("--analytics-shard-count", type=int, default=20)
     parser.add_argument("--load-shard-index", type=int, default=0)
     parser.add_argument("--load-shard-count", type=int, default=1)
     parser.add_argument("--copy-batch-size", type=int, default=COPY_BATCH_SIZE)
+    parser.add_argument(
+        "--load-workers",
+        type=int,
+        default=DEFAULT_LOAD_WORKERS,
+        help=(
+            "Parallel database connections used to load files into a table "
+            "(append/upsert loads only; truncating loads stay serial)."
+        ),
+    )
     parser.add_argument(
         "--append-only",
         action="store_true",
@@ -213,6 +237,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--skip-create-views",
         action="store_true",
         help="Do not recreate SQL views after loading data.",
+    )
+    parser.add_argument(
+        "--ensure-schema",
+        action="store_true",
+        help=(
+            "Execute create_tables.sql before loading even when views are "
+            "skipped, so appends run against a migrated schema."
+        ),
     )
     parser.add_argument(
         "--truncate-table",
@@ -370,23 +402,17 @@ def _select_partition_shard_paths(
     ]
 
 
-def _filter_paths_by_partition_value(
-    csv_paths: list[Path],
-    *,
-    root_path: Path,
-    partition_key: str,
-    partition_value: str,
-) -> list[Path]:
-    filtered_paths: list[Path] = []
-    for csv_path in csv_paths:
-        marker = _extract_partition_marker(csv_path, root_path, partition_key)
-        if marker is None:
-            if partition_value in ("0", "00000"):
-                filtered_paths.append(csv_path)
-            continue
-        if marker == partition_value:
-            filtered_paths.append(csv_path)
-    return filtered_paths
+def _file_copy_column_names(table_name: str, file_path: Path) -> list[str]:
+    """Return the destination column names for a parquet or CSV input file."""
+    if file_path.suffix == ".parquet":
+        raw_names = pq.ParquetFile(str(file_path)).schema_arrow.names
+    else:
+        with file_path.open("r", encoding="utf-8", newline="") as csv_file:
+            header = next(csv_file, None)
+        if header is None:
+            return []
+        raw_names = [col.strip() for col in header.split(",")]
+    return _normalize_copy_column_names(table_name, raw_names)
 
 
 def _copy_parquet_file_in_batches(
@@ -395,25 +421,31 @@ def _copy_parquet_file_in_batches(
     parquet_path: Path,
     *,
     batch_size: int,
+    destination: str | None = None,
 ) -> int:
+    """Stream a parquet file into a table with a single COPY statement.
+
+    Record batches are serialized with pyarrow's native CSV writer, avoiding
+    the parquet -> pandas -> to_csv round trip. `destination` lets callers
+    COPY into a staging table while normalizing columns for `table_name`.
+    """
     parquet_file = pq.ParquetFile(str(parquet_path))
     column_names = _normalize_copy_column_names(
         table_name,
         parquet_file.schema_arrow.names,
     )
     copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
-        sql.Identifier(table_name),
+        sql.Identifier(destination or table_name),
         sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
     )
 
     total_rows = 0
-    with conn.cursor() as cur:
+    write_options = pacsv.WriteOptions(include_header=False)
+    with conn.cursor() as cur, cur.copy(copy_statement) as copy:
         for batch in parquet_file.iter_batches(batch_size=batch_size):
-            batch_df = batch.to_pandas()
-            csv_buffer = io.StringIO()
-            batch_df.to_csv(csv_buffer, index=False, header=False)
-            with cur.copy(copy_statement) as copy:
-                copy.write(csv_buffer.getvalue())
+            sink = io.BytesIO()
+            pacsv.write_csv(batch, sink, write_options=write_options)
+            copy.write(sink.getvalue())
             total_rows += batch.num_rows
     return total_rows
 
@@ -424,8 +456,10 @@ def _copy_csv_file_in_batches(
     csv_path: Path,
     *,
     batch_size: int,
+    destination: str | None = None,
 ) -> int:
-    """Load a plain CSV file (no compression) into a table via COPY."""
+    """Stream a plain CSV file into a table with a single COPY statement."""
+    _ = batch_size  # kept for signature parity with the parquet copy helper
     with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
         header = next(f, None)
         if header is None:
@@ -436,18 +470,13 @@ def _copy_csv_file_in_batches(
             [col.strip() for col in header.split(",")],
         )
         copy_statement = sql.SQL("COPY {} ({}) FROM STDIN WITH CSV").format(
-            sql.Identifier(table_name),
+            sql.Identifier(destination or table_name),
             sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
         )
-        total_rows = 0
-        while True:
-            lines = list(f.readlines(batch_size))
-            if not lines:
-                break
-            with cur.copy(copy_statement) as copy:
-                copy.write("".join(lines))
-            total_rows += len(lines)
-    return total_rows
+        with cur.copy(copy_statement) as copy:
+            while chunk := f.read(CSV_COPY_CHUNK_BYTES):
+                copy.write(chunk)
+        return max(cur.rowcount, 0)
 
 
 def _validated_load_path(path: Path, *, base_dir: Path | None = None) -> Path:
@@ -465,6 +494,103 @@ def _validated_load_path(path: Path, *, base_dir: Path | None = None) -> Path:
     return resolved
 
 
+def _create_staging_table(
+    conn: Connection[Any],
+    table_name: str,
+    column_names: list[str],
+) -> str:
+    """Create a temp staging table mirroring the columns being loaded."""
+    staging_name = f"{table_name}_load_staging"
+    create_statement = sql.SQL(
+        "CREATE TEMP TABLE {} ON COMMIT DROP AS SELECT {} FROM {} WITH NO DATA",
+    ).format(
+        sql.Identifier(staging_name),
+        sql.SQL(", ").join(sql.Identifier(col) for col in column_names),
+        sql.Identifier("public", table_name),
+    )
+    with conn.cursor() as cur:
+        cur.execute(create_statement)
+    return staging_name
+
+
+def _upsert_from_staging(
+    conn: Connection[Any],
+    table_name: str,
+    staging_name: str,
+    column_names: list[str],
+    key_columns: tuple[str, ...],
+) -> int:
+    """Upsert staged rows into the destination table; return affected rows."""
+    columns_sql = sql.SQL(", ").join(sql.Identifier(col) for col in column_names)
+    if not key_columns:
+        insert_statement = sql.SQL(
+            "INSERT INTO {table} ({columns}) SELECT {columns} FROM {staging}",
+        ).format(
+            table=sql.Identifier("public", table_name),
+            columns=columns_sql,
+            staging=sql.Identifier(staging_name),
+        )
+        with conn.cursor() as cur:
+            cur.execute(insert_statement)
+            return max(cur.rowcount, 0)
+
+    keys_sql = sql.SQL(", ").join(sql.Identifier(col) for col in key_columns)
+    update_columns = [col for col in column_names if col not in key_columns]
+    if update_columns:
+        conflict_action = sql.SQL("DO UPDATE SET {}").format(
+            sql.SQL(", ").join(
+                sql.SQL("{col} = EXCLUDED.{col}").format(col=sql.Identifier(col))
+                for col in update_columns
+            ),
+        )
+    else:
+        conflict_action = sql.SQL("DO NOTHING")
+
+    # DISTINCT ON guards against duplicate keys inside a single load batch,
+    # which would otherwise abort the INSERT ("cannot affect row a second
+    # time"). Ordering by the key keeps b-tree insertion mostly sequential.
+    upsert_statement = sql.SQL(
+        "INSERT INTO {table} ({columns}) "
+        "SELECT DISTINCT ON ({keys}) {columns} FROM {staging} ORDER BY {keys} "
+        "ON CONFLICT ({keys}) {conflict_action}",
+    ).format(
+        table=sql.Identifier("public", table_name),
+        columns=columns_sql,
+        keys=keys_sql,
+        staging=sql.Identifier(staging_name),
+        conflict_action=conflict_action,
+    )
+    with conn.cursor() as cur:
+        cur.execute(upsert_statement)
+        return max(cur.rowcount, 0)
+
+
+def _copy_file(
+    conn: Connection[Any],
+    table_name: str,
+    file_path: Path,
+    *,
+    batch_size: int,
+    destination: str | None = None,
+) -> int:
+    """COPY one parquet or CSV file into `destination` (default: the table)."""
+    if file_path.suffix == ".parquet":
+        return _copy_parquet_file_in_batches(
+            conn,
+            table_name,
+            file_path,
+            batch_size=batch_size,
+            destination=destination,
+        )
+    return _copy_csv_file_in_batches(
+        conn,
+        table_name,
+        file_path,
+        batch_size=batch_size,
+        destination=destination,
+    )
+
+
 def bulk_insert_csv_files(
     conn: Connection[Any],
     csv_paths: list[Path],
@@ -473,58 +599,69 @@ def bulk_insert_csv_files(
     batch_size: int,
     truncate: bool,
 ) -> None:
-    """Load one or more parquet (or CSV) files into a destination table."""
+    """Load one or more parquet (or CSV) files into a destination table.
+
+    Rows are COPYed into a temp staging table and upserted with ON CONFLICT
+    inside a single transaction, so a load is atomic and re-running it never
+    creates duplicate (location_id, date) rows.
+    """
     if not csv_paths:
         LOGGER.warning("No data inputs found for %s. Skipping.", table_name)
         return
 
-    if truncate:
-        LOGGER.info(
-            "Truncating and loading %s file(s) into %s...",
-            len(csv_paths),
-            table_name,
-        )
-        with conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("TRUNCATE TABLE {} CASCADE").format(
-                    sql.Identifier(table_name),
-                ),
-            )
-    else:
-        LOGGER.info(
-            "Appending %s file(s) into %s...",
-            len(csv_paths),
-            table_name,
-        )
-
-    total_rows: int = 0
-    for raw_file_path in csv_paths:
-        file_path = _validated_load_path(raw_file_path)
-        LOGGER.info("Loading %s into %s...", file_path, table_name)
-        if file_path.suffix == ".parquet":
-            total_rows += _copy_parquet_file_in_batches(
-                conn,
-                table_name,
-                file_path,
-                batch_size=batch_size,
-            )
-        else:
-            total_rows += _copy_csv_file_in_batches(
-                conn,
-                table_name,
-                file_path,
-                batch_size=batch_size,
-            )
-
-    if total_rows == 0:
-        msg = f"Zero rows were loaded into table {table_name}. Continuing load."
-        LOGGER.warning(msg)
+    key_columns = TABLE_UNIQUE_KEYS.get(table_name, ())
+    validated_paths = [_validated_load_path(path) for path in csv_paths]
+    column_names = _file_copy_column_names(table_name, validated_paths[0])
+    if not column_names:
+        LOGGER.warning("First input for %s has no columns. Skipping.", table_name)
         return
 
     LOGGER.info(
-        "Successfully loaded %d rows into %s.",
-        int(total_rows),
+        "%s %s file(s) into %s...",
+        "Truncating and loading" if truncate else "Upserting",
+        len(validated_paths),
+        table_name,
+    )
+
+    with conn.transaction():
+        if truncate:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("TRUNCATE TABLE {} CASCADE").format(
+                        sql.Identifier(table_name),
+                    ),
+                )
+
+        staging_name = _create_staging_table(conn, table_name, column_names)
+        staged_rows = 0
+        for file_path in validated_paths:
+            LOGGER.info("Staging %s for %s...", file_path, table_name)
+            staged_rows += _copy_file(
+                conn,
+                table_name,
+                file_path,
+                batch_size=batch_size,
+                destination=staging_name,
+            )
+
+        if staged_rows == 0:
+            msg = f"Zero rows were staged for table {table_name}. Continuing load."
+            LOGGER.warning(msg)
+            return
+
+        affected_rows = _upsert_from_staging(
+            conn,
+            table_name,
+            staging_name,
+            column_names,
+            key_columns,
+        )
+
+    LOGGER.info(
+        "Successfully loaded %d staged rows into %s (%d inserted or updated).",
+        int(staged_rows),
         str(table_name),
+        int(affected_rows),
     )
 
 
@@ -598,40 +735,85 @@ def _discover_wetbulb_csv_paths(args: argparse.Namespace) -> list[Path]:
     )
 
 
-def _discover_analytics_csv_paths(
-    args: argparse.Namespace,
-    shard_file_name: str,
-) -> list[Path]:
-    csv_paths = _discover_csv_inputs(
-        shard_file_name,
-        shard_root=args.analytics_root,
-        shard_file_name=shard_file_name,
-        shard_count=args.analytics_shard_count,
-        shard_partition_key="shard_count",
+def _load_file_group(
+    db_uri: str,
+    csv_paths: list[Path],
+    table_name: str,
+    *,
+    batch_size: int,
+) -> None:
+    """Load a group of files on a dedicated connection (parallel worker)."""
+    conn: Connection[Any] = psycopg.connect(db_uri)
+    conn.autocommit = True
+    try:
+        bulk_insert_csv_files(
+            conn,
+            csv_paths,
+            table_name,
+            batch_size=batch_size,
+            truncate=False,
+        )
+    finally:
+        conn.close()
+
+
+def _load_table_files(
+    conn: Connection[Any],
+    db_uri: str,
+    csv_paths: list[Path],
+    table_name: str,
+    *,
+    batch_size: int,
+    truncate: bool,
+    workers: int,
+) -> None:
+    """Load files into a table, fanning out across connections when possible.
+
+    Upserts on disjoint files touch disjoint (location_id, date) ranges, so
+    parallel workers do not contend. Truncating loads keep the truncate and
+    the load in one transaction and therefore stay single-connection.
+    """
+    effective_workers = max(1, min(workers, len(csv_paths)))
+    if truncate or effective_workers == 1:
+        bulk_insert_csv_files(
+            conn,
+            csv_paths,
+            table_name,
+            batch_size=batch_size,
+            truncate=truncate,
+        )
+        return
+
+    file_groups = [
+        csv_paths[index::effective_workers] for index in range(effective_workers)
+    ]
+    LOGGER.info(
+        "Loading %d file(s) into %s across %d parallel connections...",
+        len(csv_paths),
+        table_name,
+        effective_workers,
     )
-    if args.load_shard_count == 1:
-        return csv_paths
-
-    return _filter_paths_by_partition_value(
-        csv_paths,
-        root_path=Path(args.analytics_root),
-        partition_key="shard_index",
-        partition_value=f"{args.load_shard_index:05d}",
-    )
-
-
-def _discover_percentiles_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "percentiles.parquet")
-
-
-def _discover_forecast_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_analytics_csv_paths(args, "forecast.parquet")
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        futures = [
+            executor.submit(
+                _load_file_group,
+                db_uri,
+                group,
+                table_name,
+                batch_size=batch_size,
+            )
+            for group in file_groups
+            if group
+        ]
+        for future in futures:
+            future.result()
 
 
 def _load_requested_tables(
     conn: Connection[Any],
     args: argparse.Namespace,
     *,
+    db_uri: str,
     truncate_tables: set[str],
     skip_tables: set[str],
 ) -> None:
@@ -645,13 +827,20 @@ def _load_requested_tables(
         if table_name in skip_tables:
             continue
 
-        bulk_insert_csv_files(
+        csv_paths = csv_resolver(args)
+        if not csv_paths:
+            LOGGER.warning("No data inputs found for %s. Skipping.", table_name)
+            continue
+
+        _load_table_files(
             conn,
-            csv_resolver(args),
+            db_uri,
+            csv_paths,
             table_name,
             batch_size=args.copy_batch_size,
             truncate=table_name in truncate_tables
             and not (table_name == "locations" and args.skip_drop_views),
+            workers=args.load_workers,
         )
 
 
@@ -688,12 +877,13 @@ def main() -> None:
         if not args.skip_drop_views:
             execute_sql_file(conn, "drop_views.sql")
 
-        if should_refresh_schema:
+        if should_refresh_schema or args.ensure_schema:
             execute_sql_file(conn, "create_tables.sql")
 
         _load_requested_tables(
             conn,
             args,
+            db_uri=db_uri,
             truncate_tables=truncate_tables,
             skip_tables=skip_tables,
         )

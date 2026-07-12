@@ -1,7 +1,9 @@
 -- squawk-ignore-file require-concurrent-index-deletion
 
-set statement_timeout = '5s' ;
-set lock_timeout = '1s' ;
+-- SET LOCAL keeps these timeouts scoped to the executing transaction so they
+-- never leak into later statements on the same connection.
+SET LOCAL statement_timeout = '5s' ;
+SET LOCAL lock_timeout = '1s' ;
 DROP INDEX IF EXISTS pet_year_stats_location_year_season_uidx ;
 DROP INDEX IF EXISTS pet_year_stats_year_idx ;
 DROP INDEX IF EXISTS pet_year_stats_season_idx ;

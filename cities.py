@@ -16,6 +16,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 CITY_COORD_DECIMALS = 3
 
+# Pinned to a specific commit of plotly/datasets so reruns are reproducible:
+# a moving `master` URL could reorder cities and silently shift location_ids
+# out of sync with data already loaded in Postgres.
+CITIES_SOURCE_URL = (
+    "https://raw.githubusercontent.com/plotly/datasets/"
+    "6601958c1afba7bc40bd1f0497c4fc69931878f0/us-cities-top-1k.csv"
+)
+
 
 def load_data(url: str) -> DataFrame:
     """Load and normalize data from Plotly."""
@@ -69,10 +77,7 @@ def process_cities(df: DataFrame) -> DataFrame:
 def main() -> None:
     """Orchestrate city processing."""
     logger.info("Generating locations dataset...")
-    url = (
-        "https://raw.githubusercontent.com/plotly/datasets/master/us-cities-top-1k.csv"
-    )
-    df = load_data(url)
+    df = load_data(CITIES_SOURCE_URL)
     df = filter_bounding_box(df)
     df = process_cities(df)
 

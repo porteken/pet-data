@@ -3,13 +3,21 @@ name: Yearly Update
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 5 2 1 *"
+    # Early April: ARCO-ERA5 final (non-preliminary) data for the previous
+    # year is consolidated by then (see SAFE_STABLE_DATA_MONTH). The
+    # build-target-window job also verifies availability before anything runs.
+    - cron: "0 5 5 4 *"
+
+concurrency:
+  group: yearly-update
+  cancel-in-progress: false
 
 env:
   GCP_PROJECT_ID: weather-ai-478502
   CLOUD_RUN_JOB_NAME: era5-worker
   CLOUD_RUN_REGION: us-east1
   ERA5_BATCH_HOURS: "720"
+  ERA5_TIME_SHARD_COUNT: "13"
 
 jobs:
   build-target-window:
@@ -19,18 +27,19 @@ jobs:
       target_year: ${{ steps.compute.outputs.target_year }}
       window_start: ${{ steps.compute.outputs.window_start }}
       window_end: ${{ steps.compute.outputs.window_end }}
-      analytics_shards: ${{ steps.compute.outputs.analytics_shards }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version-file: "pyproject.toml"
-      - id: compute
-        run: python build_year_range.py --github --yearly >> "$GITHUB_OUTPUT"
+      - name: Compute window and verify ARCO coverage
+        id: compute
+        run: python build_year_range.py --github --yearly --check-arco >> "$GITHUB_OUTPUT"
 
   deploy-infrastructure:
     if: github.ref_name == 'prd'
+    needs: build-target-window
     runs-on: ubuntu-latest
     env:
       STACK_NAME: pet-data-infrastructure
@@ -113,16 +122,11 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: /bin/bash ./cloudrun_provision.sh
 
-  compute-pet-google-era5-a:
+  compute-pet-google-era5:
     if: github.ref_name == 'prd' && needs.build-target-window.outputs.target_year != ''
     needs: [build-target-window, clear-pet-output, provision-cloud-run]
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 8
-      fail-fast: true
-      matrix:
-        time_shard_index: [0, 1, 2, 3, 4, 5, 6]
-    name: ERA5->PET A ${{ needs.build-target-window.outputs.target_year }} time ${{ matrix.time_shard_index }}/13
+    name: ERA5->PET ${{ needs.build-target-window.outputs.target_year }} via Cloud Run tasks
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Authenticate GCP
@@ -131,69 +135,21 @@ jobs:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
-      - name: Pull ERA5 & Compute PET (Writes straight to S3)
+      # One execution fans out over time shards via Cloud Run task indexing:
+      # each task derives --time-shard-index from CLOUD_RUN_TASK_INDEX, and
+      # per-task retries are handled by the job's --max-retries setting.
+      - name: Pull ERA5 & Compute PET (writes straight to S3)
         run: |
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
-            --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
-
-  compute-pet-google-era5-b:
-    if: github.ref_name == 'prd' && needs.build-target-window.outputs.target_year != ''
-    needs: [build-target-window, clear-pet-output, provision-cloud-run]
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 8
-      fail-fast: true
-      matrix:
-        time_shard_index: [7, 8, 9, 10, 11, 12]
-    name: ERA5->PET B ${{ needs.build-target-window.outputs.target_year }} time ${{ matrix.time_shard_index }}/13
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - name: Authenticate GCP
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
-      - name: Pull ERA5 & Compute PET (Writes straight to S3)
-        run: |
-          gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
-            --project "${{ env.GCP_PROJECT_ID }}" \
-            --region "${{ env.CLOUD_RUN_REGION }}" --wait \
-            --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-index=${{ matrix.time_shard_index }},--time-shard-count=13,--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
-
-  prepare-db-load:
-    if: github.ref_name == 'prd'
-    needs: [build-target-window, compute-pet-google-era5-a, compute-pet-google-era5-b]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version-file: "pyproject.toml"
-      - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
-        with:
-          enable-cache: true
-      - name: Sync runtime dependencies
-        run: uv sync --locked --no-dev # NOSONAR
-      - name: Clean Up Database Window
-        env:
-          POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
-        run: uv run --locked python historical_pet_update.py delete-window "${{ needs.build-target-window.outputs.window_start }}" "${{ needs.build-target-window.outputs.window_end }}"
+            --tasks "${{ env.ERA5_TIME_SHARD_COUNT }}" \
+            --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-count=${{ env.ERA5_TIME_SHARD_COUNT }},--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   load-to-db:
     if: github.ref_name == 'prd'
-    needs: [prepare-db-load, build-target-window]
+    needs: [build-target-window, compute-pet-google-era5]
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 20
-      fail-fast: true
-      matrix:
-        load_shard_index: ${{ fromJSON(needs.build-target-window.outputs.analytics_shards) }}
-    name: Load shard ${{ matrix.load_shard_index }}/20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Set up Python
@@ -206,32 +162,26 @@ jobs:
           enable-cache: true
       - name: Sync runtime dependencies
         run: uv sync --locked --no-dev # NOSONAR
-      - name: Sync shard PET data from S3
+      - name: Sync year data from S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-          PREFIX: pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/
+          TARGET_YEAR: ${{ needs.build-target-window.outputs.target_year }}
         run: |
-          echo "Syncing PET data for year: ${{ needs.build-target-window.outputs.target_year }}"
-          mkdir -p pet_data_csv
-          echo "Syncing s3://pet-parquet-files/${PREFIX}"
-          aws s3 sync "s3://pet-parquet-files/${PREFIX}" "./${PREFIX}"
-      - name: Sync shard wetbulb data from S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-          PREFIX: wetbulb_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/
-        run: |
-          echo "Syncing wetbulb data for year: ${{ needs.build-target-window.outputs.target_year }}"
-          mkdir -p wetbulb_data_csv
-          echo "Syncing s3://pet-parquet-files/${PREFIX}"
-          aws s3 sync "s3://pet-parquet-files/${PREFIX}" "./${PREFIX}"
-      - name: Load shard to Postgres
+          for product in pet_data_csv wetbulb_data_csv; do
+            prefix="${product}/year=${TARGET_YEAR}/"
+            echo "Syncing s3://pet-parquet-files/${prefix}"
+            mkdir -p "${product}"
+            aws s3 sync "s3://pet-parquet-files/${prefix}" "./${prefix}"
+          done
+      # Upsert loads are idempotent (ON CONFLICT on (location_id, date)), so a
+      # failed or re-run job can never duplicate rows and no delete-window
+      # step is needed. Views stay in place and are refreshed afterwards.
+      - name: Load year into Postgres
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
-        run: uv run --locked python load.py --append-only --skip-drop-views --skip-create-views --skip-table locations --load-shard-index ${{ matrix.load_shard_index }} --load-shard-count 20
+        run: uv run --locked python load.py --append-only --skip-drop-views --skip-create-views --ensure-schema --skip-table locations --load-workers 4
 
   finalize-db-load:
     if: github.ref_name == 'prd'
@@ -249,7 +199,59 @@ jobs:
           enable-cache: true
       - name: Sync runtime dependencies
         run: uv sync --locked --no-dev # NOSONAR
-      - name: Recreate Views
+      - name: Refresh materialized views
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
-        run: uv run --locked python load.py --append-only --skip-table locations --skip-table pet --skip-table wetbulb # NOSONAR
+        run: uv run --locked python refresh_views.py
+
+  notify-on-failure:
+    if: github.ref_name == 'prd' && failure()
+    needs:
+      [
+        build-target-window,
+        deploy-infrastructure,
+        cancel-running-cloud-run-executions,
+        clear-pet-output,
+        provision-cloud-run,
+        compute-pet-google-era5,
+        load-to-db,
+        finalize-db-load,
+      ]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update failure issue
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            const title = `Yearly update failed: ${new Date().toISOString().slice(0, 10)}`;
+            const body = [
+              `The scheduled yearly pipeline failed.`,
+              ``,
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Loads are idempotent: re-run the failed jobs (or the whole workflow) once the cause is fixed.`,
+            ].join("\n");
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "yearly-update-failure",
+            });
+            if (issues.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["yearly-update-failure"],
+              });
+            }
