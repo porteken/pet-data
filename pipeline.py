@@ -293,42 +293,40 @@ def _cpu_count() -> int:
     return os.cpu_count() or 1
 
 
-def build_config(args: argparse.Namespace) -> PipelineConfig:
-    """Resolve CLI arguments and environment defaults into a config."""
-    use_cloud_run = not args.local
-    smoke = args.mode == "smoke"
-
-    batch_hours = args.era5_batch_hours or _env_int(
-        "ERA5_BATCH_HOURS",
+def _resolve_shard_config(
+    *,
+    smoke: bool,
+    cli_batch_hours: int | None,
+    cli_time_shard_count: int | None,
+    batch_hours_env: str,
+    time_shard_count_env: str,
+    smoke_time_shard_index_env: str,
+) -> tuple[int, int, list[int]]:
+    """Resolve (batch_hours, time_shard_count, time_shard_indexes) for a worker."""
+    batch_hours = cli_batch_hours or _env_int(
+        batch_hours_env,
         SMOKE_BATCH_HOURS if smoke else FULL_BATCH_HOURS,
     )
-    time_shard_count = args.era5_time_shard_count or _env_int(
-        "ERA5_TIME_SHARD_COUNT",
+    time_shard_count = cli_time_shard_count or _env_int(
+        time_shard_count_env,
         SMOKE_TIME_SHARD_COUNT if smoke else FULL_TIME_SHARD_COUNT,
     )
     if smoke:
         time_shard_indexes = [
-            _env_int("SMOKE_TIME_SHARD_INDEX", SMOKE_TIME_SHARD_INDEX)
+            _env_int(smoke_time_shard_index_env, SMOKE_TIME_SHARD_INDEX)
         ]
     else:
         time_shard_indexes = list(range(time_shard_count))
+    return batch_hours, time_shard_count, time_shard_indexes
 
-    nldas_batch_hours = args.nldas_batch_hours or _env_int(
-        "NLDAS_BATCH_HOURS",
-        SMOKE_BATCH_HOURS if smoke else FULL_BATCH_HOURS,
-    )
-    nldas_time_shard_count = args.nldas_time_shard_count or _env_int(
-        "NLDAS_TIME_SHARD_COUNT",
-        SMOKE_TIME_SHARD_COUNT if smoke else FULL_TIME_SHARD_COUNT,
-    )
-    if smoke:
-        nldas_time_shard_indexes = [
-            _env_int("NLDAS_SMOKE_TIME_SHARD_INDEX", SMOKE_TIME_SHARD_INDEX)
-        ]
-    else:
-        nldas_time_shard_indexes = list(range(nldas_time_shard_count))
 
-    available_cpus = max(1, _cpu_count() - 1)
+def _resolve_worker_sizing(
+    args: argparse.Namespace,
+    *,
+    use_cloud_run: bool,
+    smoke: bool,
+) -> tuple[int, int, str, int]:
+    """Resolve (city_shard_count, job_limit, concurrency_profile, batch_workers)."""
     if use_cloud_run:
         city_shard_count = args.era5_city_shard_count or _env_int(
             "ERA5_CITY_SHARD_COUNT",
@@ -337,23 +335,54 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         job_limit = args.era5_job_limit or _env_int("ERA5_JOB_LIMIT", 1)
         concurrency_profile = _env_str("ERA5_CONCURRENCY_PROFILE", "aggressive")
         batch_workers = _env_int("ERA5_BATCH_WORKERS", 1)
-    else:
-        city_shard_count = args.era5_city_shard_count or _env_int(
-            "ERA5_CITY_SHARD_COUNT",
-            2,
+        return city_shard_count, job_limit, concurrency_profile, batch_workers
+
+    available_cpus = max(1, _cpu_count() - 1)
+    city_shard_count = args.era5_city_shard_count or _env_int(
+        "ERA5_CITY_SHARD_COUNT",
+        2,
+    )
+    job_limit = args.era5_job_limit or _env_int(
+        "ERA5_JOB_LIMIT",
+        city_shard_count,
+    )
+    concurrency_profile = _env_str(
+        "ERA5_CONCURRENCY_PROFILE",
+        "aggressive" if smoke else "balanced",
+    )
+    batch_workers = _env_int(
+        "ERA5_BATCH_WORKERS",
+        min(2, max(1, available_cpus // max(1, city_shard_count))) if smoke else 1,
+    )
+    return city_shard_count, job_limit, concurrency_profile, batch_workers
+
+
+def build_config(args: argparse.Namespace) -> PipelineConfig:
+    """Resolve CLI arguments and environment defaults into a config."""
+    use_cloud_run = not args.local
+    smoke = args.mode == "smoke"
+
+    batch_hours, time_shard_count, time_shard_indexes = _resolve_shard_config(
+        smoke=smoke,
+        cli_batch_hours=args.era5_batch_hours,
+        cli_time_shard_count=args.era5_time_shard_count,
+        batch_hours_env="ERA5_BATCH_HOURS",
+        time_shard_count_env="ERA5_TIME_SHARD_COUNT",
+        smoke_time_shard_index_env="SMOKE_TIME_SHARD_INDEX",
+    )
+    nldas_batch_hours, nldas_time_shard_count, nldas_time_shard_indexes = (
+        _resolve_shard_config(
+            smoke=smoke,
+            cli_batch_hours=args.nldas_batch_hours,
+            cli_time_shard_count=args.nldas_time_shard_count,
+            batch_hours_env="NLDAS_BATCH_HOURS",
+            time_shard_count_env="NLDAS_TIME_SHARD_COUNT",
+            smoke_time_shard_index_env="NLDAS_SMOKE_TIME_SHARD_INDEX",
         )
-        job_limit = args.era5_job_limit or _env_int(
-            "ERA5_JOB_LIMIT",
-            city_shard_count,
-        )
-        concurrency_profile = _env_str(
-            "ERA5_CONCURRENCY_PROFILE",
-            "aggressive" if smoke else "balanced",
-        )
-        batch_workers = _env_int(
-            "ERA5_BATCH_WORKERS",
-            min(2, max(1, available_cpus // max(1, city_shard_count))) if smoke else 1,
-        )
+    )
+    city_shard_count, job_limit, concurrency_profile, batch_workers = (
+        _resolve_worker_sizing(args, use_cloud_run=use_cloud_run, smoke=smoke)
+    )
 
     s3_prefix = args.s3_prefix.strip("/")
     if use_cloud_run and not s3_prefix:
@@ -405,7 +434,8 @@ def _run_command(
     env = None
     if extra_env:
         env = {**os.environ, **extra_env}
-    process = subprocess.Popen(command, env=env)  # noqa: S603 - commands are built from config, not untrusted input
+    # S603: commands are built from config, not untrusted input.
+    process = subprocess.Popen(command, env=env)  # noqa: S603
     with _PROCESS_LOCK:
         _ACTIVE_PROCESSES.add(process)
     try:

@@ -33,13 +33,13 @@ jobs:
         run: uv sync --locked --all-extras --dev # NOSONAR
 
       - name: Ruff lint
-        run: uv run --locked ruff check .
+        run: uv run --locked --no-build ruff check .
 
       # The Cloud Run image (Dockerfile) copies these modules; compile them at
       # the image's Python version so a syntax regression can never ship a
       # worker that crashes on import.
       - name: Compile Cloud Run worker modules
-        run: uv run --locked python -m py_compile cities.py google_era5.py nldas.py partition_io.py pet_corrected.py shards.py wetbulb.py
+        run: uv run --locked --no-build python -m py_compile cities.py google_era5.py nldas.py partition_io.py pet_corrected.py shards.py wetbulb.py
 
       - name: Run Pytest with Coverage
         run: uv run --locked pytest # NOSONAR

@@ -214,7 +214,7 @@ jobs:
       - name: Load year into Postgres
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
-        run: uv run --locked python load.py --append-only --skip-drop-views --skip-create-views --ensure-schema --skip-table locations --load-workers 4
+        run: uv run --locked --no-build python load.py --append-only --skip-drop-views --skip-create-views --ensure-schema --skip-table locations --load-workers 4
 
   finalize-db-load:
     if: github.ref_name == 'prd'
@@ -235,7 +235,7 @@ jobs:
       - name: Refresh materialized views
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}
-        run: uv run --locked python refresh_views.py
+        run: uv run --locked --no-build python refresh_views.py
 
   notify-on-failure:
     if: github.ref_name == 'prd' && failure()

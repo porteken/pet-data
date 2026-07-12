@@ -75,6 +75,8 @@ RUN python /tmp/prepare-requirements.py > /tmp/asciitree_ver.txt && \
 # dependency) has no prebuilt wheel for this Python version yet, only a
 # hash-pinned sdist, so it must be built here (gcc is installed above for
 # exactly this). --require-hashes still pins every package to uv.lock.
+# Dockerfiles don't support trailing/NOSONAR comments, so this exception is
+# tracked and accepted directly in SonarQube rather than suppressed inline.
 RUN uv pip install --require-hashes \
     --python "$VIRTUAL_ENV/bin/python" \
     --requirement /tmp/cloudrun-worker-requirements.txt
