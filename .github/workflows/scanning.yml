@@ -39,7 +39,7 @@ jobs:
       # the image's Python version so a syntax regression can never ship a
       # worker that crashes on import.
       - name: Compile Cloud Run worker modules
-        run: uv run --locked python -m py_compile cities.py google_era5.py pet_corrected.py shards.py wetbulb.py
+        run: uv run --locked python -m py_compile cities.py google_era5.py nldas.py partition_io.py pet_corrected.py shards.py wetbulb.py
 
       - name: Run Pytest with Coverage
         run: uv run --locked pytest # NOSONAR

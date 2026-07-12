@@ -25,7 +25,6 @@ from google_era5 import (
     _hourly_flux_from_accumulation,
     _iter_time_batches,
     _normalize_longitudes_for_solar_geometry,
-    _PartitionTarget,
     _process_era5_batch_job,
     _ProductPlan,
     _resolve_era5_max_workers,
@@ -36,6 +35,7 @@ from google_era5 import (
     _wrap_longitudes_for_arco_selection,
     _year_time_slice,
 )
+from partition_io import PartitionTarget as _PartitionTarget
 
 
 class TestArcoStableEndYear:
@@ -539,7 +539,7 @@ class TestRunEra5BatchJobs:
 
         monkeypatch.setattr(
             google_era5,
-            "_pet_batch_exists",
+            "batch_exists",
             fake_pet_batch_exists,
         )
         monkeypatch.setattr(

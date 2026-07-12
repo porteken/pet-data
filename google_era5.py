@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from tqdm.auto import tqdm
 
+from partition_io import PartitionTarget, batch_exists, write_batch_partition
 from shards import resolve_filesystem
 
 pa = cast("Any", importlib.import_module("pyarrow"))
@@ -574,12 +575,6 @@ def _compute_location_frame(
     )
 
 
-class _PartitionTarget(NamedTuple):
-    root: str
-    filesystem: object | None = None
-    base_path: str | None = None
-
-
 class _ProductPlan(NamedTuple):
     """Which data products to write and where their parquet trees live."""
 
@@ -592,48 +587,10 @@ class _ProductPlan(NamedTuple):
 class _BatchWriteTargets(NamedTuple):
     """Where to write each product and whether it should be written."""
 
-    pet_target: _PartitionTarget
-    wetbulb_target: _PartitionTarget
+    pet_target: PartitionTarget
+    wetbulb_target: PartitionTarget
     write_pet: bool = True
     write_wetbulb: bool = True
-
-
-def _write_batch_partition(
-    root: str,
-    year: int,
-    city_shard_index: int,
-    frame: DataFrame,
-    batch_index: int,
-    *,
-    file_prefix: str,
-    filesystem: object | None = None,
-    base_path: str | None = None,
-) -> None:
-    if filesystem is None or base_path is None:
-        filesystem, base_path = resolve_filesystem(root)
-    fs: Any = filesystem
-    partition_dir = f"{base_path}/year={year}"
-    fs.create_dir(partition_dir, recursive=True)
-
-    output_path = f"{partition_dir}/{file_prefix}_batch_{batch_index:04d}_{city_shard_index:02d}.parquet"
-
-    float_cols = frame.select_dtypes(include=["float64"]).columns
-    if len(float_cols) > 0:
-        frame[float_cols] = frame[float_cols].astype("float32")
-
-    table = pa.Table.from_pandas(frame, preserve_index=False)
-    if getattr(fs, "type_name", "") == "local":
-        # Write-then-rename so an interrupted run never leaves a partial file
-        # at the final path (which the resume check would treat as complete).
-        # S3 writes need no equivalent: an incomplete multipart upload never
-        # materializes the object.
-        temp_path = f"{output_path}.tmp"
-        with fs.open_output_stream(temp_path) as out_stream:
-            pq.write_table(table, out_stream, compression="snappy")
-        fs.move(temp_path, output_path)
-    else:
-        with fs.open_output_stream(output_path) as out_stream:
-            pq.write_table(table, out_stream, compression="snappy")
 
 
 def _write_pet_partition(
@@ -646,7 +603,7 @@ def _write_pet_partition(
     filesystem: object | None = None,
     base_path: str | None = None,
 ) -> None:
-    _write_batch_partition(
+    write_batch_partition(
         pet_root,
         year,
         city_shard_index,
@@ -668,7 +625,7 @@ def _write_wetbulb_partition(
     filesystem: object | None = None,
     base_path: str | None = None,
 ) -> None:
-    _write_batch_partition(
+    write_batch_partition(
         wetbulb_root,
         year,
         city_shard_index,
@@ -678,31 +635,6 @@ def _write_wetbulb_partition(
         filesystem=filesystem,
         base_path=base_path,
     )
-
-
-def _pet_batch_exists(
-    pet_root: str,
-    year: int,
-    city_shard_index: int,
-    batch_index: int,
-    *,
-    file_prefix: str = "pet",
-    filesystem: object | None = None,
-    base_path: str | None = None,
-) -> bool:
-    if filesystem is None or base_path is None:
-        filesystem, base_path = resolve_filesystem(pet_root)
-    fs: Any = filesystem
-    path = f"{base_path}/year={year}/{file_prefix}_batch_{batch_index:04d}_{city_shard_index:02d}.parquet"
-    try:
-        if fs.get_file_info(path).type == 0:
-            return False
-        # Validate the footer (a cheap ranged read) so a truncated or corrupt
-        # file from an interrupted run is recomputed instead of skipped.
-        pq.read_metadata(path, filesystem=fs)
-    except OSError, pa.ArrowException:
-        return False
-    return True
 
 
 def _process_era5_batch_job(
@@ -834,7 +766,7 @@ def _collect_pending_batch_jobs(
         required_exist = []
         if targets.write_pet:
             required_exist.append(
-                _pet_batch_exists(
+                batch_exists(
                     targets.pet_target.root,
                     year,
                     city_shard_index,
@@ -845,7 +777,7 @@ def _collect_pending_batch_jobs(
             )
         if targets.write_wetbulb:
             required_exist.append(
-                _pet_batch_exists(
+                batch_exists(
                     targets.wetbulb_target.root,
                     year,
                     city_shard_index,
@@ -888,8 +820,8 @@ def _run_era5_batch_jobs(
 
     filesystem, base_path = resolve_filesystem(era5_root)
     wetbulb_filesystem, wetbulb_base_path = resolve_filesystem(wetbulb_root)
-    pet_target = _PartitionTarget(era5_root, filesystem, base_path)
-    wetbulb_target = _PartitionTarget(
+    pet_target = PartitionTarget(era5_root, filesystem, base_path)
+    wetbulb_target = PartitionTarget(
         wetbulb_root, wetbulb_filesystem, wetbulb_base_path
     )
     targets = _BatchWriteTargets(pet_target, wetbulb_target, write_pet, write_wetbulb)

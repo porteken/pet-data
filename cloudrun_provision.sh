@@ -13,9 +13,21 @@ AWS_CLOUD_RUN_REGION=${AWS_DEFAULT_REGION:-${AWS_REGION:-}}
 AWS_KEY_SECRET_NAME=${AWS_KEY_SECRET_NAME:-${CLOUD_RUN_JOB_NAME}-aws-access-key-id}
 AWS_SECRET_SECRET_NAME=${AWS_SECRET_SECRET_NAME:-${CLOUD_RUN_JOB_NAME}-aws-secret-access-key}
 
+# nldas-worker shares the same image (both scripts are baked into it; entrypoint.sh
+# picks the one to run via WORKER_SCRIPT) but gets its own job so Earthdata
+# credentials stay scoped away from era5-worker and it can run with less memory.
+NLDAS_CLOUD_RUN_JOB_NAME=${NLDAS_CLOUD_RUN_JOB_NAME:-nldas-worker}
+NLDAS_CLOUD_RUN_JOB_CPU=${NLDAS_CLOUD_RUN_JOB_CPU:-1}
+NLDAS_CLOUD_RUN_JOB_MEMORY=${NLDAS_CLOUD_RUN_JOB_MEMORY:-2Gi}
+NLDAS_CLOUD_RUN_TASK_TIMEOUT=${NLDAS_CLOUD_RUN_TASK_TIMEOUT:-1800s}
+EARTHDATA_USERNAME_SECRET_NAME=${EARTHDATA_USERNAME_SECRET_NAME:-${NLDAS_CLOUD_RUN_JOB_NAME}-earthdata-username}
+EARTHDATA_PASSWORD_SECRET_NAME=${EARTHDATA_PASSWORD_SECRET_NAME:-${NLDAS_CLOUD_RUN_JOB_NAME}-earthdata-password}
+
 : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID must be set}"
 : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY must be set}"
 : "${AWS_CLOUD_RUN_REGION:?AWS_DEFAULT_REGION or AWS_REGION must be set}"
+: "${EARTHDATA_USERNAME:?EARTHDATA_USERNAME must be set (free NASA Earthdata account with the 'NASA GESDISC DATA ARCHIVE' application authorized)}"
+: "${EARTHDATA_PASSWORD:?EARTHDATA_PASSWORD must be set (free NASA Earthdata account with the 'NASA GESDISC DATA ARCHIVE' application authorized)}"
 
 # Store AWS credentials in Secret Manager and mount them with --set-secrets so
 # they never appear in the job definition or the Cloud Run console.
@@ -49,10 +61,16 @@ echo "Upserting AWS credential secrets in Secret Manager"
 _upsert_secret "$AWS_KEY_SECRET_NAME" "$AWS_ACCESS_KEY_ID"
 _upsert_secret "$AWS_SECRET_SECRET_NAME" "$AWS_SECRET_ACCESS_KEY"
 
+echo "Upserting Earthdata credential secrets in Secret Manager"
+_upsert_secret "$EARTHDATA_USERNAME_SECRET_NAME" "$EARTHDATA_USERNAME"
+_upsert_secret "$EARTHDATA_PASSWORD_SECRET_NAME" "$EARTHDATA_PASSWORD"
+
 PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')
 JOB_SERVICE_ACCOUNT=${JOB_SERVICE_ACCOUNT:-"${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"}
 _grant_secret_access "$AWS_KEY_SECRET_NAME" "$JOB_SERVICE_ACCOUNT"
 _grant_secret_access "$AWS_SECRET_SECRET_NAME" "$JOB_SERVICE_ACCOUNT"
+_grant_secret_access "$EARTHDATA_USERNAME_SECRET_NAME" "$JOB_SERVICE_ACCOUNT"
+_grant_secret_access "$EARTHDATA_PASSWORD_SECRET_NAME" "$JOB_SERVICE_ACCOUNT"
 
 echo "Building Cloud Run image ${CLOUD_RUN_IMAGE}"
 gcloud auth configure-docker --quiet
@@ -70,3 +88,15 @@ gcloud run jobs deploy "$CLOUD_RUN_JOB_NAME" \
   --task-timeout "$CLOUD_RUN_TASK_TIMEOUT" \
   --set-env-vars="AWS_DEFAULT_REGION=$AWS_CLOUD_RUN_REGION,AWS_REGION=$AWS_CLOUD_RUN_REGION" \
   --set-secrets="AWS_ACCESS_KEY_ID=${AWS_KEY_SECRET_NAME}:latest,AWS_SECRET_ACCESS_KEY=${AWS_SECRET_SECRET_NAME}:latest"
+
+echo "Deploying Cloud Run job ${NLDAS_CLOUD_RUN_JOB_NAME} in ${CLOUD_RUN_REGION}"
+gcloud run jobs deploy "$NLDAS_CLOUD_RUN_JOB_NAME" \
+  --project "$GCP_PROJECT_ID" \
+  --image "$CLOUD_RUN_IMAGE" \
+  --region "$CLOUD_RUN_REGION" \
+  --cpu "$NLDAS_CLOUD_RUN_JOB_CPU" \
+  --memory "$NLDAS_CLOUD_RUN_JOB_MEMORY" \
+  --max-retries "$CLOUD_RUN_MAX_RETRIES" \
+  --task-timeout "$NLDAS_CLOUD_RUN_TASK_TIMEOUT" \
+  --set-env-vars="WORKER_SCRIPT=nldas.py,AWS_DEFAULT_REGION=$AWS_CLOUD_RUN_REGION,AWS_REGION=$AWS_CLOUD_RUN_REGION" \
+  --set-secrets="AWS_ACCESS_KEY_ID=${AWS_KEY_SECRET_NAME}:latest,AWS_SECRET_ACCESS_KEY=${AWS_SECRET_SECRET_NAME}:latest,EARTHDATA_USERNAME=${EARTHDATA_USERNAME_SECRET_NAME}:latest,EARTHDATA_PASSWORD=${EARTHDATA_PASSWORD_SECRET_NAME}:latest"

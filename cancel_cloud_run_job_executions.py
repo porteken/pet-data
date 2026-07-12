@@ -48,10 +48,26 @@ def _list_executions(
     ]
     result = subprocess.run(  # NOSONAR
         command,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        if "NOT_FOUND" in result.stderr:
+            # The job may not have been provisioned yet (e.g. its first-ever
+            # deploy runs after this cancel step); nothing to cancel either way.
+            logger.info(
+                "Cloud Run job %r not found in %s; nothing to cancel.",
+                job,
+                region,
+            )
+            return []
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
 
     output = result.stdout.strip()
     if not output:

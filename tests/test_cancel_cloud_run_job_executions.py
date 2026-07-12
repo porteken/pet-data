@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cancel_cloud_run_job_executions import (
     _is_execution_running,
+    _list_executions,
     _running_execution_names,
 )
 
@@ -53,10 +57,50 @@ class TestRunningExecutionNames:
         assert _running_execution_names(executions) == ["a", "b"]
 
 
+class TestListExecutions:
+    @patch("subprocess.run")
+    def test_missing_job_returns_empty_list(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "ERROR: (gcloud.run.jobs.executions.list) NOT_FOUND: "
+                "Resource 'nldas-worker' of kind 'JOB' in region "
+                "'us-east1' in project 'x' does not exist."
+            ),
+        )
+
+        result = _list_executions(
+            gcloud_bin="gcloud",
+            job="nldas-worker",
+            region="us-east1",
+            project="x",
+        )
+
+        assert result == []
+
+    @patch("subprocess.run")
+    def test_other_failure_raises(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="ERROR: permission denied",
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            _list_executions(
+                gcloud_bin="gcloud",
+                job="era5-worker",
+                region="us-east1",
+                project="x",
+            )
+
+
 @patch("subprocess.run")
 def test_cancel_running_executions_integration(mock_run: MagicMock) -> None:
     from cancel_cloud_run_job_executions import cancel_running_executions
 
+    mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = '[{"metadata": {"name": "era5-worker-running"}, "status": {}}, {"metadata": {"name": "era5-worker-running-2"}, "status": {}}]'
 
     cancelled = cancel_running_executions(

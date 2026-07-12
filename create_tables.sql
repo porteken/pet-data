@@ -142,6 +142,10 @@ date date NOT NULL,
 wetbulb real NOT NULL
 ) ;
 
+-- wetbulb_avg is nullable: rows loaded before the NLDAS-2 switch only have
+-- the ERA5/Stull daily max and have no daily average value.
+ALTER TABLE public.wetbulb ADD COLUMN IF NOT EXISTS wetbulb_avg real ;
+
 -- One-time migrations: the covering indexes become UNIQUE so loads can upsert
 -- with ON CONFLICT (location_id, date). Dedupe first (keep the most recently
 -- inserted row). The timeout is lifted with separate top-level statements

@@ -143,6 +143,73 @@ class TestWorkerArgs:
         assert len(jobs) == 2 * 2 * 3
         assert all("google_era5.py" in job[1] for job in jobs)
 
+    def test_era5_worker_always_requests_pet_only(self) -> None:
+        """ERA5 no longer writes wetbulb; it must always run --products pet."""
+        cfg = _config(["--years", "2024", "--products", "both"])
+
+        args_csv = pipeline._cloud_run_worker_args(cfg, 2024)
+
+        assert "--products=pet" in args_csv
+        assert "--products=both" not in args_csv
+        assert "--products=wetbulb" not in args_csv
+
+    def test_local_era5_jobs_always_pass_products_pet(self) -> None:
+        cfg = _config(["--local", "--years", "2024", "--products", "both"])
+        cfg.time_shard_indexes = [0]
+
+        jobs = pipeline._local_era5_jobs(cfg)
+
+        assert all("pet" in job for job in jobs)
+        assert all("both" not in job and "wetbulb" not in job for job in jobs)
+
+
+class TestNldasWorkerArgs:
+    def test_full_mode_omits_time_shard_index(self) -> None:
+        cfg = _config(["--years", "2024"])
+
+        args_csv = pipeline._nldas_worker_args(cfg, 2024)
+
+        assert "--time-shard-index" not in args_csv
+        assert "--year=2024" in args_csv
+        assert f"--time-shard-count={pipeline.FULL_TIME_SHARD_COUNT}" in args_csv
+        assert (
+            f"--download-workers={pipeline.NLDAS_DEFAULT_DOWNLOAD_WORKERS}" in args_csv
+        )
+
+    def test_smoke_mode_pins_time_shard_index(self) -> None:
+        cfg = _config(["--mode", "smoke", "--years", "2024"])
+
+        args_csv = pipeline._nldas_worker_args(cfg, 2024)
+
+        assert f"--time-shard-index={pipeline.SMOKE_TIME_SHARD_INDEX}" in args_csv
+
+    def test_months_are_forwarded(self) -> None:
+        cfg = _config(["--years", "2024", "--months", "1", "2"])
+
+        args_csv = pipeline._nldas_worker_args(cfg, 2024)
+
+        assert "--months,1,2" in args_csv
+
+    def test_local_jobs_cover_all_shards(self) -> None:
+        cfg = _config(
+            [
+                "--local",
+                "--years",
+                "2023",
+                "2024",
+                "--era5-city-shard-count",
+                "2",
+                "--nldas-time-shard-count",
+                "3",
+            ]
+        )
+        cfg.nldas_time_shard_indexes = list(range(3))
+
+        jobs = pipeline._local_nldas_jobs(cfg)
+
+        assert len(jobs) == 2 * 2 * 3
+        assert all("nldas.py" in job[1] for job in jobs)
+
 
 class TestRunCommand:
     def test_success(self) -> None:
@@ -270,6 +337,72 @@ class TestEra5Pull:
         cfg.time_shard_indexes = [0]
         with pytest.raises(pipeline.PipelineError, match="local ERA5 job"):
             pipeline.run_era5_pull(cfg)
+
+
+class TestNldasPull:
+    def test_cloud_run_executes_one_tasked_run_per_year(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        commands: list[list[str]] = []
+        monkeypatch.setattr(
+            pipeline,
+            "_run_command",
+            lambda command, **_kwargs: commands.append(command),
+        )
+
+        cfg = _config(["--years", "2023", "2024", "--skip-remote-clear"])
+        pipeline.run_nldas_pull(cfg)
+
+        gcloud_commands = [c for c in commands if c[0] == "gcloud"]
+        assert len(gcloud_commands) == 2
+        assert all("nldas-worker" in c for c in gcloud_commands)
+        tasks_value = gcloud_commands[0][gcloud_commands[0].index("--tasks") + 1]
+        assert tasks_value == str(pipeline.FULL_TIME_SHARD_COUNT)
+
+    def test_local_mode_runs_all_jobs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        commands: list[list[str]] = []
+        monkeypatch.setattr(
+            pipeline,
+            "_run_command",
+            lambda command, **_kwargs: commands.append(command),
+        )
+
+        cfg = _config(
+            [
+                "--local",
+                "--years",
+                "2024",
+                "--era5-city-shard-count",
+                "1",
+                "--nldas-time-shard-count",
+                "2",
+            ]
+        )
+        cfg.nldas_time_shard_indexes = [0, 1]
+        pipeline.run_nldas_pull(cfg)
+
+        assert len(commands) == 2
+        assert all("nldas.py" in command[1] for command in commands)
+
+    def test_local_failure_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+        def failing_run(_command: list[str], **_kwargs: object) -> None:
+            msg = "job failed with exit code 1."
+            raise pipeline.PipelineError(msg)
+
+        monkeypatch.setattr(pipeline, "_run_command", failing_run)
+
+        cfg = _config(["--local", "--years", "2024"])
+        cfg.nldas_time_shard_indexes = [0]
+        with pytest.raises(pipeline.PipelineError, match="local NLDAS job"):
+            pipeline.run_nldas_pull(cfg)
 
 
 class TestSyncOutputs:
@@ -428,6 +561,9 @@ class TestRunPipeline:
             pipeline, "run_era5_pull", lambda _cfg: calls.append("pull")
         )
         monkeypatch.setattr(
+            pipeline, "run_nldas_pull", lambda _cfg: calls.append("nldas_pull")
+        )
+        monkeypatch.setattr(
             pipeline, "sync_outputs_from_s3", lambda _cfg: calls.append("sync")
         )
         monkeypatch.setattr(
@@ -438,7 +574,15 @@ class TestRunPipeline:
         monkeypatch.setattr(pipeline, "run_db_load", lambda _cfg: calls.append("db"))
 
         pipeline.run_pipeline(_config(["--years", "2024"]))
-        assert calls == ["locations", "pull", "assert", "db"]
+        assert calls == ["locations", "pull", "nldas_pull", "sync", "assert", "db"]
+
+        calls.clear()
+        pipeline.run_pipeline(_config(["--years", "2024", "--products", "pet"]))
+        assert calls == ["locations", "pull", "sync", "assert", "db"]
+
+        calls.clear()
+        pipeline.run_pipeline(_config(["--years", "2024", "--products", "wetbulb"]))
+        assert calls == ["locations", "nldas_pull", "sync", "assert", "db"]
 
         calls.clear()
         pipeline.run_pipeline(
