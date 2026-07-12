@@ -5,7 +5,7 @@ description = "PET data pipeline for ERA5 ingestion, analytics, and Postgres loa
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "numpy",
+  "numpy>=2.3.2",
   "pandas",
   "pyarrow",
   "psycopg[binary]",
