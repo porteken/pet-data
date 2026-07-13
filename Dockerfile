@@ -13,12 +13,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.9 /uv /uvx /bin/
 
 # build-essential + python3-dev: numpy/numcodecs have no prebuilt wheels yet
 # for this Python version, so they must build from their hash-pinned sdists.
-# libhdf5-dev: h5py's netCDF4 backend falls back to a source build (needing
-# the HDF5 headers) whenever no prebuilt wheel exists yet for this Python
-# version, same situation as numcodecs above.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libhdf5-dev \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,8 +28,6 @@ from pathlib import Path
 WORKER_PACKAGES = (
     "dask",
     "gcsfs",
-    "h5netcdf",
-    "h5py",
     "numpy",
     "pandas",
     "pyarrow",
@@ -84,8 +78,6 @@ RUN uv pip install --require-hashes \
 RUN "$VIRTUAL_ENV/bin/python" - <<'PY'
 import dask
 import gcsfs
-import h5netcdf
-import h5py
 import numpy
 import pandas
 import pyarrow
@@ -108,7 +100,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
-COPY entrypoint.sh cities.py google_era5.py nldas.py partition_io.py pet_corrected.py shards.py wetbulb.py ./
+COPY entrypoint.sh cities.py google_era5.py partition_io.py pet_corrected.py shards.py ./
 
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
     && chown -R appuser:appuser /app \

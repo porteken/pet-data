@@ -20,7 +20,6 @@ from load import (
     _discover_csv_inputs,
     _discover_locations_csv_paths,
     _discover_pet_csv_paths,
-    _discover_wetbulb_csv_paths,
     _extract_partition_marker,
     _iter_sql_statements,
     _normalize_copy_column_names,
@@ -264,44 +263,6 @@ class TestDiscoverPetCsvPaths:
         assert _discover_pet_csv_paths(args) == [pet_csv]
 
 
-class TestDiscoverWetbulbCsvPaths:
-    def test_prefers_direct_csv_when_requested(self, tmp_path: Path) -> None:
-        wetbulb_root = tmp_path / "wetbulb_data_csv"
-        shard_dir = wetbulb_root / "year=2024"
-        shard_dir.mkdir(parents=True)
-        (shard_dir / "wetbulb_batch_0000_00.parquet").touch()
-
-        wetbulb_csv = tmp_path / "wetbulb_full.csv"
-        wetbulb_csv.write_text("location_id,date,wetbulb\n1,2024-05-01,18.0\n")
-
-        args = argparse.Namespace(
-            wetbulb_root=str(wetbulb_root),
-            wetbulb_csv=str(wetbulb_csv),
-            load_shard_index=0,
-            load_shard_count=1,
-            prefer_wetbulb_csv=True,
-        )
-
-        assert _discover_wetbulb_csv_paths(args) == [wetbulb_csv]
-
-    def test_discovers_batch_parquet_shards(self, tmp_path: Path) -> None:
-        wetbulb_root = tmp_path / "wetbulb_data_csv"
-        shard_dir = wetbulb_root / "year=2024"
-        shard_dir.mkdir(parents=True)
-        batch_path = shard_dir / "wetbulb_batch_0000_00.parquet"
-        batch_path.touch()
-
-        args = argparse.Namespace(
-            wetbulb_root=str(wetbulb_root),
-            wetbulb_csv=str(tmp_path / "missing_wetbulb.csv"),
-            load_shard_index=0,
-            load_shard_count=1,
-            prefer_wetbulb_csv=False,
-        )
-
-        assert _discover_wetbulb_csv_paths(args) == [batch_path]
-
-
 class TestIterSqlStatements:
     def test_keeps_dollar_quoted_function_body_intact(self) -> None:
         sql_text = (
@@ -352,7 +313,6 @@ class TestRefreshQueryPlannerStatistics:
         assert conn.executed_statements == [
             "ANALYZE public.locations",
             "ANALYZE public.pet",
-            "ANALYZE public.wetbulb",
         ]
 
 
@@ -375,9 +335,6 @@ class TestMain:
                 pet_csv=str(tmp_path / "pet.csv"),
                 pet_root=str(tmp_path / "pet_root"),
                 prefer_pet_csv=True,
-                wetbulb_csv=str(tmp_path / "wetbulb.csv"),
-                wetbulb_root=str(tmp_path / "wetbulb_root"),
-                prefer_wetbulb_csv=False,
                 load_shard_index=0,
                 load_shard_count=1,
                 copy_batch_size=10,
@@ -494,7 +451,6 @@ class TestTableNames:
     def test_expected_tables(self) -> None:
         assert "locations" in TABLE_NAMES
         assert "pet" in TABLE_NAMES
-        assert "wetbulb" in TABLE_NAMES
         assert "pet_forecast" not in TABLE_NAMES
         assert "pet_percentiles" not in TABLE_NAMES
         assert "pet_change" not in TABLE_NAMES

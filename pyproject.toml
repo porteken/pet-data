@@ -17,7 +17,6 @@ dependencies = [
 
 [project.optional-dependencies]
 gcs = ["dask", "gcsfs", "thermofeel", "xarray", "zarr"]
-nldas = ["h5netcdf", "h5py", "xarray"]
 
 [dependency-groups]
 dev = ["pytest", "pytest-cov>=7.1.0", "ruff"]

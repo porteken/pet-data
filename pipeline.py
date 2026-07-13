@@ -1,4 +1,4 @@
-"""Orchestrate the PET/wetbulb pipeline: pull ERA5, compute, and load Postgres.
+"""Orchestrate the PET pipeline: pull ERA5, compute, and load Postgres.
 
 Replaces the pull_all.sh bash orchestrator. Configuration comes from CLI flags
 with the historical pull_all.sh environment variables (MODE, YEARS, PRODUCTS,
@@ -53,12 +53,7 @@ SMOKE_TIME_SHARD_COUNT = 53
 SMOKE_TIME_SHARD_INDEX = 17
 FULL_BATCH_HOURS = 720
 FULL_TIME_SHARD_COUNT = 13
-PRODUCT_TABLES = ("pet", "wetbulb")
-
-# nldas-worker downloads hourly HTTP granules rather than reading a GCS zarr
-# store, but reuses the same batch/time-shard partitioning defaults as the
-# ERA5 worker since both are tuned for similar per-task run times.
-NLDAS_DEFAULT_DOWNLOAD_WORKERS = 16
+PRODUCT_TABLES = ("pet",)
 
 # Keep numpy/BLAS single-threaded inside worker subprocesses; parallelism is
 # managed at the process level.
@@ -113,17 +108,12 @@ class PipelineConfig:
     gcp_project: str
     gcp_region: str
     cloud_run_job: str
-    nldas_cloud_run_job: str
     s3_bucket: str
     s3_prefix: str
     clear_max_workers: int
     batch_hours: int
     time_shard_count: int
     time_shard_indexes: list[int]
-    nldas_batch_hours: int
-    nldas_time_shard_count: int
-    nldas_time_shard_indexes: list[int]
-    download_workers: int
     city_shard_count: int
     job_limit: int
     load_workers: int
@@ -134,11 +124,6 @@ class PipelineConfig:
     def do_pet(self) -> bool:
         """Whether the PET product is selected."""
         return self.products in ("pet", "both")
-
-    @property
-    def do_wetbulb(self) -> bool:
-        """Whether the wetbulb product is selected."""
-        return self.products in ("wetbulb", "both")
 
     @property
     def selected_products(self) -> list[str]:
@@ -186,8 +171,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--products",
-        choices=["pet", "wetbulb", "both"],
-        default=_env_str("PRODUCTS", "both"),
+        choices=["pet"],
+        default=_env_str("PRODUCTS", "pet"),
     )
     parser.add_argument(
         "--skip-era5-pull",
@@ -247,10 +232,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=_env_str("CLOUD_RUN_JOB", "era5-worker"),
     )
     parser.add_argument(
-        "--nldas-cloud-run-job",
-        default=_env_str("NLDAS_CLOUD_RUN_JOB", "nldas-worker"),
-    )
-    parser.add_argument(
         "--s3-bucket", default=_env_str("S3_BUCKET", "pet-parquet-files")
     )
     parser.add_argument(
@@ -272,14 +253,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Concurrent local ERA5 worker processes (local mode only).",
-    )
-    parser.add_argument("--nldas-batch-hours", type=int, default=None)
-    parser.add_argument("--nldas-time-shard-count", type=int, default=None)
-    parser.add_argument(
-        "--download-workers",
-        type=int,
-        default=_env_int("NLDAS_DOWNLOAD_WORKERS", NLDAS_DEFAULT_DOWNLOAD_WORKERS),
-        help="Concurrent per-batch NLDAS-2 granule downloads.",
     )
     parser.add_argument(
         "--load-workers",
@@ -370,16 +343,6 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         time_shard_count_env="ERA5_TIME_SHARD_COUNT",
         smoke_time_shard_index_env="SMOKE_TIME_SHARD_INDEX",
     )
-    nldas_batch_hours, nldas_time_shard_count, nldas_time_shard_indexes = (
-        _resolve_shard_config(
-            smoke=smoke,
-            cli_batch_hours=args.nldas_batch_hours,
-            cli_time_shard_count=args.nldas_time_shard_count,
-            batch_hours_env="NLDAS_BATCH_HOURS",
-            time_shard_count_env="NLDAS_TIME_SHARD_COUNT",
-            smoke_time_shard_index_env="NLDAS_SMOKE_TIME_SHARD_INDEX",
-        )
-    )
     city_shard_count, job_limit, concurrency_profile, batch_workers = (
         _resolve_worker_sizing(args, use_cloud_run=use_cloud_run, smoke=smoke)
     )
@@ -405,17 +368,12 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         gcp_project=args.gcp_project,
         gcp_region=args.gcp_region,
         cloud_run_job=args.cloud_run_job,
-        nldas_cloud_run_job=args.nldas_cloud_run_job,
         s3_bucket=args.s3_bucket,
         s3_prefix=s3_prefix,
         clear_max_workers=args.clear_max_workers,
         batch_hours=batch_hours,
         time_shard_count=time_shard_count,
         time_shard_indexes=time_shard_indexes,
-        nldas_batch_hours=nldas_batch_hours,
-        nldas_time_shard_count=nldas_time_shard_count,
-        nldas_time_shard_indexes=nldas_time_shard_indexes,
-        download_workers=max(1, args.download_workers),
         city_shard_count=max(1, city_shard_count),
         job_limit=max(1, job_limit),
         load_workers=max(1, args.load_workers),
@@ -574,7 +532,6 @@ def _cloud_run_worker_args(cfg: PipelineConfig, year: int) -> str:
         f"--max-workers={cfg.batch_workers}",
         f"--batch-hours={cfg.batch_hours}",
         f"--concurrency-profile={cfg.concurrency_profile}",
-        "--products=pet",
         f"--out-dir={cfg.remote_out_dir}",
     ]
     if cfg.mode == "smoke":
@@ -633,8 +590,6 @@ def _local_era5_jobs(cfg: PipelineConfig) -> list[list[str]]:
                     str(cfg.batch_workers),
                     "--concurrency-profile",
                     cfg.concurrency_profile,
-                    "--products",
-                    "pet",
                     "--out-dir",
                     ".",
                 ]
@@ -663,95 +618,6 @@ def run_era5_pull(cfg: PipelineConfig) -> None:
         cfg,
         desc="Local ERA5 jobs",
         product_label="ERA5",
-    )
-
-
-def _nldas_worker_args(cfg: PipelineConfig, year: int) -> str:
-    worker_args = [
-        f"--year={year}",
-        f"--city-shard-count={cfg.city_shard_count}",
-        f"--time-shard-count={cfg.nldas_time_shard_count}",
-        f"--download-workers={cfg.download_workers}",
-        f"--batch-hours={cfg.nldas_batch_hours}",
-        f"--out-dir={cfg.remote_out_dir}",
-    ]
-    if cfg.mode == "smoke":
-        worker_args.append(f"--time-shard-index={cfg.nldas_time_shard_indexes[0]}")
-    if cfg.months:
-        worker_args.append("--months")
-        worker_args.extend(str(month) for month in cfg.months)
-    return ",".join(worker_args)
-
-
-def _run_nldas_cloud_run_year(cfg: PipelineConfig, year: int) -> None:
-    """Run one Cloud Run execution per year against the nldas-worker job."""
-    tasks = 1 if cfg.mode == "smoke" else cfg.nldas_time_shard_count
-    command = [
-        "gcloud",
-        "run",
-        "jobs",
-        "execute",
-        cfg.nldas_cloud_run_job,
-        "--region",
-        cfg.gcp_region,
-        "--wait",
-        "--tasks",
-        str(tasks),
-        f"--args={_nldas_worker_args(cfg, year)}",
-    ]
-    if cfg.gcp_project:
-        command += ["--project", cfg.gcp_project]
-    _run_command(command, label=f"Cloud Run NLDAS->wetbulb year={year}")
-
-
-def _local_nldas_jobs(cfg: PipelineConfig) -> list[list[str]]:
-    jobs: list[list[str]] = []
-    for year in cfg.years:
-        for city_shard in range(cfg.city_shard_count):
-            for time_shard in cfg.nldas_time_shard_indexes:
-                script_args = [
-                    "--year",
-                    str(year),
-                    "--city-shard-index",
-                    str(city_shard),
-                    "--city-shard-count",
-                    str(cfg.city_shard_count),
-                    "--time-shard-index",
-                    str(time_shard),
-                    "--time-shard-count",
-                    str(cfg.nldas_time_shard_count),
-                    "--batch-hours",
-                    str(cfg.nldas_batch_hours),
-                    "--download-workers",
-                    str(cfg.download_workers),
-                    "--out-dir",
-                    ".",
-                ]
-                if cfg.months:
-                    script_args.append("--months")
-                    script_args.extend(str(month) for month in cfg.months)
-                jobs.append(_python_command("nldas.py", *script_args))
-    return jobs
-
-
-def run_nldas_pull(cfg: PipelineConfig) -> None:
-    """Compute NLDAS-2 -> wetbulb parquet, remotely or locally."""
-    LOGGER.info("====== Step 2b: Compute NLDAS-2 wetbulb ======")
-    _clear_local_year_outputs(cfg, ["wetbulb"])
-
-    if cfg.use_cloud_run:
-        _cancel_cloud_run_executions(cfg, cfg.nldas_cloud_run_job)
-        if not cfg.skip_remote_clear:
-            _clear_remote_prefixes(cfg, ["wetbulb"])
-        for year in tqdm(cfg.years, desc="Cloud Run NLDAS years"):
-            _run_nldas_cloud_run_year(cfg, year)
-        return
-
-    _run_local_jobs(
-        _local_nldas_jobs(cfg),
-        cfg,
-        desc="Local NLDAS jobs",
-        product_label="NLDAS",
     )
 
 
@@ -799,14 +665,6 @@ def _check_history_depth(conn: Connection[Any], cfg: PipelineConfig) -> None:
                 "history or run with --views skip."
             )
             raise PipelineError(msg)
-    if cfg.do_wetbulb:
-        wetbulb_years = _distinct_year_count(conn, "wetbulb")
-        if wetbulb_years < MIN_PET_YEARS_FOR_FORECAST:
-            LOGGER.warning(
-                "Only %d wetbulb year(s) present; wetbulb forecasts will be "
-                "empty until more history is backfilled.",
-                wetbulb_years,
-            )
 
 
 def run_db_load(cfg: PipelineConfig) -> None:
@@ -877,8 +735,6 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         _maybe_provision_cloud_run(cfg)
         if cfg.do_pet:
             run_era5_pull(cfg)
-        if cfg.do_wetbulb:
-            run_nldas_pull(cfg)
         if cfg.use_cloud_run:
             sync_outputs_from_s3(cfg)
     elif cfg.use_cloud_run and cfg.sync_from_s3:

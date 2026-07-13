@@ -1,8 +1,7 @@
 """Shared parquet partition write/resume helpers for pipeline workers.
 
-Used by both `google_era5.py` (PET) and `nldas.py` (wet-bulb) so batch
-outputs land in the same `year=YYYY/{prefix}_batch_NNNN_SS.parquet` tree
-regardless of which worker produced them.
+Used by `google_era5.py` (PET) so batch outputs land in a
+`year=YYYY/{prefix}_batch_NNNN_SS.parquet` tree.
 """
 
 from __future__ import annotations

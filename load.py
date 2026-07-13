@@ -30,7 +30,6 @@ DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_]\w*)?\$")
 TABLE_NAMES = [
     "locations",
     "pet",
-    "wetbulb",
 ]
 # Conflict targets that make loads idempotent: rows are COPYed into a temp
 # staging table and upserted, so re-running a load (or retrying a failed one)
@@ -38,7 +37,6 @@ TABLE_NAMES = [
 TABLE_UNIQUE_KEYS: dict[str, tuple[str, ...]] = {
     "locations": ("id",),
     "pet": ("location_id", "date"),
-    "wetbulb": ("location_id", "date"),
 }
 
 
@@ -199,16 +197,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Load the explicit --pet-csv input even when PET parquet shards are "
             "also present under --pet-root."
-        ),
-    )
-    parser.add_argument("--wetbulb-csv", default="wetbulb.csv")
-    parser.add_argument("--wetbulb-root", default="wetbulb_data_csv")
-    parser.add_argument(
-        "--prefer-wetbulb-csv",
-        action="store_true",
-        help=(
-            "Load the explicit --wetbulb-csv input even when wetbulb parquet "
-            "shards are also present under --wetbulb-root."
         ),
     )
     parser.add_argument("--load-shard-index", type=int, default=0)
@@ -725,16 +713,6 @@ def _discover_pet_csv_paths(args: argparse.Namespace) -> list[Path]:
     )
 
 
-def _discover_wetbulb_csv_paths(args: argparse.Namespace) -> list[Path]:
-    return _discover_batch_parquet_paths(
-        args,
-        direct_csv=args.wetbulb_csv,
-        root=args.wetbulb_root,
-        file_glob="wetbulb_batch_*.parquet",
-        prefer_direct=args.prefer_wetbulb_csv,
-    )
-
-
 def _load_file_group(
     db_uri: str,
     csv_paths: list[Path],
@@ -820,7 +798,6 @@ def _load_requested_tables(
     table_csv_resolvers = (
         ("locations", _discover_locations_csv_paths),
         ("pet", _discover_pet_csv_paths),
-        ("wetbulb", _discover_wetbulb_csv_paths),
     )
 
     for table_name, csv_resolver in table_csv_resolvers:

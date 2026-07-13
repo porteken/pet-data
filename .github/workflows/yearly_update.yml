@@ -15,12 +15,9 @@ concurrency:
 env:
   GCP_PROJECT_ID: weather-ai-478502
   CLOUD_RUN_JOB_NAME: era5-worker
-  NLDAS_CLOUD_RUN_JOB_NAME: nldas-worker
   CLOUD_RUN_REGION: us-east1
   ERA5_BATCH_HOURS: "720"
   ERA5_TIME_SHARD_COUNT: "13"
-  NLDAS_BATCH_HOURS: "720"
-  NLDAS_TIME_SHARD_COUNT: "13"
 
 jobs:
   build-target-window:
@@ -79,10 +76,6 @@ jobs:
             --job "${{ env.CLOUD_RUN_JOB_NAME }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" \
             --project "${{ env.GCP_PROJECT_ID }}"
-          python3 cancel_cloud_run_job_executions.py \
-            --job "${{ env.NLDAS_CLOUD_RUN_JOB_NAME }}" \
-            --region "${{ env.CLOUD_RUN_REGION }}" \
-            --project "${{ env.GCP_PROJECT_ID }}"
 
   clear-pet-output:
     if: github.ref_name == 'prd'
@@ -100,12 +93,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix pet_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/ --max-workers 8
-      - name: Clear Wetbulb Prefix
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: python3 clear_s3_prefix.py --bucket pet-parquet-files --prefix wetbulb_data_csv/year=${{ needs.build-target-window.outputs.target_year }}/ --max-workers 8
 
   provision-cloud-run:
     if: github.ref_name == 'prd'
@@ -123,13 +110,10 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
           CLOUD_RUN_JOB_NAME: ${{ env.CLOUD_RUN_JOB_NAME }}
-          NLDAS_CLOUD_RUN_JOB_NAME: ${{ env.NLDAS_CLOUD_RUN_JOB_NAME }}
           CLOUD_RUN_REGION: ${{ env.CLOUD_RUN_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-          EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
-          EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
         run: /bin/bash ./cloudrun_provision.sh
 
   compute-pet-google-era5:
@@ -154,34 +138,11 @@ jobs:
             --project "${{ env.GCP_PROJECT_ID }}" \
             --region "${{ env.CLOUD_RUN_REGION }}" --wait \
             --tasks "${{ env.ERA5_TIME_SHARD_COUNT }}" \
-            --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-count=${{ env.ERA5_TIME_SHARD_COUNT }},--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--products=pet,--out-dir=s3://pet-parquet-files"
-
-  compute-wetbulb-nldas:
-    if: github.ref_name == 'prd' && needs.build-target-window.outputs.target_year != ''
-    needs: [build-target-window, clear-pet-output, provision-cloud-run]
-    runs-on: ubuntu-latest
-    name: NLDAS->wetbulb ${{ needs.build-target-window.outputs.target_year }} via Cloud Run tasks
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - name: Authenticate GCP
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
-      # Same task-index fan-out pattern as the ERA5 job, but against NLDAS-2's
-      # GES DISC HTTPS endpoint instead of the ARCO GCS zarr store.
-      - name: Pull NLDAS-2 & Compute wet-bulb (writes straight to S3)
-        run: |
-          gcloud run jobs execute "${{ env.NLDAS_CLOUD_RUN_JOB_NAME }}" \
-            --project "${{ env.GCP_PROJECT_ID }}" \
-            --region "${{ env.CLOUD_RUN_REGION }}" --wait \
-            --tasks "${{ env.NLDAS_TIME_SHARD_COUNT }}" \
-            --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-count=${{ env.NLDAS_TIME_SHARD_COUNT }},--batch-hours=${{ env.NLDAS_BATCH_HOURS }},--out-dir=s3://pet-parquet-files"
+            --args="--year=${{ needs.build-target-window.outputs.target_year }},--city-shard-count=1,--time-shard-count=${{ env.ERA5_TIME_SHARD_COUNT }},--max-workers=1,--batch-hours=${{ env.ERA5_BATCH_HOURS }},--concurrency-profile=aggressive,--out-dir=s3://pet-parquet-files"
 
   load-to-db:
     if: github.ref_name == 'prd'
-    needs: [build-target-window, compute-pet-google-era5, compute-wetbulb-nldas]
+    needs: [build-target-window, compute-pet-google-era5]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -202,12 +163,10 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
           TARGET_YEAR: ${{ needs.build-target-window.outputs.target_year }}
         run: |
-          for product in pet_data_csv wetbulb_data_csv; do
-            prefix="${product}/year=${TARGET_YEAR}/"
-            echo "Syncing s3://pet-parquet-files/${prefix}"
-            mkdir -p "${product}"
-            aws s3 sync "s3://pet-parquet-files/${prefix}" "./${prefix}"
-          done
+          prefix="pet_data_csv/year=${TARGET_YEAR}/"
+          echo "Syncing s3://pet-parquet-files/${prefix}"
+          mkdir -p pet_data_csv
+          aws s3 sync "s3://pet-parquet-files/${prefix}" "./${prefix}"
       # Upsert loads are idempotent (ON CONFLICT on (location_id, date)), so a
       # failed or re-run job can never duplicate rows and no delete-window
       # step is needed. Views stay in place and are refreshed afterwards.
@@ -247,7 +206,6 @@ jobs:
         clear-pet-output,
         provision-cloud-run,
         compute-pet-google-era5,
-        compute-wetbulb-nldas,
         load-to-db,
         finalize-db-load,
       ]

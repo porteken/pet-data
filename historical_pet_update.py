@@ -26,16 +26,8 @@ DATA_PRODUCTS: dict[str, dict[str, str]] = {
         "csv_header": "location_id,date,pet\n",
         "label": "PET",
     },
-    "wetbulb": {
-        "table": "wetbulb",
-        "column": "wetbulb",
-        "batch_glob": "wetbulb_batch_*.parquet",
-        "csv_name": "wetbulb.csv",
-        "csv_header": "location_id,date,wetbulb\n",
-        "label": "wetbulb",
-    },
 }
-WINDOWED_PRODUCTS: tuple[str, ...] = ("pet", "wetbulb")
+WINDOWED_PRODUCTS: tuple[str, ...] = ("pet",)
 PET_CSV_HEADER = DATA_PRODUCTS["pet"]["csv_header"]
 ANALYTICS_TABLES: tuple[str, ...] = ()
 
@@ -81,7 +73,7 @@ def export_pet(
     *,
     product: str = "pet",
 ) -> None:
-    """Export PET/wetbulb data, optionally excluding a target date window."""
+    """Export PET data, optionally excluding a target date window."""
     table = DATA_PRODUCTS[product]["table"]
     db_uri = resolve_database_uri()
     if not db_uri:
@@ -163,7 +155,7 @@ def merge_csvs(
     *,
     product: str = "pet",
 ) -> None:
-    """Merge multiple PET/wetbulb CSV/parquet sources into one deduplicated CSV."""
+    """Merge multiple PET CSV/parquet sources into one deduplicated CSV."""
     pd = importlib.import_module("pandas")
     column = DATA_PRODUCTS[product]["column"]
     label = DATA_PRODUCTS[product]["label"]
@@ -225,7 +217,7 @@ def _existing_public_tables(
 
 
 def delete_window(window_start: str, window_end: str) -> None:
-    """Delete PET/wetbulb rows within a specific date window and reset analytics tables.
+    """Delete PET rows within a specific date window and reset analytics tables.
 
     Views are left untouched: materialized views do not block row deletion and
     are refreshed (or recreated) by the load pipeline afterwards.
@@ -298,14 +290,14 @@ def _extract_table_option(argv: list[str]) -> tuple[list[str], str]:
 
 
 def main() -> None:
-    """Execute historical PET/wetbulb update commands."""
+    """Execute historical PET update commands."""
     argv, product = _extract_table_option(sys.argv)
 
     min_args = 2
     if len(argv) < min_args:
         msg = (
             "Usage: historical_pet_update.py "
-            "[export|export-all|merge|delete-window] ... [--table pet|wetbulb]"
+            "[export|export-all|merge|delete-window] ... [--table pet]"
         )
         raise SystemExit(msg)
 

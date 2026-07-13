@@ -14,10 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from functools import cache
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from tqdm.auto import tqdm
 
@@ -62,8 +59,6 @@ MAX_REASONABLE_MRT_C = 120.0
 MIN_REASONABLE_MRT_C = -80.0
 MIN_REASONABLE_PET_C = -50.0
 MAX_REASONABLE_PET_C = 60.0
-MIN_REASONABLE_WETBULB_C = -50.0
-MAX_REASONABLE_WETBULB_C = 40.0
 
 _B = 17.625
 _C = 243.04
@@ -130,16 +125,6 @@ try:
     )
 except (ImportError, AttributeError) as error:
     LOGGER.exception("Could not import pet_corrected from pet_corrected.py.")
-    raise SystemExit(1) from error
-
-try:
-    wetbulb_module: Any = importlib.import_module("wetbulb")
-    wetbulb_stull: Callable[..., ArrayLike] = cast(
-        "Callable[..., ArrayLike]",
-        wetbulb_module.wetbulb_stull,
-    )
-except (ImportError, AttributeError) as error:
-    LOGGER.exception("Could not import wetbulb_stull from wetbulb.py.")
     raise SystemExit(1) from error
 
 
@@ -394,30 +379,6 @@ def _compute_pet_chunk(df_chunk: DataFrame) -> DataFrame:
     return df_result.dropna(subset=["pet"])
 
 
-def _compute_wetbulb_series(temp_c: ArrayLike, rh: ArrayLike) -> ArrayLike:
-    wetbulb_results = np.asarray(
-        wetbulb_stull(
-            np.asarray(temp_c, dtype="float32"), np.asarray(rh, dtype="float32")
-        ),
-        dtype="float32",
-    )
-    invalid_wetbulb = (
-        ~np.isfinite(wetbulb_results)
-        | (wetbulb_results < MIN_REASONABLE_WETBULB_C)
-        | (wetbulb_results > MAX_REASONABLE_WETBULB_C)
-    )
-    if np.any(invalid_wetbulb):
-        LOGGER.warning(
-            "Discarding %s wetbulb value(s) outside sanity range [%s, %s] C.",
-            int(np.count_nonzero(invalid_wetbulb)),
-            MIN_REASONABLE_WETBULB_C,
-            MAX_REASONABLE_WETBULB_C,
-        )
-        wetbulb_results[invalid_wetbulb] = np.nan
-
-    return (wetbulb_results * PET_ROUNDING_FACTOR).round() / PET_ROUNDING_FACTOR
-
-
 def _filter_frame_to_months(
     frame: DataFrame,
     allowed_months: list[int] | None,
@@ -535,7 +496,6 @@ def _compute_location_frame(
     df.loc[:, PET_INPUT_COLUMNS] = (
         df[PET_INPUT_COLUMNS] * PET_ROUNDING_FACTOR
     ).round() / PET_ROUNDING_FACTOR
-    df["wetbulb"] = _compute_wetbulb_series(df["t"].to_numpy(), df["rh"].to_numpy())
     df["_pet_key"] = pd.factorize(
         pd.MultiIndex.from_frame(df[PET_INPUT_COLUMNS]),
         sort=False,
@@ -551,7 +511,7 @@ def _compute_location_frame(
     ]
 
     if not chunks:
-        return pd.DataFrame(columns=["location_id", "date", "pet", "wetbulb"])
+        return pd.DataFrame(columns=["location_id", "date", "pet"])
 
     results: list[DataFrame] = []
     n_chunk_workers = max(1, min(compute_workers, len(chunks)))
@@ -562,7 +522,7 @@ def _compute_location_frame(
             results = list(chunk_executor.map(_compute_pet_chunk, chunks))
 
     if not results:
-        return pd.DataFrame(columns=["location_id", "date", "pet", "wetbulb"])
+        return pd.DataFrame(columns=["location_id", "date", "pet"])
 
     df_pet_unique = pd.concat(results, ignore_index=True)
     df = df.merge(df_pet_unique[["_pet_key", "pet"]], on="_pet_key", how="inner")
@@ -571,26 +531,7 @@ def _compute_location_frame(
 
     return df.groupby(["location_id", "date"], as_index=False).agg(
         pet=("pet", "max"),
-        wetbulb=("wetbulb", "max"),
     )
-
-
-class _ProductPlan(NamedTuple):
-    """Which data products to write and where their parquet trees live."""
-
-    pet_root: str
-    wetbulb_root: str
-    write_pet: bool = True
-    write_wetbulb: bool = True
-
-
-class _BatchWriteTargets(NamedTuple):
-    """Where to write each product and whether it should be written."""
-
-    pet_target: PartitionTarget
-    wetbulb_target: PartitionTarget
-    write_pet: bool = True
-    write_wetbulb: bool = True
 
 
 def _write_pet_partition(
@@ -615,32 +556,10 @@ def _write_pet_partition(
     )
 
 
-def _write_wetbulb_partition(
-    wetbulb_root: str,
-    year: int,
-    city_shard_index: int,
-    frame: DataFrame,
-    batch_index: int,
-    *,
-    filesystem: object | None = None,
-    base_path: str | None = None,
-) -> None:
-    write_batch_partition(
-        wetbulb_root,
-        year,
-        city_shard_index,
-        frame,
-        batch_index,
-        file_prefix="wetbulb",
-        filesystem=filesystem,
-        base_path=base_path,
-    )
-
-
 def _process_era5_batch_job(
     *,
     ds: Dataset,
-    targets: _BatchWriteTargets,
+    pet_target: PartitionTarget,
     year: int,
     city_shard_index: int,
     batch_index: int,
@@ -667,40 +586,21 @@ def _process_era5_batch_job(
     if frame.empty:
         return batch_index
 
-    if targets.write_pet:
-        _write_pet_partition(
-            targets.pet_target.root,
-            year,
-            city_shard_index,
-            frame[["location_id", "date", "pet"]].copy(),
-            batch_index,
-            filesystem=targets.pet_target.filesystem,
-            base_path=targets.pet_target.base_path,
-        )
-    if targets.write_wetbulb:
-        wetbulb_frame = (
-            frame[["location_id", "date", "wetbulb"]]
-            .dropna(
-                subset=["wetbulb"],
-            )
-            .copy()
-        )
-        if not wetbulb_frame.empty:
-            _write_wetbulb_partition(
-                targets.wetbulb_target.root,
-                year,
-                city_shard_index,
-                wetbulb_frame,
-                batch_index,
-                filesystem=targets.wetbulb_target.filesystem,
-                base_path=targets.wetbulb_target.base_path,
-            )
+    _write_pet_partition(
+        pet_target.root,
+        year,
+        city_shard_index,
+        frame[["location_id", "date", "pet"]].copy(),
+        batch_index,
+        filesystem=pet_target.filesystem,
+        base_path=pet_target.base_path,
+    )
     return batch_index
 
 
 def _process_era5_batch_with_thread_dataset(
     *,
-    targets: _BatchWriteTargets,
+    pet_target: PartitionTarget,
     year: int,
     city_shard_index: int,
     batch_index: int,
@@ -721,7 +621,7 @@ def _process_era5_batch_with_thread_dataset(
 
             return _process_era5_batch_job(
                 ds=ds,
-                targets=targets,
+                pet_target=pet_target,
                 year=year,
                 city_shard_index=city_shard_index,
                 batch_index=batch_index,
@@ -741,53 +641,26 @@ def _process_era5_batch_with_thread_dataset(
     return batch_index
 
 
-PRODUCT_CHOICES = ("pet", "wetbulb", "both")
-
-
-def _resolve_products(products: str) -> tuple[bool, bool]:
-    """Map a --products choice to (write_pet, write_wetbulb) flags."""
-    if products not in PRODUCT_CHOICES:
-        msg = f"products must be one of {PRODUCT_CHOICES}, got {products!r}"
-        raise ValueError(msg)
-    return products in ("pet", "both"), products in ("wetbulb", "both")
-
-
 def _collect_pending_batch_jobs(
     *,
     selected_batches: list[tuple[int, int, int]],
     shard_df: DataFrame,
-    targets: _BatchWriteTargets,
+    pet_target: PartitionTarget,
     year: int,
     city_shard_index: int,
     force: bool,
 ) -> list[tuple[int, int, int, DataFrame]]:
     batch_jobs: list[tuple[int, int, int, DataFrame]] = []
     for batch_index, start_h, end_h in selected_batches:
-        required_exist = []
-        if targets.write_pet:
-            required_exist.append(
-                batch_exists(
-                    targets.pet_target.root,
-                    year,
-                    city_shard_index,
-                    batch_index,
-                    filesystem=targets.pet_target.filesystem,
-                    base_path=targets.pet_target.base_path,
-                )
-            )
-        if targets.write_wetbulb:
-            required_exist.append(
-                batch_exists(
-                    targets.wetbulb_target.root,
-                    year,
-                    city_shard_index,
-                    batch_index,
-                    file_prefix="wetbulb",
-                    filesystem=targets.wetbulb_target.filesystem,
-                    base_path=targets.wetbulb_target.base_path,
-                )
-            )
-        if force or not all(required_exist):
+        already_exists = batch_exists(
+            pet_target.root,
+            year,
+            city_shard_index,
+            batch_index,
+            filesystem=pet_target.filesystem,
+            base_path=pet_target.base_path,
+        )
+        if force or not already_exists:
             batch_jobs.append((batch_index, start_h, end_h, shard_df))
     return batch_jobs
 
@@ -796,7 +669,7 @@ def _run_era5_batch_jobs(
     *,
     selected_batches: list[tuple[int, int, int]],
     shard_df: DataFrame,
-    plan: _ProductPlan,
+    era5_root: str,
     year: int,
     city_shard_index: int,
     city_shard_count: int,
@@ -806,10 +679,6 @@ def _run_era5_batch_jobs(
     allowed_months: list[int] | None = None,
     force: bool = False,
 ) -> bool:
-    era5_root = plan.pet_root
-    wetbulb_root = plan.wetbulb_root
-    write_pet = plan.write_pet
-    write_wetbulb = plan.write_wetbulb
     concurrency_profile = os.environ.get("ERA5_CONCURRENCY_PROFILE", "balanced")
     if concurrency_profile == "aggressive":
         dask_workers = 8
@@ -819,16 +688,11 @@ def _run_era5_batch_jobs(
         dask_workers = 4
 
     filesystem, base_path = resolve_filesystem(era5_root)
-    wetbulb_filesystem, wetbulb_base_path = resolve_filesystem(wetbulb_root)
     pet_target = PartitionTarget(era5_root, filesystem, base_path)
-    wetbulb_target = PartitionTarget(
-        wetbulb_root, wetbulb_filesystem, wetbulb_base_path
-    )
-    targets = _BatchWriteTargets(pet_target, wetbulb_target, write_pet, write_wetbulb)
     batch_jobs = _collect_pending_batch_jobs(
         selected_batches=selected_batches,
         shard_df=shard_df,
-        targets=targets,
+        pet_target=pet_target,
         year=year,
         city_shard_index=city_shard_index,
         force=force,
@@ -857,7 +721,7 @@ def _run_era5_batch_jobs(
         ):
             _process_era5_batch_job(
                 ds=ds,
-                targets=targets,
+                pet_target=pet_target,
                 year=year,
                 city_shard_index=city_shard_index,
                 batch_index=batch_index,
@@ -872,7 +736,7 @@ def _run_era5_batch_jobs(
             futures = [
                 executor.submit(
                     _process_era5_batch_with_thread_dataset,
-                    targets=targets,
+                    pet_target=pet_target,
                     year=year,
                     city_shard_index=city_shard_index,
                     batch_index=batch_index,
@@ -906,14 +770,11 @@ def process_era5(
     batch_hours: int,
     concurrency_profile: str,
     months: list[int] | None = None,
-    products: str = "both",
 ) -> None:
-    """Download ERA5 data from ARCO, compute PET and wetbulb, and save as parquet shards."""
-    write_pet, write_wetbulb = _resolve_products(products)
+    """Download ERA5 data from ARCO, compute PET, and save as parquet shards."""
     _configure_concurrency(concurrency_profile)
     os.environ["ERA5_CONCURRENCY_PROFILE"] = concurrency_profile
     pet_root = f"{out_dir}/pet_data_csv"
-    wetbulb_root = f"{out_dir}/wetbulb_data_csv"
 
     shard_df = _load_era5_city_shard(city_shard_index, city_shard_count)
     if shard_df.empty:
@@ -933,7 +794,7 @@ def process_era5(
     _run_era5_batch_jobs(
         selected_batches=selected_batches,
         shard_df=shard_df,
-        plan=_ProductPlan(pet_root, wetbulb_root, write_pet, write_wetbulb),
+        era5_root=pet_root,
         year=year,
         city_shard_index=city_shard_index,
         city_shard_count=city_shard_count,
@@ -974,12 +835,6 @@ def _parse_args() -> argparse.Namespace:
         choices=["conservative", "balanced", "aggressive"],
         default="aggressive",
     )
-    parser.add_argument(
-        "--products",
-        choices=list(PRODUCT_CHOICES),
-        default="both",
-        help="Which parquet trees to write: pet, wetbulb, or both (default).",
-    )
     args = parser.parse_args()
     if args.time_shard_index is None:
         args.time_shard_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
@@ -1002,7 +857,6 @@ def main() -> None:
             batch_hours=args.batch_hours,
             concurrency_profile=args.concurrency_profile,
             months=args.months,
-            products=args.products,
         )
     except KeyboardInterrupt:
         exit_code = 130

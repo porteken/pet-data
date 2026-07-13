@@ -47,8 +47,8 @@ class TestBuildConfig:
         assert cfg.batch_hours == pipeline.FULL_BATCH_HOURS
         assert cfg.time_shard_count == pipeline.FULL_TIME_SHARD_COUNT
         assert cfg.time_shard_indexes == list(range(13))
-        assert cfg.products == "both"
-        assert cfg.selected_products == ["pet", "wetbulb"]
+        assert cfg.products == "pet"
+        assert cfg.selected_products == ["pet"]
         assert cfg.city_shard_count == 1
 
     def test_smoke_mode_defaults(self) -> None:
@@ -73,14 +73,6 @@ class TestBuildConfig:
         assert cfg.use_cloud_run is False
         assert cfg.batch_hours == 24
         assert cfg.do_pet is True
-        assert cfg.do_wetbulb is False
-
-    def test_cli_flags_override_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("PRODUCTS", "pet")
-
-        cfg = _config(["--products", "wetbulb", "--years", "2024"])
-
-        assert cfg.products == "wetbulb"
 
     def test_empty_s3_prefix_rejected_for_cloud_run(self) -> None:
         with pytest.raises(pipeline.PipelineError, match="s3-prefix"):
@@ -143,73 +135,6 @@ class TestWorkerArgs:
         assert len(jobs) == 2 * 2 * 3
         assert all("google_era5.py" in job[1] for job in jobs)
 
-    def test_era5_worker_always_requests_pet_only(self) -> None:
-        """ERA5 no longer writes wetbulb; it must always run --products pet."""
-        cfg = _config(["--years", "2024", "--products", "both"])
-
-        args_csv = pipeline._cloud_run_worker_args(cfg, 2024)
-
-        assert "--products=pet" in args_csv
-        assert "--products=both" not in args_csv
-        assert "--products=wetbulb" not in args_csv
-
-    def test_local_era5_jobs_always_pass_products_pet(self) -> None:
-        cfg = _config(["--local", "--years", "2024", "--products", "both"])
-        cfg.time_shard_indexes = [0]
-
-        jobs = pipeline._local_era5_jobs(cfg)
-
-        assert all("pet" in job for job in jobs)
-        assert all("both" not in job and "wetbulb" not in job for job in jobs)
-
-
-class TestNldasWorkerArgs:
-    def test_full_mode_omits_time_shard_index(self) -> None:
-        cfg = _config(["--years", "2024"])
-
-        args_csv = pipeline._nldas_worker_args(cfg, 2024)
-
-        assert "--time-shard-index" not in args_csv
-        assert "--year=2024" in args_csv
-        assert f"--time-shard-count={pipeline.FULL_TIME_SHARD_COUNT}" in args_csv
-        assert (
-            f"--download-workers={pipeline.NLDAS_DEFAULT_DOWNLOAD_WORKERS}" in args_csv
-        )
-
-    def test_smoke_mode_pins_time_shard_index(self) -> None:
-        cfg = _config(["--mode", "smoke", "--years", "2024"])
-
-        args_csv = pipeline._nldas_worker_args(cfg, 2024)
-
-        assert f"--time-shard-index={pipeline.SMOKE_TIME_SHARD_INDEX}" in args_csv
-
-    def test_months_are_forwarded(self) -> None:
-        cfg = _config(["--years", "2024", "--months", "1", "2"])
-
-        args_csv = pipeline._nldas_worker_args(cfg, 2024)
-
-        assert "--months,1,2" in args_csv
-
-    def test_local_jobs_cover_all_shards(self) -> None:
-        cfg = _config(
-            [
-                "--local",
-                "--years",
-                "2023",
-                "2024",
-                "--era5-city-shard-count",
-                "2",
-                "--nldas-time-shard-count",
-                "3",
-            ]
-        )
-        cfg.nldas_time_shard_indexes = list(range(3))
-
-        jobs = pipeline._local_nldas_jobs(cfg)
-
-        assert len(jobs) == 2 * 2 * 3
-        assert all("nldas.py" in job[1] for job in jobs)
-
 
 class TestRunCommand:
     def test_success(self) -> None:
@@ -265,10 +190,9 @@ class TestOutputsAvailable:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        for product in ("pet", "wetbulb"):
-            shard_dir = tmp_path / f"{product}_data_csv/year=2024"
-            shard_dir.mkdir(parents=True)
-            (shard_dir / f"{product}_batch_0000_00.parquet").touch()
+        shard_dir = tmp_path / "pet_data_csv/year=2024"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / "pet_batch_0000_00.parquet").touch()
 
         pipeline.assert_outputs_available(_config(["--years", "2024"]))
 
@@ -339,72 +263,6 @@ class TestEra5Pull:
             pipeline.run_era5_pull(cfg)
 
 
-class TestNldasPull:
-    def test_cloud_run_executes_one_tasked_run_per_year(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        commands: list[list[str]] = []
-        monkeypatch.setattr(
-            pipeline,
-            "_run_command",
-            lambda command, **_kwargs: commands.append(command),
-        )
-
-        cfg = _config(["--years", "2023", "2024", "--skip-remote-clear"])
-        pipeline.run_nldas_pull(cfg)
-
-        gcloud_commands = [c for c in commands if c[0] == "gcloud"]
-        assert len(gcloud_commands) == 2
-        assert all("nldas-worker" in c for c in gcloud_commands)
-        tasks_value = gcloud_commands[0][gcloud_commands[0].index("--tasks") + 1]
-        assert tasks_value == str(pipeline.FULL_TIME_SHARD_COUNT)
-
-    def test_local_mode_runs_all_jobs(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        commands: list[list[str]] = []
-        monkeypatch.setattr(
-            pipeline,
-            "_run_command",
-            lambda command, **_kwargs: commands.append(command),
-        )
-
-        cfg = _config(
-            [
-                "--local",
-                "--years",
-                "2024",
-                "--era5-city-shard-count",
-                "1",
-                "--nldas-time-shard-count",
-                "2",
-            ]
-        )
-        cfg.nldas_time_shard_indexes = [0, 1]
-        pipeline.run_nldas_pull(cfg)
-
-        assert len(commands) == 2
-        assert all("nldas.py" in command[1] for command in commands)
-
-    def test_local_failure_is_reported(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-
-        def failing_run(_command: list[str], **_kwargs: object) -> None:
-            msg = "job failed with exit code 1."
-            raise pipeline.PipelineError(msg)
-
-        monkeypatch.setattr(pipeline, "_run_command", failing_run)
-
-        cfg = _config(["--local", "--years", "2024"])
-        cfg.nldas_time_shard_indexes = [0]
-        with pytest.raises(pipeline.PipelineError, match="local NLDAS job"):
-            pipeline.run_nldas_pull(cfg)
-
-
 class TestSyncOutputs:
     def test_syncs_each_selected_product(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -419,7 +277,7 @@ class TestSyncOutputs:
 
         pipeline.sync_outputs_from_s3(_config(["--years", "2024"]))
 
-        assert len(commands) == 2
+        assert len(commands) == 1
         assert all(command[:3] == ["aws", "s3", "sync"] for command in commands)
 
 
@@ -453,24 +311,12 @@ class _HistoryConnection:
 
 class TestHistoryDepth:
     def test_insufficient_pet_history_fails(self) -> None:
-        conn = _HistoryConnection({"pet": 3, "wetbulb": 12})
+        conn = _HistoryConnection({"pet": 3})
 
         with pytest.raises(pipeline.PipelineError, match="at least 10 PET years"):
             pipeline._check_history_depth(
                 cast("Any", conn), _config(["--years", "2024"])
             )
-
-    def test_short_wetbulb_history_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        conn = _HistoryConnection({"pet": 12, "wetbulb": 2})
-
-        with caplog.at_level(logging.WARNING):
-            pipeline._check_history_depth(
-                cast("Any", conn), _config(["--years", "2024"])
-            )
-
-        assert "wetbulb year(s)" in caplog.text
 
 
 class TestRunDbLoad:
@@ -561,9 +407,6 @@ class TestRunPipeline:
             pipeline, "run_era5_pull", lambda _cfg: calls.append("pull")
         )
         monkeypatch.setattr(
-            pipeline, "run_nldas_pull", lambda _cfg: calls.append("nldas_pull")
-        )
-        monkeypatch.setattr(
             pipeline, "sync_outputs_from_s3", lambda _cfg: calls.append("sync")
         )
         monkeypatch.setattr(
@@ -574,15 +417,7 @@ class TestRunPipeline:
         monkeypatch.setattr(pipeline, "run_db_load", lambda _cfg: calls.append("db"))
 
         pipeline.run_pipeline(_config(["--years", "2024"]))
-        assert calls == ["locations", "pull", "nldas_pull", "sync", "assert", "db"]
-
-        calls.clear()
-        pipeline.run_pipeline(_config(["--years", "2024", "--products", "pet"]))
         assert calls == ["locations", "pull", "sync", "assert", "db"]
-
-        calls.clear()
-        pipeline.run_pipeline(_config(["--years", "2024", "--products", "wetbulb"]))
-        assert calls == ["locations", "nldas_pull", "sync", "assert", "db"]
 
         calls.clear()
         pipeline.run_pipeline(
