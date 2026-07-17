@@ -21,9 +21,10 @@ DATA_PRODUCTS: dict[str, dict[str, str]] = {
     "pet": {
         "table": "pet",
         "column": "pet",
+        "avg_column": "pet_avg",
         "batch_glob": "pet_batch_*.parquet",
         "csv_name": "pet.csv",
-        "csv_header": "location_id,date,pet\n",
+        "csv_header": "location_id,date,pet,pet_avg\n",
         "label": "PET",
     },
 }
@@ -45,11 +46,12 @@ def _build_export_copy_query(
 ) -> tuple[LiteralString, tuple[str, str] | None]:
     table = DATA_PRODUCTS[product]["table"]
     column = DATA_PRODUCTS[product]["column"]
+    avg_column = DATA_PRODUCTS[product]["avg_column"]
     if window_start is None or window_end is None:
         return cast(
             "LiteralString",
             "COPY ("
-            f"SELECT location_id, date, {column} "
+            f"SELECT location_id, date, {column}, {avg_column} "
             f"FROM public.{table} "
             "ORDER BY location_id, date"
             ") TO STDOUT WITH CSV HEADER",
@@ -58,7 +60,7 @@ def _build_export_copy_query(
     return cast(
         "LiteralString",
         "COPY ("
-        f"SELECT location_id, date, {column} "
+        f"SELECT location_id, date, {column}, {avg_column} "
         f"FROM public.{table} "
         "WHERE date < %s::date OR date > %s::date "
         "ORDER BY location_id, date"
@@ -142,10 +144,19 @@ def _load_data_frame_from_path(
     *,
     product: str = "pet",
 ) -> Any:
-    columns = ["location_id", "date", DATA_PRODUCTS[product]["column"]]
+    columns = [
+        "location_id",
+        "date",
+        DATA_PRODUCTS[product]["column"],
+        DATA_PRODUCTS[product]["avg_column"],
+    ]
+    # Legacy sources may lack the avg column; reindex so it comes back as NaN
+    # instead of raising, rather than requiring every source to have it.
     if source_path.suffix == ".parquet":
-        return pd.read_parquet(source_path, columns=columns)
-    return pd.read_csv(source_path, usecols=columns)
+        frame = pd.read_parquet(source_path)
+    else:
+        frame = pd.read_csv(source_path)
+    return frame.reindex(columns=columns)
 
 
 def merge_csvs(
@@ -158,6 +169,7 @@ def merge_csvs(
     """Merge multiple PET CSV/parquet sources into one deduplicated CSV."""
     pd = importlib.import_module("pandas")
     column = DATA_PRODUCTS[product]["column"]
+    avg_column = DATA_PRODUCTS[product]["avg_column"]
     label = DATA_PRODUCTS[product]["label"]
 
     print(f"Merging {label} data into {output_file}...")
@@ -175,7 +187,7 @@ def merge_csvs(
             print(f"Error processing {source_path}: {exc}")
             continue
 
-        frame = frame[["location_id", "date", column]].copy()
+        frame = frame[["location_id", "date", column, avg_column]].copy()
         frame["_source_order"] = source_order
         frames.append(frame)
 

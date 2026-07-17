@@ -547,6 +547,36 @@ class TestFileCopyColumnNames:
         assert load._file_copy_column_names("pet", csv_path) == []
 
 
+class TestUnionCopyColumnNames:
+    def test_unions_columns_across_files_in_first_seen_order(
+        self, tmp_path: Path
+    ) -> None:
+        legacy_path = tmp_path / "legacy.csv"
+        legacy_path.write_text("location_id,date,pet\n1,2020-01-01,10\n")
+        new_path = tmp_path / "new.csv"
+        new_path.write_text("location_id,date,pet,pet_avg\n1,2020-01-02,11,9\n")
+
+        assert load._union_copy_column_names("pet", [legacy_path, new_path]) == [
+            "location_id",
+            "date",
+            "pet",
+            "pet_avg",
+        ]
+
+    def test_skips_files_with_no_columns(self, tmp_path: Path) -> None:
+        empty_path = tmp_path / "empty.csv"
+        empty_path.touch()
+        new_path = tmp_path / "new.csv"
+        new_path.write_text("location_id,date,pet,pet_avg\n1,2020-01-02,11,9\n")
+
+        assert load._union_copy_column_names("pet", [empty_path, new_path]) == [
+            "location_id",
+            "date",
+            "pet",
+            "pet_avg",
+        ]
+
+
 class TestBulkInsertStaging:
     def _write_parquet(self, path: Path) -> None:
         import pandas as pd
@@ -615,6 +645,46 @@ class TestBulkInsertStaging:
 
         assert conn.statements == []
         assert "No data inputs" in caplog.text
+
+    def test_mixed_schema_pet_files_union_columns_for_staging(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import pandas as pd
+
+        monkeypatch.chdir(tmp_path)
+        legacy_path = tmp_path / "pet_batch_0000_00.parquet"
+        pd.DataFrame(
+            {
+                "location_id": [1],
+                "date": ["2024-01-01"],
+                "pet": [20.0],
+            }
+        ).to_parquet(legacy_path, index=False)
+        new_path = tmp_path / "pet_batch_0001_00.parquet"
+        pd.DataFrame(
+            {
+                "location_id": [1],
+                "date": ["2024-01-02"],
+                "pet": [21.0],
+                "pet_avg": [19.0],
+            }
+        ).to_parquet(new_path, index=False)
+        conn = CopyRecordingConnection(rowcount=2)
+
+        load.bulk_insert_csv_files(
+            cast("Any", conn),
+            [legacy_path, new_path],
+            "pet",
+            batch_size=1000,
+            truncate=False,
+        )
+
+        create = next(s for s in conn.statements if s.startswith("CREATE TEMP TABLE"))
+        assert '"pet_avg"' in create
+        copies = [s for s in conn.statements if s.startswith("COPY")]
+        assert len(copies) == 2
+        assert '"pet_avg"' not in copies[0]
+        assert '"pet_avg"' in copies[1]
 
 
 class TestUpsertFromStaging:

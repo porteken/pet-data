@@ -287,6 +287,9 @@ class _HistoryCursor:
         self._result = 0
 
     def execute(self, statement: str) -> None:
+        if "pet_avg" in statement:
+            self._result = self._counts.get("pet_avg", 0)
+            return
         for table, count in self._counts.items():
             if f"public.{table}" in statement:
                 self._result = count
@@ -317,6 +320,18 @@ class TestHistoryDepth:
             pipeline._check_history_depth(
                 cast("Any", conn), _config(["--years", "2024"])
             )
+
+    def test_insufficient_pet_avg_history_warns_without_raising(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        conn = _HistoryConnection({"pet": 12, "pet_avg": 5})
+
+        with caplog.at_level(logging.WARNING):
+            pipeline._check_history_depth(
+                cast("Any", conn), _config(["--years", "2024"])
+            )
+
+        assert "pet_avg covers only 5 year(s)" in caplog.text
 
 
 class TestRunDbLoad:

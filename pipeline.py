@@ -654,6 +654,17 @@ def _distinct_year_count(conn: Connection[Any], table: str) -> int:
     return int(row[0]) if row else 0
 
 
+def _pet_avg_year_count(conn: Connection[Any]) -> int:
+    query = (
+        "SELECT count(DISTINCT date_part('year', date)) "
+        "FROM public.pet WHERE pet_avg IS NOT NULL"
+    )
+    with conn.cursor() as cur:
+        cur.execute(cast("LiteralString", query))
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 def _check_history_depth(conn: Connection[Any], cfg: PipelineConfig) -> None:
     """Enforce the forecast history requirement before building views."""
     if cfg.do_pet:
@@ -665,6 +676,14 @@ def _check_history_depth(conn: Connection[Any], cfg: PipelineConfig) -> None:
                 "history or run with --views skip."
             )
             raise PipelineError(msg)
+
+        pet_avg_years = _pet_avg_year_count(conn)
+        if pet_avg_years < MIN_PET_YEARS_FOR_FORECAST:
+            LOGGER.warning(
+                "pet_avg covers only %d year(s); pet_forecast will be empty "
+                "until history is backfilled.",
+                pet_avg_years,
+            )
 
 
 def run_db_load(cfg: PipelineConfig) -> None:

@@ -135,6 +135,10 @@ BEGIN
     END IF ;
 END $$ ;
 
+-- pet_avg is nullable: rows loaded before the daily-average track existed
+-- only have the daily max and no daily average value.
+ALTER TABLE public.pet ADD COLUMN IF NOT EXISTS pet_avg real ;
+
 -- One-time migrations: the covering indexes become UNIQUE so loads can upsert
 -- with ON CONFLICT (location_id, date). Dedupe first (keep the most recently
 -- inserted row). The timeout is lifted with separate top-level statements

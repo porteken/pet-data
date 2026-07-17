@@ -403,6 +403,21 @@ def _file_copy_column_names(table_name: str, file_path: Path) -> list[str]:
     return _normalize_copy_column_names(table_name, raw_names)
 
 
+def _union_copy_column_names(table_name: str, file_paths: list[Path]) -> list[str]:
+    """Return the first-seen-ordered union of columns across `file_paths`.
+
+    A pet load can mix legacy 3-column files (no `pet_avg`) with newer
+    4-column files; the staging table must include every column any file
+    might supply so each file's own COPY (which uses only that file's own
+    columns, see `_copy_parquet_file_in_batches`) succeeds against it.
+    """
+    seen: dict[str, None] = {}
+    for file_path in file_paths:
+        for column_name in _file_copy_column_names(table_name, file_path):
+            seen.setdefault(column_name, None)
+    return list(seen)
+
+
 def _copy_parquet_file_in_batches(
     conn: Connection[Any],
     table_name: str,
@@ -599,7 +614,7 @@ def bulk_insert_csv_files(
 
     key_columns = TABLE_UNIQUE_KEYS.get(table_name, ())
     validated_paths = [_validated_load_path(path) for path in csv_paths]
-    column_names = _file_copy_column_names(table_name, validated_paths[0])
+    column_names = _union_copy_column_names(table_name, validated_paths)
     if not column_names:
         LOGGER.warning("First input for %s has no columns. Skipping.", table_name)
         return

@@ -148,6 +148,9 @@ def test_export_all_writes_pet_rows(
 
     assert output_path.read_text() == "location_id,date,pet\n1,2000-05-01,20.0\n"
     assert "FROM public.pet" in fake_conn.cursor_instance.copy_query
+    assert (
+        "SELECT location_id, date, pet, pet_avg" in fake_conn.cursor_instance.copy_query
+    )
     assert "ORDER BY location_id, date" in fake_conn.cursor_instance.copy_query
     assert fake_conn.cursor_instance.copy_params is None
 
@@ -198,12 +201,38 @@ def test_merge_csvs_prefers_later_sources_for_duplicates(tmp_path: Path) -> None
     ) == pytest.approx(25.0)
 
 
+def test_merge_csvs_carries_pet_avg_and_tolerates_legacy_sources_without_it(
+    tmp_path: Path,
+) -> None:
+    legacy_pet = tmp_path / "legacy_pet.csv"
+    legacy_pet.write_text("location_id,date,pet\n1,2024-05-01,20.0\n")
+
+    pet_root = tmp_path / "pet_data_csv" / "year=2024"
+    pet_root.mkdir(parents=True)
+    pd.DataFrame(
+        [{"location_id": 2, "date": "2024-05-02", "pet": 30.0, "pet_avg": 25.0}],
+    ).to_parquet(pet_root / "pet_batch_0000_00.parquet", index=False)
+
+    output_path = tmp_path / "pet_full.csv"
+    hpu.merge_csvs(
+        [str(tmp_path / "pet_data_csv")], [str(legacy_pet)], str(output_path)
+    )
+
+    merged = pd.read_csv(output_path)
+    assert list(merged.columns) == ["location_id", "date", "pet", "pet_avg"]
+    legacy_row = merged.loc[merged["location_id"] == 1].iloc[0]
+    assert pd.isna(legacy_row["pet_avg"])
+    new_row = merged.loc[merged["location_id"] == 2].iloc[0]
+    assert float(new_row["pet_avg"]) == pytest.approx(25.0)
+
+
 def test_build_export_copy_query_with_window_filters_out_target_range() -> None:
     query, params = hpu._build_export_copy_query(
         window_start="2024-01-01",
         window_end="2024-01-31",
     )
 
+    assert "SELECT location_id, date, pet, pet_avg" in query
     assert "WHERE date < %s::date OR date > %s::date" in query
     assert params == ("2024-01-01", "2024-01-31")
 

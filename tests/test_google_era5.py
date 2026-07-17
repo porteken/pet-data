@@ -312,6 +312,7 @@ class TestProcessEra5BatchJob:
                     pd.Timestamp("2020-01-02").date(),
                 ],
                 "pet": [20.0, 21.0],
+                "pet_avg": [18.0, 19.0],
             },
         )
 
@@ -347,7 +348,7 @@ class TestProcessEra5BatchJob:
         assert len(pet_files) == 1
 
         pet_df = pd.read_parquet(pet_files[0])
-        assert list(pet_df.columns) == ["location_id", "date", "pet"]
+        assert list(pet_df.columns) == ["location_id", "date", "pet", "pet_avg"]
 
 
 class TestRunEra5BatchJobs:
@@ -632,3 +633,92 @@ class TestComputeLocationFrameAlignment:
             "This failure typically means the (n_times, n_locs) arrays are being "
             "raveled without transposition, scrambling loc/time alignment."
         )
+
+    def test_pet_avg_is_mean_of_hourly_pet_and_pet_stays_max(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pet stays the daily max; pet_avg is the daily mean, rounded to 0.1."""
+        import dask as _dask
+
+        class _FakeDaskCtx:
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                pass
+
+        monkeypatch.setattr(
+            _dask, "config", MagicMock(set=lambda **_kw: _FakeDaskCtx())
+        )
+        original_import_optional_module = google_era5._import_optional_module
+
+        def fake_data_array(data: object, dims: str) -> object:
+            _ = dims
+            return data
+
+        n_times = 24
+        n_locs = 1
+
+        def fake_approximate_dsrp(
+            fdir: object, cossza: object, threshold: float = 0.1
+        ) -> object:
+            _ = (cossza, threshold)
+            return np.asarray(fdir)
+
+        def fake_calculate_mean_radiant_temperature(**_kwargs: object) -> object:
+            return np.full(n_times * n_locs, 300.0)
+
+        fake_xarray = SimpleNamespace(DataArray=fake_data_array)
+        fake_thermofeel = SimpleNamespace(
+            approximate_dsrp=fake_approximate_dsrp,
+            calculate_mean_radiant_temperature=fake_calculate_mean_radiant_temperature,
+        )
+
+        def fake_import_optional_module(module_name: str) -> object:
+            if module_name == "xarray":
+                return fake_xarray
+            if module_name == "thermofeel":
+                return fake_thermofeel
+            return original_import_optional_module(module_name)
+
+        monkeypatch.setattr(
+            google_era5, "_import_optional_module", fake_import_optional_module
+        )
+
+        # Half the day is hot, half is cool, so the daily mean PET differs
+        # from the daily max PET.
+        temps = np.full((n_times, n_locs), 300.0)
+        temps[: n_times // 2, 0] = 280.0
+        dew = temps - 10.0
+        rad_down = np.full((n_times, n_locs), 300.0 * 3600.0)
+        rad_net = np.zeros((n_times, n_locs))
+
+        raw = {
+            "10u": temps * 0 + np.sqrt(2.0),
+            "10v": temps * 0 + np.sqrt(2.0),
+            "2t": temps,
+            "2d": dew,
+            "ssrd": rad_net.copy(),
+            "strd": rad_down.copy(),
+            "ssr": rad_net.copy(),
+            "str": rad_net.copy(),
+            "fdir": rad_net.copy(),
+            "msdrswrf": rad_net.copy(),
+        }
+
+        epoch = pd.Timestamp(ERA5_TIME_ORIGIN)
+        start_h = int((pd.Timestamp("2010-01-01") - epoch).total_seconds() // 3600)
+        time_vals = np.arange(start_h, start_h + n_times, dtype=int)
+
+        cities = pd.DataFrame({"location_id": [0], "lat": [40.0], "lng": [-75.0]})
+
+        result = _compute_location_frame(
+            _FakeDataset(raw, time_vals),  # type: ignore[arg-type]
+            cities,
+            compute_workers=1,
+        )
+
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["pet_avg"] < row["pet"]
+        assert row["pet_avg"] == pytest.approx(round(row["pet_avg"] * 10) / 10)

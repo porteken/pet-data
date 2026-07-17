@@ -1,4 +1,4 @@
-"""Download ARCO ERA5 data and compute daily maximum PET."""
+"""Download ARCO ERA5 data and compute daily maximum and average PET."""
 
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ DEGREES_PER_CIRCLE: float = 360.0
 HALF_CIRCLE_DEGREES: float = 180.0
 SAFE_STABLE_DATA_MONTH = 4
 PET_ROUNDING_FACTOR = 2.0
+PET_AVG_ROUNDING_FACTOR = 10.0
 CHUNK_SIZE = 50000
 ERA5_TIME_ORIGIN = "1900-01-01"
 DEFAULT_BATCH_HOURS = 24 * 30
@@ -511,7 +512,7 @@ def _compute_location_frame(
     ]
 
     if not chunks:
-        return pd.DataFrame(columns=["location_id", "date", "pet"])
+        return pd.DataFrame(columns=["location_id", "date", "pet", "pet_avg"])
 
     results: list[DataFrame] = []
     n_chunk_workers = max(1, min(compute_workers, len(chunks)))
@@ -522,16 +523,21 @@ def _compute_location_frame(
             results = list(chunk_executor.map(_compute_pet_chunk, chunks))
 
     if not results:
-        return pd.DataFrame(columns=["location_id", "date", "pet"])
+        return pd.DataFrame(columns=["location_id", "date", "pet", "pet_avg"])
 
     df_pet_unique = pd.concat(results, ignore_index=True)
     df = df.merge(df_pet_unique[["_pet_key", "pet"]], on="_pet_key", how="inner")
     df = df.drop(columns="_pet_key")
     df["date"] = pd.to_datetime(df["time"]).dt.date
 
-    return df.groupby(["location_id", "date"], as_index=False).agg(
+    daily = df.groupby(["location_id", "date"], as_index=False).agg(
         pet=("pet", "max"),
+        pet_avg=("pet", "mean"),
     )
+    daily["pet_avg"] = (
+        daily["pet_avg"] * PET_AVG_ROUNDING_FACTOR
+    ).round() / PET_AVG_ROUNDING_FACTOR
+    return daily
 
 
 def _write_pet_partition(
@@ -590,7 +596,7 @@ def _process_era5_batch_job(
         pet_target.root,
         year,
         city_shard_index,
-        frame[["location_id", "date", "pet"]].copy(),
+        frame[["location_id", "date", "pet", "pet_avg"]].copy(),
         batch_index,
         filesystem=pet_target.filesystem,
         base_path=pet_target.base_path,
