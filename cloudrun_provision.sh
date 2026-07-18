@@ -24,8 +24,6 @@ AWS_SECRET_SECRET_NAME=${AWS_SECRET_SECRET_NAME:-${CLOUD_RUN_JOB_NAME}-aws-secre
 : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY must be set}"
 : "${AWS_CLOUD_RUN_REGION:?AWS_DEFAULT_REGION or AWS_REGION must be set}"
 
-# Store AWS credentials in Secret Manager and mount them with --set-secrets so
-# they never appear in the job definition or the Cloud Run console.
 _upsert_secret() {
     local secret_name=$1
     local secret_value=$2

@@ -899,4 +899,4 @@ AND y2k.season = s.season
 LEFT JOIN year_2000_value_avg AS y2k_avg ON y2k_avg.location_id = s.location_id
 AND y2k_avg.season = s.season
 WHERE
-s.location_id > 0 ;
+s.location_id > = 0 ;

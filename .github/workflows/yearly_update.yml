@@ -3,9 +3,6 @@ name: Yearly Update
 on:
   workflow_dispatch:
   schedule:
-    # Early April: ARCO-ERA5 final (non-preliminary) data for the previous
-    # year is consolidated by then (see SAFE_STABLE_DATA_MONTH). The
-    # build-target-window job also verifies availability before anything runs.
     - cron: "0 5 5 4 *"
 
 concurrency:
@@ -129,9 +126,6 @@ jobs:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
-      # One execution fans out over time shards via Cloud Run task indexing:
-      # each task derives --time-shard-index from CLOUD_RUN_TASK_INDEX, and
-      # per-task retries are handled by the job's --max-retries setting.
       - name: Pull ERA5 & Compute PET (writes straight to S3)
         run: |
           gcloud run jobs execute "${{ env.CLOUD_RUN_JOB_NAME }}" \
@@ -167,9 +161,6 @@ jobs:
           echo "Syncing s3://pet-parquet-files/${prefix}"
           mkdir -p pet_data_csv
           aws s3 sync "s3://pet-parquet-files/${prefix}" "./${prefix}"
-      # Upsert loads are idempotent (ON CONFLICT on (location_id, date)), so a
-      # failed or re-run job can never duplicate rows and no delete-window
-      # step is needed. Views stay in place and are refreshed afterwards.
       - name: Load year into Postgres
         env:
           POSTGRES_DB_URI: ${{ secrets.POSTGRES_DB_URI }}

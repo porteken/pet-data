@@ -31,9 +31,6 @@ TABLE_NAMES = [
     "locations",
     "pet",
 ]
-# Conflict targets that make loads idempotent: rows are COPYed into a temp
-# staging table and upserted, so re-running a load (or retrying a failed one)
-# can never produce duplicates.
 TABLE_UNIQUE_KEYS: dict[str, tuple[str, ...]] = {
     "locations": ("id",),
     "pet": ("location_id", "date"),
@@ -462,7 +459,7 @@ def _copy_csv_file_in_batches(
     destination: str | None = None,
 ) -> int:
     """Stream a plain CSV file into a table with a single COPY statement."""
-    _ = batch_size  # kept for signature parity with the parquet copy helper
+    _ = batch_size
     with conn.cursor() as cur, csv_path.open("r", encoding="utf-8", newline="") as f:
         header = next(f, None)
         if header is None:
@@ -549,9 +546,6 @@ def _upsert_from_staging(
     else:
         conflict_action = sql.SQL("DO NOTHING")
 
-    # DISTINCT ON guards against duplicate keys inside a single load batch,
-    # which would otherwise abort the INSERT ("cannot affect row a second
-    # time"). Ordering by the key keeps b-tree insertion mostly sequential.
     upsert_statement = sql.SQL(
         "INSERT INTO {table} ({columns}) "
         "SELECT DISTINCT ON ({keys}) {columns} FROM {staging} ORDER BY {keys} "

@@ -35,9 +35,6 @@ jobs:
       - name: Ruff lint
         run: uv run --locked --no-build ruff check .
 
-      # The Cloud Run image (Dockerfile) copies these modules; compile them at
-      # the image's Python version so a syntax regression can never ship a
-      # worker that crashes on import.
       - name: Compile Cloud Run worker modules
         run: uv run --locked --no-build python -m py_compile cities.py google_era5.py partition_io.py pet_corrected.py shards.py
 

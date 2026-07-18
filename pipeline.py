@@ -55,8 +55,7 @@ FULL_BATCH_HOURS = 720
 FULL_TIME_SHARD_COUNT = 13
 PRODUCT_TABLES = ("pet",)
 
-# Keep numpy/BLAS single-threaded inside worker subprocesses; parallelism is
-# managed at the process level.
+
 SINGLE_THREAD_ENV = {
     "OMP_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",

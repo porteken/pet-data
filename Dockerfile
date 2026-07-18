@@ -1,5 +1,3 @@
-# Keep in sync with requires-python in pyproject.toml: shards.py uses PEP 758
-# syntax (unparenthesized except) that only parses on Python 3.14+.
 FROM python:3.14-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
@@ -11,8 +9,6 @@ WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.9 /uv /uvx /bin/
 
-# build-essential + python3-dev: numpy/numcodecs have no prebuilt wheels yet
-# for this Python version, so they must build from their hash-pinned sdists.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
@@ -65,12 +61,6 @@ RUN python /tmp/prepare-requirements.py > /tmp/asciitree_ver.txt && \
         -o /tmp/cloudrun-worker-requirements.txt && \
     uv pip install --python "$VIRTUAL_ENV/bin/python" "asciitree==$(cat /tmp/asciitree_ver.txt)"
 
-# --no-build is intentionally omitted: numcodecs (a transitive zarr
-# dependency) has no prebuilt wheel for this Python version yet, only a
-# hash-pinned sdist, so it must be built here (gcc is installed above for
-# exactly this). --require-hashes still pins every package to uv.lock.
-# Dockerfiles don't support trailing/NOSONAR comments, so this exception is
-# tracked and accepted directly in SonarQube rather than suppressed inline.
 RUN uv pip install --require-hashes \
     --python "$VIRTUAL_ENV/bin/python" \
     --requirement /tmp/cloudrun-worker-requirements.txt

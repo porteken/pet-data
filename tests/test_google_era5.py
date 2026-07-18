@@ -237,7 +237,6 @@ class TestComputeLocationFrameErrors:
         """Trigger the MRT sanity range warning."""
         from unittest.mock import MagicMock
 
-        # Set up mock dataset
         mock_ds = MagicMock()
         mock_ds.__getitem__.return_value = mock_ds
         mock_ds.sel.return_value = mock_ds
@@ -248,12 +247,9 @@ class TestComputeLocationFrameErrors:
         fake_time.values = np.array([1000000], dtype="int64")
         mock_ds.time = fake_time
 
-        # Each var access should return something with .values as a 2D array (n_locs, n_times)
         mock_ds.values = np.array([[300.0], [300.0]])
 
-        # Setup thermofeel mock
         tf = MagicMock()
-        # MRT in Kelvin. 400K is ~126.85C (>120C), 300K is ~26.85C (valid)
         tf.calculate_mean_radiant_temperature.return_value = np.array([400.0, 300.0])
 
         def fake_import(name: str) -> object:
@@ -562,7 +558,6 @@ class TestComputeLocationFrameAlignment:
                 return self
 
             def __exit__(self, *_: object) -> None:
-                # Fake context manager has no teardown; the test only needs enter/exit hooks.
                 pass
 
         monkeypatch.setattr(
@@ -685,8 +680,6 @@ class TestComputeLocationFrameAlignment:
             google_era5, "_import_optional_module", fake_import_optional_module
         )
 
-        # Half the day is hot, half is cool, so the daily mean PET differs
-        # from the daily max PET.
         temps = np.full((n_times, n_locs), 300.0)
         temps[: n_times // 2, 0] = 280.0
         dew = temps - 10.0

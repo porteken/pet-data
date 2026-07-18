@@ -150,8 +150,6 @@ def _load_data_frame_from_path(
         DATA_PRODUCTS[product]["column"],
         DATA_PRODUCTS[product]["avg_column"],
     ]
-    # Legacy sources may lack the avg column; reindex so it comes back as NaN
-    # instead of raising, rather than requiring every source to have it.
     if source_path.suffix == ".parquet":
         frame = pd.read_parquet(source_path)
     else:
