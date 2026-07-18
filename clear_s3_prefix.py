@@ -18,7 +18,6 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 LOGGER = logging.getLogger(__name__)
 
 
-# noinspection PyDeprecation
 def _aws_executable() -> str:
     aws_path = shutil.which("aws")
     if aws_path is None:
