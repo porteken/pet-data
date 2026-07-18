@@ -1,4 +1,4 @@
-"""Integration tests for the pull_all pipeline database load."""
+"""Integration tests for the PET pipeline database load."""
 
 from __future__ import annotations
 

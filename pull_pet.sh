@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "${HERE}/pull_all.sh" --products pet "$@"
+
+if [[ "${USE_UV:-1}" == "1" ]]; then
+    exec "${UV_BIN:-uv}" run python "${HERE}/pipeline.py" --products pet "$@"
+else
+    exec "${PYTHON_BIN:-python}" "${HERE}/pipeline.py" --products pet "$@"
+fi

@@ -65,14 +65,14 @@ class TestListExecutions:
             stdout="",
             stderr=(
                 "ERROR: (gcloud.run.jobs.executions.list) NOT_FOUND: "
-                "Resource 'nldas-worker' of kind 'JOB' in region "
+                "Resource 'missing-worker' of kind 'JOB' in region "
                 "'us-east1' in project 'x' does not exist."
             ),
         )
 
         result = _list_executions(
             gcloud_bin="gcloud",
-            job="nldas-worker",
+            job="missing-worker",
             region="us-east1",
             project="x",
         )

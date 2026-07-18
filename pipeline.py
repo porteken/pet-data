@@ -1,8 +1,7 @@
 """Orchestrate the PET pipeline: pull ERA5, compute, and load Postgres.
 
-Replaces the pull_all.sh bash orchestrator. Configuration comes from CLI flags
-with the historical pull_all.sh environment variables (MODE, YEARS, PRODUCTS,
-USE_CLOUD_RUN, ...) honored as defaults, so existing invocations keep working.
+Configuration comes from CLI flags with the historical environment variables
+(MODE, YEARS, PRODUCTS, USE_CLOUD_RUN, ...) honored as defaults.
 
 Loads are staged upserts on (location_id, date): new data lands on top of the
 existing history, which removes the old export-history/merge-CSV steps and
