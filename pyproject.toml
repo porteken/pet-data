@@ -65,3 +65,5 @@ max-statements = 300
 "historical_pet_update.py" = ["T201", "PLR2004", "ANN401", "S608"]
 "clear_s3_prefix.py" = ["S603"]
 "cancel_cloud_run_job_executions.py" = ["S603", "T201"]
+"google_era5.py" = ["S105"]
+"pipeline.py" = ["S603"]

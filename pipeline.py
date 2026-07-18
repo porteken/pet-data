@@ -391,8 +391,8 @@ def _run_command(
     env = None
     if extra_env:
         env = {**os.environ, **extra_env}
-    # S603: commands are built from config, not untrusted input.
-    process = subprocess.Popen(command, env=env)  # noqa: S603
+    # Commands are built from configuration, not untrusted input.
+    process = subprocess.Popen(command, env=env)
     with _PROCESS_LOCK:
         _ACTIVE_PROCESSES.add(process)
     try:
@@ -645,8 +645,10 @@ def assert_outputs_available(cfg: PipelineConfig) -> None:
             raise PipelineError(msg)
 
 
-def _distinct_year_count(conn: Connection[Any], table: str) -> int:
-    query = f"SELECT count(DISTINCT date_part('year', date)) FROM public.{table}"  # noqa: S608 - table names come from PRODUCT_TABLES
+def _distinct_year_count(conn: Connection[Any]) -> int:
+    query: LiteralString = (
+        "SELECT count(DISTINCT date_part('year', date)) FROM public.pet"
+    )
     with conn.cursor() as cur:
         cur.execute(cast("LiteralString", query))
         row = cur.fetchone()
@@ -667,7 +669,7 @@ def _pet_avg_year_count(conn: Connection[Any]) -> int:
 def _check_history_depth(conn: Connection[Any], cfg: PipelineConfig) -> None:
     """Enforce the forecast history requirement before building views."""
     if cfg.do_pet:
-        pet_years = _distinct_year_count(conn, "pet")
+        pet_years = _distinct_year_count(conn)
         if pet_years < MIN_PET_YEARS_FOR_FORECAST:
             msg = (
                 f"Need at least {MIN_PET_YEARS_FOR_FORECAST} PET years to "

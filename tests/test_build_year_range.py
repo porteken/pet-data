@@ -144,18 +144,15 @@ class TestArcoCoverage:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class _FakeResponse:
-            def read(self) -> bytes:
-                return b'{"valid_time_stop": "2026-03-31"}'
+            def raise_for_status(self) -> None:
+                pass
 
-            def __enter__(self) -> _FakeResponse:
-                return self
-
-            def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-                _ = (exc_type, exc, tb)
+            def json(self) -> dict[str, str]:
+                return {"valid_time_stop": "2026-03-31"}
 
         monkeypatch.setattr(
-            build_year_range.urllib.request,
-            "urlopen",
+            build_year_range.requests,
+            "get",
             lambda *_args, **_kwargs: _FakeResponse(),
         )
 

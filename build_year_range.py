@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sys
-import urllib.request
 from datetime import UTC, date, datetime
+
+import requests
 
 from shared_config import mrt_available_end_date
 
@@ -18,15 +19,13 @@ ARCO_CHECK_TIMEOUT_SECONDS = 30.0
 
 def arco_final_data_end_date() -> date:
     """Return the last date covered by final ERA5 data in the ARCO store."""
-    request = urllib.request.Request(  # noqa: S310 - fixed https URL
+    response = requests.get(
         ARCO_ZATTRS_URL,
         headers={"User-Agent": "pet-data-preflight"},
-    )
-    with urllib.request.urlopen(  # noqa: S310 - fixed https URL
-        request,
         timeout=ARCO_CHECK_TIMEOUT_SECONDS,
-    ) as response:
-        attrs = json.load(response)
+    )
+    response.raise_for_status()
+    attrs = response.json()
     return date.fromisoformat(attrs["valid_time_stop"])
 
 
