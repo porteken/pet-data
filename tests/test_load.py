@@ -473,16 +473,10 @@ class CopyRecordingCursor:
 
     def execute(self, statement: object, params: object = None) -> None:
         _ = params
-        rendered = (
-            statement if isinstance(statement, str) else statement.as_string(None)  # type: ignore[union-attr]
-        )
-        self._connection.statements.append(rendered)
+        self._connection.statements.append(_render_sql_statement(statement))
 
     def copy(self, statement: object) -> _CopyContext:
-        rendered = (
-            statement if isinstance(statement, str) else statement.as_string(None)  # type: ignore[union-attr]
-        )
-        self._connection.statements.append(rendered)
+        self._connection.statements.append(_render_sql_statement(statement))
         return _CopyContext(self._connection.copy_payloads)
 
     def __enter__(self) -> CopyRecordingCursor:
@@ -492,6 +486,23 @@ class CopyRecordingCursor:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         """Exit context manager."""
         _ = (exc_type, exc, tb)
+
+
+def _render_sql_statement(statement: object) -> str:
+    """Render the SQL strings and composable statements accepted by the fake cursor."""
+    if isinstance(statement, str):
+        return statement
+
+    as_string = getattr(statement, "as_string", None)
+    if not callable(as_string):
+        msg = "Expected a SQL string or composable statement."
+        raise TypeError(msg)
+
+    rendered = as_string(None)
+    if not isinstance(rendered, str):
+        msg = "Composable statement did not render to a string."
+        raise TypeError(msg)
+    return rendered
 
 
 class CopyRecordingConnection:

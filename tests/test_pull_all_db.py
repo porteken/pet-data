@@ -64,7 +64,6 @@ def _row_count(conn: Connection[Any], relation: str) -> int:
         assert row is not None
         if row[0] == 0:
             pytest.fail(f"Relation {relation!r} does not exist")
-        # noinspection PyTypeChecker
         cur.execute(cast("LiteralString", f"SELECT COUNT(*) FROM {relation}"))
         count_row = cast("tuple[Any, ...]", cur.fetchone())
         assert count_row is not None

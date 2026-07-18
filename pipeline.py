@@ -391,7 +391,6 @@ def _run_command(
     env = None
     if extra_env:
         env = {**os.environ, **extra_env}
-    # Commands are built from configuration, not untrusted input.
     process = subprocess.Popen(command, env=env)
     with _PROCESS_LOCK:
         _ACTIVE_PROCESSES.add(process)
