@@ -299,7 +299,9 @@ class TestComputePetChunk:
 
 
 class TestProcessEra5BatchJob:
-    def test_writes_pet_partition(self, tmp_path: pathlib.Path) -> None:
+    def test_writes_pet_partition(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
         frame = pd.DataFrame(
             {
                 "location_id": [1, 1],
@@ -319,26 +321,24 @@ class TestProcessEra5BatchJob:
         ) -> pd.DataFrame:
             return frame
 
-        original_compute_location_frame = google_era5._compute_location_frame
-        google_era5._compute_location_frame = fake_compute_location_frame
-        try:
-            pet_root = tmp_path / "pet"
+        monkeypatch.setattr(
+            google_era5, "_compute_location_frame", fake_compute_location_frame
+        )
+        pet_root = tmp_path / "pet"
 
-            _process_era5_batch_job(
-                ds=MagicMock(),
-                pet_target=_PartitionTarget(str(pet_root)),
-                year=2020,
-                city_shard_index=0,
-                batch_index=0,
-                start_h=0,
-                end_h=23,
-                pending_batch_df=pd.DataFrame(
-                    {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
-                ),
-                compute_workers=1,
-            )
-        finally:
-            google_era5._compute_location_frame = original_compute_location_frame
+        _process_era5_batch_job(
+            ds=MagicMock(),
+            pet_target=_PartitionTarget(str(pet_root)),
+            year=2020,
+            city_shard_index=0,
+            batch_index=0,
+            start_h=0,
+            end_h=23,
+            pending_batch_df=pd.DataFrame(
+                {"location_id": [1], "lat": [40.0], "lng": [-75.0]},
+            ),
+            compute_workers=1,
+        )
 
         pet_files = sorted((pet_root / "year=2020").glob("pet_batch_*.parquet"))
         assert len(pet_files) == 1
