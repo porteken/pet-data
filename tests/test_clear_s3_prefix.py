@@ -255,16 +255,16 @@ class TestDeleteHelpers:
             fake_run,
         )
 
+        completed = _completed_process(returncode=1)
+        batch_result = {
+            "Errors": [
+                {"Key": "one", "Code": "AccessDenied", "Message": "Denied"},
+            ],
+        }
+
         with pytest.raises(RuntimeError, match="AccessDenied Denied"):
             clear_s3_prefix._delete_single_object(
-                "bucket",
-                {"Key": "one"},
-                _completed_process(returncode=1),
-                {
-                    "Errors": [
-                        {"Key": "one", "Code": "AccessDenied", "Message": "Denied"},
-                    ],
-                },
+                "bucket", {"Key": "one"}, completed, batch_result
             )
 
 

@@ -172,9 +172,10 @@ class TestPrepareLocations:
             lambda: Path("cities.csv").write_text("location_id,city,state,lat,lng\n"),
         )
         monkeypatch.setattr(pipeline.locations_module, "main", MagicMock())
+        cfg = _config(["--years", "2024"])
 
         with pytest.raises(pipeline.PipelineError, match="zero locations"):
-            pipeline.prepare_locations(_config(["--years", "2024"]))
+            pipeline.prepare_locations(cfg)
 
 
 class TestOutputsAvailable:
@@ -182,9 +183,10 @@ class TestOutputsAvailable:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.chdir(tmp_path)
+        cfg = _config(["--years", "2024"])
 
         with pytest.raises(pipeline.PipelineError, match="No pet batch"):
-            pipeline.assert_outputs_available(_config(["--years", "2024"]))
+            pipeline.assert_outputs_available(cfg)
 
     def test_present_output_passes(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -314,12 +316,11 @@ class _HistoryConnection:
 
 class TestHistoryDepth:
     def test_insufficient_pet_history_fails(self) -> None:
-        conn = _HistoryConnection({"pet": 3})
+        conn = cast("Any", _HistoryConnection({"pet": 3}))
+        cfg = _config(["--years", "2024"])
 
         with pytest.raises(pipeline.PipelineError, match="at least 10 PET years"):
-            pipeline._check_history_depth(
-                cast("Any", conn), _config(["--years", "2024"])
-            )
+            pipeline._check_history_depth(conn, cfg)
 
     def test_insufficient_pet_avg_history_warns_without_raising(
         self, caplog: pytest.LogCaptureFixture
