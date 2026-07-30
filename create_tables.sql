@@ -1,6 +1,5 @@
--- noqa: disable=LT05
--- squawk-ignore-file prefer-bigint-over-smallint,changing-column-type,prefer-robust-stmts,require-concurrent-index-creation
--- noqa: enable=LT05
+-- squawk-ignore-file prefer-bigint-over-smallint,changing-column-type
+-- squawk-ignore-file prefer-robust-stmts,require-concurrent-index-creation
 
 -- SET LOCAL keeps these timeouts scoped to the executing transaction so they
 -- never leak into later COPY/DELETE/ANALYZE statements on the same connection.

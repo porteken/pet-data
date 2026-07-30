@@ -649,14 +649,13 @@ y.year::smallint AS year,
 y.season,
 y.pet::real AS pet
 FROM yearly_pet AS y
--- noqa: disable=LT01
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
 WHEN
 MOD (y.year, 4) =
 0
 AND
-(MOD (y.year, 100) != 0 OR MOD (y.year, 400) = 0)
+(NOT (MOD (y.year, 100) = 0) OR MOD (y.year, 400) = 0)
 THEN 366
 ELSE 365
 END
@@ -665,7 +664,7 @@ WHEN
 MOD (y.year, 4) =
 0
 AND
-(MOD (y.year, 100) != 0 OR MOD (y.year, 400) = 0)
+(NOT (MOD (y.year, 100) = 0) OR MOD (y.year, 400) = 0)
 THEN 91
 ELSE 90
 END
@@ -673,7 +672,6 @@ WHEN y.season IN (public.pet_spring (), public.pet_summer ())
 THEN 92
 ELSE 91
 END
--- noqa: enable=LT01
 ),
 forecast_inputs AS (SELECT location_id::smallint AS location_id,
 season,
@@ -740,14 +738,13 @@ y.year::smallint AS year,
 y.season,
 y.pet::real AS pet
 FROM yearly_pet AS y
--- noqa: disable=LT01
 WHERE y.days_present = CASE
 WHEN y.season = public.pet_annual_season () THEN CASE
 WHEN
 MOD (y.year, 4) =
 0
 AND
-(MOD (y.year, 100) != 0 OR MOD (y.year, 400) = 0)
+(NOT (MOD (y.year, 100) = 0) OR MOD (y.year, 400) = 0)
 THEN 366
 ELSE 365
 END
@@ -756,7 +753,7 @@ WHEN
 MOD (y.year, 4) =
 0
 AND
-(MOD (y.year, 100) != 0 OR MOD (y.year, 400) = 0)
+(NOT (MOD (y.year, 100) = 0) OR MOD (y.year, 400) = 0)
 THEN 91
 ELSE 90
 END
@@ -764,7 +761,6 @@ WHEN y.season IN (public.pet_spring (), public.pet_summer ())
 THEN 92
 ELSE 91
 END
--- noqa: enable=LT01
 ),
 forecast_inputs AS (SELECT location_id::smallint AS location_id,
 season,
@@ -899,4 +895,4 @@ AND y2k.season = s.season
 LEFT JOIN year_2000_value_avg AS y2k_avg ON y2k_avg.location_id = s.location_id
 AND y2k_avg.season = s.season
 WHERE
-s.location_id > = 0 ;
+NOT (s.location_id < 0) ;
