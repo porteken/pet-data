@@ -33,6 +33,9 @@ jobs:
       - name: Ruff lint
         run: uv run --locked --no-build ruff check .
 
+      - name: Pyrefly type check
+        run: uv run --locked --no-build pyrefly check
+
       - name: Compile Cloud Run worker modules
         run: uv run --locked --no-build python -m py_compile cities.py google_era5.py partition_io.py pet_corrected.py shards.py
 
