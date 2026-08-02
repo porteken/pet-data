@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
 LOGGER = logging.getLogger(__name__)
+PET_MATVIEW_PREFIX = "pet_"
 
 _MATVIEWS_QUERY: LiteralString = """
 SELECT matviewname, ispopulated
@@ -54,10 +55,14 @@ LIMIT 1
 
 
 def _discover_matviews(conn: Connection[Any]) -> dict[str, bool]:
-    """Return public materialized views mapped to their populated state."""
+    """Return PET materialized views mapped to their populated state."""
     with conn.cursor() as cur:
         cur.execute(_MATVIEWS_QUERY)
-        return {row[0]: bool(row[1]) for row in cur.fetchall()}
+        return {
+            row[0]: bool(row[1])
+            for row in cur.fetchall()
+            if row[0].startswith(PET_MATVIEW_PREFIX)
+        }
 
 
 def _matview_refresh_order(conn: Connection[Any], matviews: set[str]) -> list[str]:
@@ -78,7 +83,7 @@ def _has_unique_index(conn: Connection[Any], matview_name: str) -> bool:
 
 
 def refresh_materialized_views(conn: Connection[Any]) -> list[str]:
-    """Refresh every public matview in dependency order; return the order.
+    """Refresh every PET matview in dependency order; return the order.
 
     CONCURRENTLY is used whenever the matview supports it (populated and has
     a unique index) so readers are never blocked. Requires an autocommit
@@ -108,7 +113,7 @@ def refresh_materialized_views(conn: Connection[Any]) -> list[str]:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Refresh public materialized views in dependency order and "
+            "Refresh public PET materialized views in dependency order and "
             "update planner statistics, without dropping or recreating views."
         ),
     )

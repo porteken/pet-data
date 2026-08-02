@@ -311,7 +311,7 @@ class TestRefreshQueryPlannerStatistics:
         refresh_query_planner_statistics(cast("Any", conn))
 
         assert conn.executed_statements == [
-            "ANALYZE public.locations",
+            "ANALYZE public.pet_locations",
             "ANALYZE public.pet",
         ]
 
@@ -375,7 +375,7 @@ class TestDiscoverLocationsCsvPaths:
 class TestNormalizeCopyColumnNames:
     def test_locations_header_maps_location_id_to_id(self) -> None:
         assert _normalize_copy_column_names(
-            "locations",
+            "pet_locations",
             ["location_id", "city", "state", "lat", "lng"],
         ) == ["id", "city", "state", "lat", "lng"]
 
@@ -444,7 +444,8 @@ class TestSelectPartitionShardPaths:
 
 class TestTableNames:
     def test_expected_tables(self) -> None:
-        assert "locations" in TABLE_NAMES
+        assert "pet_locations" in TABLE_NAMES
+        assert "locations" not in TABLE_NAMES
         assert "pet" in TABLE_NAMES
         assert "pet_forecast" not in TABLE_NAMES
         assert "pet_percentiles" not in TABLE_NAMES
@@ -541,7 +542,7 @@ class TestFileCopyColumnNames:
             parquet_path, index=False
         )
 
-        assert load._file_copy_column_names("locations", parquet_path) == [
+        assert load._file_copy_column_names("pet_locations", parquet_path) == [
             "id",
             "city",
         ]

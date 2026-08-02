@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.db
 
 REQUIRED_TABLES = [
-    "locations",
+    "pet_locations",
     "pet",
 ]
 
@@ -128,13 +128,13 @@ def test_pet_covers_year_range(db_conn: Connection[Any]) -> None:
 
 
 def test_locations_not_empty(db_conn: Connection[Any]) -> None:
-    count = _row_count(db_conn, "locations")
-    assert count > 0, "locations table is empty"
+    count = _row_count(db_conn, "pet_locations")
+    assert count > 0, "pet_locations table is empty"
 
 
 def test_compact_schema_types(db_conn: Connection[Any]) -> None:
     """Core tables and analytics views should use the compact types defined in SQL."""
-    assert _get_relation_column_types(db_conn, "locations") == {
+    assert _get_relation_column_types(db_conn, "pet_locations") == {
         "id": "smallint",
         "city": "text",
         "state": "text",
@@ -513,7 +513,7 @@ def test_city_rankings_view_matches_expected_projection(
                 "f.upper AS future_upper, "
                 "ROUND((a.pet - y2k.pet)::numeric, 2)::numeric(5,2) AS change_from_2000 "
                 "FROM pet_year_avg AS a "
-                "JOIN locations AS l "
+                "JOIN pet_locations AS l "
                 "ON l.id = a.location_id "
                 "AND l.id >= 0 "
                 "JOIN pet_year_max AS m "

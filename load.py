@@ -28,11 +28,11 @@ CSV_COPY_CHUNK_BYTES = 8 * 1024 * 1024
 DEFAULT_LOAD_WORKERS = 4
 DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_]\w*)?\$")
 TABLE_NAMES = [
-    "locations",
+    "pet_locations",
     "pet",
 ]
 TABLE_UNIQUE_KEYS: dict[str, tuple[str, ...]] = {
-    "locations": ("id",),
+    "pet_locations": ("id",),
     "pet": ("location_id", "date"),
 }
 
@@ -666,7 +666,7 @@ def _normalize_copy_column_names(
     table_name: str,
     column_names: list[str],
 ) -> list[str]:
-    if table_name != "locations":
+    if table_name != "pet_locations":
         return column_names
 
     return [
@@ -805,7 +805,7 @@ def _load_requested_tables(
     skip_tables: set[str],
 ) -> None:
     table_csv_resolvers = (
-        ("locations", _discover_locations_csv_paths),
+        ("pet_locations", _discover_locations_csv_paths),
         ("pet", _discover_pet_csv_paths),
     )
 
@@ -825,7 +825,7 @@ def _load_requested_tables(
             table_name,
             batch_size=args.copy_batch_size,
             truncate=table_name in truncate_tables
-            and not (table_name == "locations" and args.skip_drop_views),
+            and not (table_name == "pet_locations" and args.skip_drop_views),
             workers=args.load_workers,
         )
 

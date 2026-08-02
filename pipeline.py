@@ -653,15 +653,19 @@ def _distinct_year_count(conn: Connection[Any]) -> int:
     return int(row[0]) if row else 0
 
 
-def _pet_avg_year_count(conn: Connection[Any]) -> int:
+def _pet_avg_coverage(conn: Connection[Any]) -> tuple[int, int]:
     query = (
-        "SELECT count(DISTINCT date_part('year', date)) "
-        "FROM public.pet WHERE pet_avg IS NOT NULL"
+        "SELECT "
+        "count(DISTINCT date_part('year', date)) FILTER "
+        "(WHERE pet_avg IS NOT NULL), "
+        "count(DISTINCT (location_id, date_part('year', date))) FILTER "
+        "(WHERE pet_avg IS NULL) "
+        "FROM public.pet"
     )
     with conn.cursor() as cur:
         cur.execute(cast("LiteralString", query))
         row = cur.fetchone()
-    return int(row[0]) if row else 0
+    return (int(row[0]), int(row[1])) if row else (0, 0)
 
 
 def _check_history_depth(conn: Connection[Any], cfg: PipelineConfig) -> None:
@@ -676,12 +680,18 @@ def _check_history_depth(conn: Connection[Any], cfg: PipelineConfig) -> None:
             )
             raise PipelineError(msg)
 
-        pet_avg_years = _pet_avg_year_count(conn)
+        pet_avg_years, incomplete_city_years = _pet_avg_coverage(conn)
         if pet_avg_years < MIN_PET_YEARS_FOR_FORECAST:
             LOGGER.warning(
                 "pet_avg covers only %d year(s); pet_forecast will be empty "
                 "until history is backfilled.",
                 pet_avg_years,
+            )
+        if incomplete_city_years:
+            LOGGER.warning(
+                "pet_avg is missing from %d city-year group(s); daily-average "
+                "trend graphs will omit those years until history is backfilled.",
+                incomplete_city_years,
             )
 
 
@@ -706,7 +716,7 @@ def run_db_load(cfg: PipelineConfig) -> None:
         bulk_insert_csv_files(
             conn,
             [Path("locations.csv")],
-            "locations",
+            "pet_locations",
             batch_size=COPY_BATCH_SIZE,
             truncate=cfg.truncate,
         )

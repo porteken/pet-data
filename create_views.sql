@@ -886,7 +886,7 @@ ROUND ((s.avg_pet - y2k.pet)::numeric, 2)::real AS change_from_2000,
 ROUND ((s.avg_pet_avg - y2k_avg.pet_avg)::numeric,
 2)::real AS change_from_2000_avg
 FROM public.pet_year_stats AS s
-JOIN public.locations AS l ON l.id = s.location_id
+JOIN public.pet_locations AS l ON l.id = s.location_id
 LEFT JOIN public.pet_forecast AS f ON f.location_id = s.location_id
 AND f.year = 2100::smallint
 AND f.season = s.season

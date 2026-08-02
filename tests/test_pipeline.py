@@ -286,18 +286,21 @@ class TestSyncOutputs:
 class _HistoryCursor:
     def __init__(self, counts: dict[str, int]) -> None:
         self._counts = counts
-        self._result = 0
+        self._result: tuple[int, ...] = (0,)
 
     def execute(self, statement: str) -> None:
         if "pet_avg" in statement:
-            self._result = self._counts.get("pet_avg", 0)
+            self._result = (
+                self._counts.get("pet_avg", 0),
+                self._counts.get("pet_avg_incomplete_city_years", 0),
+            )
             return
         for table, count in self._counts.items():
             if f"public.{table}" in statement:
-                self._result = count
+                self._result = (count,)
 
-    def fetchone(self) -> tuple[int]:
-        return (self._result,)
+    def fetchone(self) -> tuple[int, ...]:
+        return self._result
 
     def __enter__(self) -> _HistoryCursor:
         return self
@@ -333,6 +336,20 @@ class TestHistoryDepth:
             )
 
         assert "pet_avg covers only 5 year(s)" in caplog.text
+
+    def test_incomplete_pet_avg_city_history_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        conn = _HistoryConnection(
+            {"pet": 12, "pet_avg": 12, "pet_avg_incomplete_city_years": 3}
+        )
+
+        with caplog.at_level(logging.WARNING):
+            pipeline._check_history_depth(
+                cast("Any", conn), _config(["--years", "2024"])
+            )
+
+        assert "pet_avg is missing from 3 city-year group(s)" in caplog.text
 
 
 class TestRunDbLoad:

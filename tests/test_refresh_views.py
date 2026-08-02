@@ -75,32 +75,45 @@ def _refresh_statements(conn: FakeConnection) -> list[str]:
 class TestRefreshMaterializedViews:
     def test_refreshes_dependencies_first(self) -> None:
         conn = FakeConnection(
-            matviews=[("mv_b", True), ("mv_a", True)],
-            dependencies=[("mv_b", "mv_a")],
-            unique_indexed={"mv_a", "mv_b"},
+            matviews=[("pet_mv_b", True), ("pet_mv_a", True)],
+            dependencies=[("pet_mv_b", "pet_mv_a")],
+            unique_indexed={"pet_mv_a", "pet_mv_b"},
         )
 
         order = refresh_views.refresh_materialized_views(cast("Any", conn))
 
-        assert order.index("mv_a") < order.index("mv_b")
+        assert order.index("pet_mv_a") < order.index("pet_mv_b")
         assert _refresh_statements(conn) == [
-            "REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_a",
-            "REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_b",
+            "REFRESH MATERIALIZED VIEW CONCURRENTLY public.pet_mv_a",
+            "REFRESH MATERIALIZED VIEW CONCURRENTLY public.pet_mv_b",
         ]
 
     def test_unpopulated_or_unindexed_matviews_refresh_non_concurrently(
         self,
     ) -> None:
         conn = FakeConnection(
-            matviews=[("mv_plain", True), ("mv_empty", False)],
-            unique_indexed={"mv_empty"},
+            matviews=[("pet_mv_plain", True), ("pet_mv_empty", False)],
+            unique_indexed={"pet_mv_empty"},
         )
 
         refresh_views.refresh_materialized_views(cast("Any", conn))
 
         statements = _refresh_statements(conn)
-        assert "REFRESH MATERIALIZED VIEW public.mv_plain" in statements
-        assert "REFRESH MATERIALIZED VIEW public.mv_empty" in statements
+        assert "REFRESH MATERIALIZED VIEW public.pet_mv_plain" in statements
+        assert "REFRESH MATERIALIZED VIEW public.pet_mv_empty" in statements
+
+    def test_ignores_non_pet_matviews(self) -> None:
+        conn = FakeConnection(
+            matviews=[("pet_stats", True), ("wetbulb_stats", True)],
+            unique_indexed={"pet_stats", "wetbulb_stats"},
+        )
+
+        order = refresh_views.refresh_materialized_views(cast("Any", conn))
+
+        assert order == ["pet_stats"]
+        assert _refresh_statements(conn) == [
+            "REFRESH MATERIALIZED VIEW CONCURRENTLY public.pet_stats"
+        ]
 
     def test_no_matviews_warns_and_returns_empty(
         self, caplog: pytest.LogCaptureFixture

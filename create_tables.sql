@@ -9,7 +9,7 @@ DROP MATERIALIZED VIEW IF EXISTS public.pet_year_avg CASCADE ;
 DROP MATERIALIZED VIEW IF EXISTS public.pet_year_max CASCADE ;
 
 
-CREATE TABLE IF NOT EXISTS public.locations (
+CREATE TABLE IF NOT EXISTS public.pet_locations (
 id smallint PRIMARY KEY,
 city text NOT NULL,
 state text NOT NULL,
@@ -42,7 +42,7 @@ BEGIN
             1
         FROM information_schema.columns
         WHERE table_schema = public_schema
-        AND table_name = 'locations'
+        AND table_name = 'pet_locations'
         AND column_name = 'location_id'
     )
     AND NOT EXISTS (
@@ -50,10 +50,10 @@ BEGIN
             1
         FROM information_schema.columns
         WHERE table_schema = public_schema
-        AND table_name = 'locations'
+        AND table_name = 'pet_locations'
         AND column_name = 'id'
     ) THEN
-        ALTER TABLE public.locations RENAME COLUMN location_id TO id ;
+        ALTER TABLE public.pet_locations RENAME COLUMN location_id TO id ;
     END IF ;
 
     -- Legacy type migration, guarded so it only runs when a column still has
@@ -64,14 +64,14 @@ BEGIN
             1
         FROM information_schema.columns
         WHERE table_schema = public_schema
-        AND table_name = 'locations'
+        AND table_name = 'pet_locations'
         AND (
             (column_name = 'id' AND data_type != 'smallint')
             OR (column_name = 'lat' AND data_type != 'real')
             OR (column_name = 'lng' AND data_type != 'real')
         )
     ) THEN
-        ALTER TABLE public.locations
+        ALTER TABLE public.pet_locations
         ALTER COLUMN id TYPE smallint USING id::smallint,
         ALTER COLUMN lat TYPE real USING lat::real,
         ALTER COLUMN lng TYPE real USING lng::real ;
